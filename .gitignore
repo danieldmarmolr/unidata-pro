@@ -1,0 +1,31 @@
+# env / secrets
+.env
+.env.local
+.env.*.local
+backend/audit.db*
+backend/users.db*
+backend/keys/
+
+# python
+backend/venv/
+**/__pycache__/
+**/*.pyc
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+
+# node / next
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/coverage/
+frontend/.turbo/
+frontend/next-env.d.ts
+frontend/.vercel/
+
+# misc
+*.log
+.DS_Store
+.idea/
+.vscode/

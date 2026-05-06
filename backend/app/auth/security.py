@@ -1,0 +1,66 @@
+"""JWT helpers + dependencies para auth/role."""
+from __future__ import annotations
+
+import datetime as dt
+from typing import Annotated
+
+import jwt
+from fastapi import Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
+
+from app.config import Settings, get_settings
+from app.db import users_db
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+
+def issue_token(user_id: int, email: str, role: str, settings: Settings | None = None) -> str:
+    s = settings or get_settings()
+    now = dt.datetime.now(dt.timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "role": role,
+        "iat": int(now.timestamp()),
+        "exp": int((now + dt.timedelta(hours=s.jwt_expires_hours)).timestamp()),
+    }
+    return jwt.encode(payload, s.jwt_secret, algorithm=s.jwt_algorithm)
+
+
+def decode_token(token: str, settings: Settings | None = None) -> dict:
+    s = settings or get_settings()
+    return jwt.decode(token, s.jwt_secret, algorithms=[s.jwt_algorithm])
+
+
+async def current_user(
+    token: Annotated[str | None, Depends(oauth2_scheme)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No autorizado")
+    try:
+        payload = decode_token(token, settings)
+    except jwt.PyJWTError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token invalido")
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token sin sub")
+    try:
+        user_id = int(sub)
+    except (TypeError, ValueError):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token invalido")
+    row = users_db.find_by_id(user_id)
+    if not row or not row["is_active"]:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inactivo")
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "name": row["name"],
+        "role": row["role"],
+    }
+
+
+async def require_admin(user: Annotated[dict, Depends(current_user)]) -> dict:
+    if user.get("role") != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Requiere rol admin")
+    return user
