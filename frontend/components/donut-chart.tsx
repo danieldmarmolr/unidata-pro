@@ -69,10 +69,13 @@ export function DonutChart({
             ))}
           </Pie>
           <Tooltip
-            formatter={(v: number, name: string) => [
-              `${formatNumber(v)} (${total > 0 ? ((v / total) * 100).toFixed(1) : 0}%)`,
-              name,
-            ]}
+            formatter={(v: unknown, name: unknown) => {
+              const n = Number(v) || 0;
+              return [
+                `${formatNumber(n)} (${total > 0 ? ((n / total) * 100).toFixed(1) : 0}%)`,
+                String(name ?? ""),
+              ] as [string, string];
+            }}
           />
           <Legend iconType="circle" wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
         </PieChart>

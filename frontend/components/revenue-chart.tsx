@@ -79,11 +79,13 @@ export function RevenueChart({
             tickFormatter={formatTick}
           />
           <Tooltip
-            formatter={(v: number, name: string) => {
-              if (name.toLowerCase().includes("ordenes")) {
-                return [formatNumber(v), name];
+            formatter={(v: unknown, name: unknown) => {
+              const n = Number(v) || 0;
+              const nm = String(name ?? "");
+              if (nm.toLowerCase().includes("ordenes")) {
+                return [formatNumber(n), nm] as [string, string];
               }
-              return [formatCurrency(v), name];
+              return [formatCurrency(n), nm] as [string, string];
             }}
             labelStyle={{ color: "#21093a", fontWeight: 600 }}
           />

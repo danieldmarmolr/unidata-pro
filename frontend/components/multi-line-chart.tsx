@@ -60,7 +60,7 @@ export function MultiLineChart({
           <CartesianGrid stroke="#eadefc" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 11, fill: "#6b7280" }} axisLine={false} tickLine={false} tickFormatter={tickFmt} />
-          <Tooltip formatter={(v: number, name: string) => [fmt(v), name]} />
+          <Tooltip formatter={(v: unknown, name: unknown) => [fmt(Number(v) || 0), String(name ?? "")] as [string, string]} />
           <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
           {series.map((s, i) => (
             <Line
