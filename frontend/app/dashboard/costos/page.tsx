@@ -339,7 +339,12 @@ function ImportTab({ isAdmin, onImported }: { isAdmin: boolean; onImported: () =
       const fd = new FormData();
       fd.append("file", file);
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
-      const res = await fetch(`${apiUrl}/api/costs/import`, {
+      // Detectar extension y rutear al endpoint correcto.
+      // Excel (xlsx/xlsm) -> /import-excel (parser dedicado para "VALOR PRODUCTO.xlsx")
+      // CSV/TSV/TXT -> /import (parser CSV generico)
+      const isExcel = /\.(xlsx|xlsm)$/i.test(file.name);
+      const endpoint = isExcel ? "/api/costs/import-excel" : "/api/costs/import";
+      const res = await fetch(`${apiUrl}${endpoint}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${getToken()}` },
         body: fd,
@@ -349,7 +354,29 @@ function ImportTab({ isAdmin, onImported }: { isAdmin: boolean; onImported: () =
         throw new Error(j.detail || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setResult(data);
+      // Normalizar shape: el endpoint Excel usa nombres distintos
+      if (isExcel) {
+        const excelResult = data as {
+          rows_total?: number;
+          lotes_processed?: number;
+          items_imported?: number;
+          lote_results?: Array<{ lote: string; items_count?: number; replaced?: boolean; error?: string }>;
+        };
+        setResult({
+          total_rows: excelResult.items_imported ?? excelResult.rows_total ?? 0,
+          lotes_count: excelResult.lotes_processed ?? 0,
+          summary: (excelResult.lote_results ?? []).map((r) => ({
+            lote: r.lote,
+            items: r.items_count ?? 0,
+            replaced: r.replaced ?? false,
+          })),
+          errors: (excelResult.lote_results ?? [])
+            .filter((r) => r.error)
+            .map((r) => `${r.lote}: ${r.error}`),
+        });
+      } else {
+        setResult(data);
+      }
       onImported();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -364,14 +391,14 @@ function ImportTab({ isAdmin, onImported }: { isAdmin: boolean; onImported: () =
         <UploadCloud size={48} className="mx-auto text-text-muted mb-4 opacity-60" />
         <div className="text-base font-semibold text-text mb-1">Importar planilla de costos</div>
         <div className="text-sm text-text-muted mb-6">
-          CSV o XLSX. Se detecta delimitador y columnas automaticamente.
-          <br />
+          <strong>Excel</strong> (.xlsx) — para el archivo oficial "VALOR PRODUCTO.xlsx" (hoja "VALOR COMPRA Y PESO").<br />
+          <strong>CSV / TSV</strong> — para imports genericos.<br />
           Los lotes se reemplazan si subis el mismo nombre dos veces.
         </div>
         <input
           ref={fileInput}
           type="file"
-          accept=".csv,.tsv,.txt"
+          accept=".csv,.tsv,.txt,.xlsx,.xlsm"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
