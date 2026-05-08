@@ -101,9 +101,14 @@ class SalesOverview(BaseModel):
     period: str
     channel: str
     cards: list[KpiCard]
-    revenue_by_channel: list[TimeSeries]      # 12m monthly
-    payment_status: list[CategoryValue]        # paid / pending / abandoned / cancelled
+    revenue_by_channel: list[TimeSeries]
+    payment_status: list[CategoryValue]
     top_products: list[TopProduct]
-    top_provinces: list[CategoryValue]         # top 10 by revenue
-    daily_revenue: list[TimeSeriesPoint]       # day-by-day en el periodo
+    top_provinces: list[CategoryValue]
+    daily_revenue: list[TimeSeriesPoint]
+    # ERP-alineado
+    by_region: list[CategoryValue] | None = None
+    top_markup: list[CategoryValue] | None = None
+    cost_data_available: bool = False
+    by_hour: list[CategoryValue] | None = None
     generated_at: str

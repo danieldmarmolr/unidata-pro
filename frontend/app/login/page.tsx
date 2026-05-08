@@ -17,7 +17,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await login(email.trim(), password);
-      router.push("/dashboard");
+      router.push("/dashboard/home");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error de login");
     } finally {

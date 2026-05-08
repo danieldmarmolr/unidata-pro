@@ -27,5 +27,6 @@ export BASTION_KEY_PATH_UNIDROP="${BASTION_KEY_PATH_UNIDROP:-/app/keys/unidrop-b
 # Como las paths estan codeadas relativas al modulo, hacemos symlinks.
 [ -L /app/audit.db ] || ln -sf /app/data/audit.db /app/audit.db
 [ -L /app/users.db ] || ln -sf /app/data/users.db /app/users.db
+[ -L /app/costs.db ] || ln -sf /app/data/costs.db /app/costs.db
 
 exec "$@"

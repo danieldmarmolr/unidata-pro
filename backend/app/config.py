@@ -63,5 +63,6 @@ def get_settings() -> Settings:
         units={
             "unistore": _unit("unistore"),
             "unidrop": _unit("unidrop"),
+            "unidev": _unit("unidev"),
         },
     )

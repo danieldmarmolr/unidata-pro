@@ -18,7 +18,7 @@ _cache: TTLCache = TTLCache(maxsize=32, ttl=60)
 @router.get("/sales/unistore", response_model=SalesOverview)
 def get_sales_unistore(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["7d", "30d", "90d", "12m"], Query()] = "30d",
+    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
 ) -> SalesOverview:
     key = f"sales-uni:{period}:{channel}"

@@ -3,14 +3,17 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { KpiCard } from "@/components/kpi-card";
+import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { MultiLineChart } from "@/components/multi-line-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
-import { PeriodSegmented, Segmented, type Period } from "@/components/segmented";
+import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint, TimeSeries } from "@/lib/types";
 
 type Courier = "all" | "oca" | "lightdata";
@@ -29,12 +32,15 @@ type EnviosResp = {
 };
 
 export default function EnviosPage() {
-  const [period, setPeriod] = useState<Period>("30d");
+  const period = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
+  const _qs = periodToQuery(period, customFrom, customTo);
   const [courier, setCourier] = useState<Courier>("all");
 
   const { data, isLoading, isFetching, error } = useQuery<EnviosResp>({
-    queryKey: ["dashboards", "envios", period, courier],
-    queryFn: () => api(`/api/dashboards/envios/unidrop?period=${period}&courier=${courier}`),
+    queryKey: ["dashboards", "envios", period, customFrom, customTo, courier],
+    queryFn: () => api(`/api/dashboards/envios/unidrop?${_qs}&courier=${courier}`),
     staleTime: 60_000,
   });
 
@@ -48,13 +54,13 @@ export default function EnviosPage() {
         title="Envios · Unidrop"
         subtitle="OCA vs LightData · volumen, tasa de entrega, costos"
       />
+      
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <DashboardHeader
           generatedAt={data?.generated_at}
           isFetching={isFetching}
           filters={
             <>
-              <PeriodSegmented value={period} onChange={setPeriod} />
               <Segmented<Courier>
                 value={courier}
                 onChange={setCourier}
@@ -64,6 +70,7 @@ export default function EnviosPage() {
                   { value: "lightdata", label: "LightData" },
                 ]}
               />
+        <TodayPanel compact={period !== "today"} />
             </>
           }
         />
@@ -80,7 +87,7 @@ export default function EnviosPage() {
               <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
             ))
           ) : (
-            data.cards.map((c) => <KpiCard key={c.label} data={c} />)
+            data.cards.map((c) => <KpiCard key={c.label} data={c} drill={getCardDrill(c.label, { period })} />)
           )}
         </div>
 

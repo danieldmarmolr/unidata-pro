@@ -9,12 +9,13 @@ import datetime as dt
 
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
+from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365}
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
-def marketing_unistore(period: str = "30d") -> dict:
-    days = PERIOD_DAYS.get(period, 30)
+def marketing_unistore(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unistore")
     p = {"days": days}
 
@@ -90,14 +91,37 @@ def marketing_unistore(period: str = "30d") -> dict:
     top_customers = [{
         "category": r[1] or f"Customer {r[0]}",
         "value": float(r[2] or 0),
-        "extra": {"province": r[3] or "?", "last_order_id": r[4]},
+        "extra": {
+            "province": r[3] or "?",
+            "last_order_id": r[4],
+            "customer_id": int(r[0] or 0),
+        },
     } for r in rows]
 
-    # Distribucion por tipo
+    # Distribucion por nivel de compras (mas util que customerType que esta vacio)
     rows = q(eng, """
-        SELECT COALESCE(NULLIF("customerType",''),'sin tipo'), COUNT(*)::int
-        FROM tienda_nube."Customer"
-        GROUP BY 1 ORDER BY 2 DESC
+        SELECT segment, COUNT(*)::int FROM (
+            SELECT c.id,
+                CASE
+                    WHEN o.cnt IS NULL OR o.cnt = 0 THEN 'Sin compras'
+                    WHEN o.cnt = 1                  THEN '1 orden (primera compra)'
+                    WHEN o.cnt BETWEEN 2 AND 5      THEN '2-5 ordenes (recurrente)'
+                    ELSE '6+ ordenes (VIP)'
+                END AS segment
+            FROM tienda_nube."Customer" c
+            LEFT JOIN (
+                SELECT "customerId" AS cid, COUNT(*) AS cnt
+                FROM tienda_nube."Order"
+                WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+                GROUP BY 1
+            ) o ON o.cid = c.id
+        ) x
+        GROUP BY 1
+        ORDER BY CASE segment
+            WHEN '6+ ordenes (VIP)'        THEN 1
+            WHEN '2-5 ordenes (recurrente)' THEN 2
+            WHEN '1 orden (primera compra)' THEN 3
+            ELSE 4 END
     """) or []
     customer_types = [{"category": r[0], "value": float(r[1] or 0)} for r in rows]
 
@@ -155,8 +179,8 @@ def marketing_unistore(period: str = "30d") -> dict:
     }
 
 
-def marketing_unidrop(period: str = "30d") -> dict:
-    days = PERIOD_DAYS.get(period, 30)
+def marketing_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unidrop")
     p = {"days": days}
 

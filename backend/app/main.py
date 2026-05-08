@@ -8,7 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import admin as admin_api
 from app.api import auth as auth_api
+from app.api import catalog as catalog_api
+from app.api import costs as costs_api
+from app.api import drilldowns as drilldowns_api
 from app.api import queries as queries_api
+from app.api import reports as reports_api
 from app.api import sources as sources_api
 from app.db import users_db
 from app.api.dashboards import executive as executive_api
@@ -45,9 +49,13 @@ app.include_router(auth_api.router)
 app.include_router(admin_api.router)
 app.include_router(sources_api.router)
 app.include_router(queries_api.router)
+app.include_router(drilldowns_api.router)
+app.include_router(catalog_api.router)
 app.include_router(executive_api.router)
 app.include_router(sales_api.router)
 app.include_router(dashboards_routers.router)
+app.include_router(reports_api.router)
+app.include_router(costs_api.router)
 
 
 @app.get("/api/health")

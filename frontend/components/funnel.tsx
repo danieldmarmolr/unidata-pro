@@ -9,10 +9,12 @@ export function Funnel({
   steps,
   caption,
   subtitle,
+  onStepClick,
 }: {
   steps: Step[];
   caption?: string;
   subtitle?: string;
+  onStepClick?: (s: Step) => void;
 }) {
   const max = Math.max(...steps.map((s) => s.value), 1);
   const top = steps[0]?.value ?? 0;
@@ -35,8 +37,8 @@ export function Funnel({
               : steps[i - 1].value > 0
                 ? (step.value / steps[i - 1].value) * 100
                 : 0;
-          return (
-            <div key={step.category}>
+          const inner = (
+            <>
               <div className="flex items-center justify-between text-xs mb-1">
                 <span className="font-semibold text-text">{step.category}</span>
                 <span className="flex items-center gap-3 text-text-muted">
@@ -56,7 +58,18 @@ export function Funnel({
                   style={{ width: `${Math.max(pct, 2)}%` }}
                 />
               </div>
-            </div>
+            </>
+          );
+          return onStepClick ? (
+            <button
+              key={step.category}
+              onClick={() => onStepClick(step)}
+              className="block w-full text-left rounded-lg p-1 -m-1 hover:bg-soft transition"
+            >
+              {inner}
+            </button>
+          ) : (
+            <div key={step.category}>{inner}</div>
           );
         })}
       </div>

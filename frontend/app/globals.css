@@ -40,3 +40,33 @@ html, body {
   border-radius: 10px !important;
   box-shadow: 0 8px 24px rgba(33, 9, 58, 0.10) !important;
 }
+
+/* Polish: scrollbars */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 999px; border: 2px solid var(--color-bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-accent); }
+
+/* Polish: micro-animaciones globales */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.skeleton-shimmer {
+  background: linear-gradient(90deg,
+    var(--color-soft) 0%,
+    rgba(162, 89, 255, 0.08) 40%,
+    rgba(162, 89, 255, 0.18) 50%,
+    rgba(162, 89, 255, 0.08) 60%,
+    var(--color-soft) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-in-up {
+  animation: fadeIn 0.25s ease-out;
+}

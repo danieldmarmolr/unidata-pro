@@ -1,6 +1,18 @@
 "use client";
 
-import { Bell, ShieldCheck } from "lucide-react";
+import Link from "next/link";
+import { Bell, ShieldCheck, ArrowUpRight } from "lucide-react";
+
+function alertHref(alert: string): string | null {
+  const a = alert.toLowerCase();
+  if (a.includes("pedidos") && a.includes("atascados")) return "/dashboard/logistica";
+  if (a.includes("sin fulfillment")) return "/dashboard/logistica";
+  if (a.includes("suscripciones") && a.includes("vencen")) return "/dashboard/saas";
+  if (a.includes("publicaciones ml")) return "/dashboard/saas";
+  if (a.includes("integracion") || a.includes("sin sync") || a.includes("sin lectura")) return "/dashboard/sources";
+  if (a.includes("cancelacion")) return "/dashboard/cs";
+  return null;
+}
 
 export function AlertsPanel({ alerts }: { alerts: string[] }) {
   const allClean =
@@ -20,15 +32,34 @@ export function AlertsPanel({ alerts }: { alerts: string[] }) {
         </div>
       ) : (
         <ul className="space-y-2">
-          {alerts.map((a, i) => (
-            <li
-              key={i}
-              className="flex items-start gap-3 p-3 rounded-lg bg-soft border border-border hover:border-primary/30 transition"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
-              <span className="text-sm text-text leading-snug">{a}</span>
-            </li>
-          ))}
+          {alerts.map((a, i) => {
+            const href = alertHref(a);
+            const inner = (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-primary mt-2 shrink-0" />
+                <span className="text-sm text-text leading-snug flex-1">{a}</span>
+                {href && (
+                  <ArrowUpRight size={13} className="text-primary opacity-0 group-hover:opacity-100 transition shrink-0 mt-0.5" />
+                )}
+              </>
+            );
+            return (
+              <li key={i}>
+                {href ? (
+                  <Link
+                    href={href}
+                    className="group flex items-start gap-3 p-3 rounded-lg bg-soft border border-border hover:border-primary/40 hover:bg-soft transition cursor-pointer"
+                  >
+                    {inner}
+                  </Link>
+                ) : (
+                  <div className="flex items-start gap-3 p-3 rounded-lg bg-soft border border-border">
+                    {inner}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

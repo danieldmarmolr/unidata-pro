@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearToken, getUser, type AuthUser } from "@/lib/api";
@@ -14,13 +14,29 @@ import {
   Crown,
   CreditCard,
   Package,
+  ShoppingBag,
   Database,
+  DollarSign,
   Terminal,
   ScrollText,
   LogOut,
   UserCog,
   UserCircle,
+  HeartHandshake,
+  Sparkles,
+  RotateCcw,
+  Network,
+  Users,
+  Map as MapIcon,
+  ChevronDown,
+  Layers,
+  Store,
+  Boxes,
+  Shapes,
+  Settings,
 } from "lucide-react";
+
+type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
 
 type NavItem = {
   label: string;
@@ -29,49 +45,106 @@ type NavItem = {
   group?: string;
   badge?: string;
   adminOnly?: boolean;
+  /** Si presente, solo visible para esos roles (admin siempre puede ver). */
+  roles?: Role[];
+  children?: NavItem[];
 };
 
+const ALL: Role[] = ["admin", "user", "gerencia", "analista", "lector"];
+const ONLY_GERENCIA: Role[] = ["admin", "gerencia"];
+
 const ITEMS: NavItem[] = [
-  { label: "Gerencial",        href: "/dashboard",                icon: Crown,           group: "Cross" },
-  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore" },
-  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore" },
-  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore" },
-  { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross" },
-  { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop" },
-  { label: "Pagos Talo",       href: "/dashboard/pagos",          icon: CreditCard,      group: "Unidrop" },
-  { label: "Envios",           href: "/dashboard/envios",         icon: Package,         group: "Unidrop" },
-  { label: "Explorador",       href: "/dashboard/sources",        icon: Database,        group: "Datos" },
-  { label: "SQL libre",        href: "/dashboard/sql",            icon: Terminal,        group: "Datos" },
+  { label: "Inicio",           href: "/dashboard/home",           icon: LayoutDashboard, group: "Principal", roles: ALL },
+  { label: "Gerencial",        href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Customer Success", href: "/dashboard/cs",             icon: HeartHandshake,  group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
+  {
+    label: "Producto",
+    href: "/dashboard/productos",
+    icon: ShoppingBag,
+    group: "Cross",
+    roles: ONLY_GERENCIA,
+    children: [
+      { label: "Vista general",       href: "/dashboard/productos", icon: ShoppingBag },
+      { label: "Costos importacion",  href: "/dashboard/costos",    icon: DollarSign  },
+    ],
+  },
+  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL },
+  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore", roles: ALL },
+  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore", roles: ALL },
+  { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop", roles: ALL },
+  { label: "Dropshippers",     href: "/dashboard/dropshippers",   icon: Users,           group: "Unidrop", roles: ALL },
+  { label: "Pagos Talo",       href: "/dashboard/pagos",          icon: CreditCard,      group: "Unidrop", roles: ALL },
+  { label: "Suscripciones MELI", href: "/dashboard/subscriptions-meli", icon: Sparkles, group: "Unidrop", roles: ALL },
+  { label: "Envios",           href: "/dashboard/envios",         icon: Package,         group: "Unidrop", roles: ALL },
+  { label: "Devoluciones",     href: "/dashboard/devoluciones",   icon: RotateCcw,       group: "Unidev", roles: ALL },
+  { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "analista"] },
+  { label: "Explorador",       href: "/dashboard/sources",        icon: Database,        group: "Datos", roles: ["admin", "analista"] },
+  { label: "SQL libre",        href: "/dashboard/sql",            icon: Terminal,        group: "Datos", roles: ["admin", "analista"] },
   { label: "Audit log",        href: "/dashboard/audit",          icon: ScrollText,      group: "Datos",       adminOnly: true },
   { label: "Usuarios",         href: "/dashboard/admin/users",    icon: UserCog,         group: "Admin",       adminOnly: true },
   { label: "Mi cuenta",        href: "/dashboard/account",        icon: UserCircle,      group: "Admin" },
 ];
 
-function GroupHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-3 pt-5 pb-2 text-[10px] font-bold uppercase tracking-wider text-white/40">
-      {children}
-    </div>
-  );
-}
+const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+  Principal: LayoutDashboard,
+  Cross: Layers,
+  Unistore: Store,
+  Unidrop: Boxes,
+  Unidev: RotateCcw,
+  Datos: Database,
+  Admin: Settings,
+};
+
+const STORAGE_KEY = "unidata.sidebar.collapsed";
 
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUserState] = useState<AuthUser | null>(null);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     setUserState(getUser());
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) setCollapsed(JSON.parse(raw));
+    } catch {}
+    setHydrated(true);
   }, []);
 
-  const visibleItems = ITEMS.filter((it) => !it.adminOnly || user?.role === "admin");
+  useEffect(() => {
+    if (hydrated) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed));
+      } catch {}
+    }
+  }, [collapsed, hydrated]);
 
-  const grouped = visibleItems.reduce<Record<string, NavItem[]>>((acc, it) => {
-    const g = it.group ?? "Otros";
-    if (!acc[g]) acc[g] = [];
-    acc[g].push(it);
-    return acc;
-  }, {});
+  const role = (user?.role as Role) ?? "user";
+  const visibleItems = ITEMS.filter((it) => {
+    if (it.adminOnly && role !== "admin") return false;
+    if (it.roles && role !== "admin" && !it.roles.includes(role)) return false;
+    return true;
+  });
+
+  const grouped = useMemo(() => {
+    const out: Record<string, NavItem[]> = {};
+    for (const it of visibleItems) {
+      const g = it.group ?? "Otros";
+      if (!out[g]) out[g] = [];
+      out[g].push(it);
+    }
+    return out;
+  }, [visibleItems]);
+
+  const isActive = (href: string) =>
+    pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
+
+  const toggle = (group: string) =>
+    setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }));
 
   return (
     <aside className="w-64 shrink-0 bg-gradient-to-b from-[#21093a] to-[#4e1e7a] text-white flex flex-col">
@@ -87,36 +160,122 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-2 pb-4">
-        {Object.entries(grouped).map(([group, items]) => (
-          <div key={group}>
-            <GroupHeader>{group}</GroupHeader>
-            {items.map((it) => {
-              const Icon = it.icon;
-              const active = pathname === it.href || (it.href !== "/dashboard" && pathname.startsWith(it.href));
-              return (
-                <Link
-                  key={it.href}
-                  href={it.href}
+      <nav className="flex-1 overflow-y-auto px-2 pb-4 pt-2">
+        {Object.entries(grouped).map(([group, items]) => {
+          const GroupIcon = GROUP_ICONS[group] ?? Layers;
+          const groupHasActive = items.some((it) => isActive(it.href));
+          const isCollapsed = collapsed[group] ?? false;
+          const showItems = !isCollapsed || groupHasActive;
+          return (
+            <div key={group} className="mb-1">
+              <button
+                type="button"
+                onClick={() => toggle(group)}
+                className={cn(
+                  "w-full flex items-center gap-2 px-3 py-2 rounded-lg mx-1 text-[11px] font-bold uppercase tracking-wider transition",
+                  groupHasActive
+                    ? "text-white/90 bg-white/5"
+                    : "text-white/50 hover:text-white/80 hover:bg-white/5",
+                )}
+                aria-expanded={!isCollapsed}
+              >
+                <GroupIcon size={14} className="shrink-0 opacity-80" />
+                <span className="flex-1 text-left">{group}</span>
+                <span className="text-[9px] text-white/40 normal-case font-semibold">
+                  {items.length}
+                </span>
+                <ChevronDown
+                  size={14}
                   className={cn(
-                    "flex items-center gap-3 px-3 py-2 rounded-lg mx-1 my-0.5 text-sm transition",
-                    active
-                      ? "bg-white/15 text-white shadow-inner"
-                      : "text-white/70 hover:text-white hover:bg-white/8",
+                    "shrink-0 opacity-70 transition-transform duration-200",
+                    isCollapsed && "-rotate-90",
                   )}
-                >
-                  <Icon size={16} className="shrink-0 opacity-90" />
-                  <span className="flex-1 truncate">{it.label}</span>
-                  {it.badge && (
-                    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-white/10 text-white/60">
-                      {it.badge}
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        ))}
+                />
+              </button>
+              {showItems && (
+                <div className="mt-0.5 ml-4 pl-2 border-l border-white/10">
+                  {items.map((it) => {
+                    const Icon = it.icon;
+                    const active = isActive(it.href);
+                    const hasChildren = it.children && it.children.length > 0;
+                    const subKey = `sub:${it.href}`;
+                    const childActive = hasChildren && it.children!.some((c) => isActive(c.href));
+                    const subCollapsed = collapsed[subKey] ?? false;
+                    const showChildren = hasChildren && (!subCollapsed || childActive);
+                    return (
+                      <div key={it.href}>
+                        {hasChildren ? (
+                          <button
+                            type="button"
+                            onClick={() => toggle(subKey)}
+                            className={cn(
+                              "w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-sm transition",
+                              active || childActive
+                                ? "bg-white/10 text-white"
+                                : "text-white/70 hover:text-white hover:bg-white/8",
+                            )}
+                            aria-expanded={!subCollapsed}
+                          >
+                            <Icon size={14} className="shrink-0 opacity-80" />
+                            <span className="flex-1 truncate text-left">{it.label}</span>
+                            <ChevronDown
+                              size={12}
+                              className={cn(
+                                "shrink-0 opacity-60 transition-transform",
+                                subCollapsed && "-rotate-90",
+                              )}
+                            />
+                          </button>
+                        ) : (
+                          <Link
+                            href={it.href}
+                            className={cn(
+                              "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-sm transition",
+                              active
+                                ? "bg-white/15 text-white shadow-inner"
+                                : "text-white/70 hover:text-white hover:bg-white/8",
+                            )}
+                          >
+                            <Icon size={14} className="shrink-0 opacity-80" />
+                            <span className="flex-1 truncate">{it.label}</span>
+                            {it.badge && (
+                              <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-white/10 text-white/60">
+                                {it.badge}
+                              </span>
+                            )}
+                          </Link>
+                        )}
+                        {showChildren && (
+                          <div className="ml-4 pl-2 border-l border-white/10">
+                            {it.children!.map((c) => {
+                              const CI = c.icon;
+                              const cActive = isActive(c.href);
+                              return (
+                                <Link
+                                  key={c.href}
+                                  href={c.href}
+                                  className={cn(
+                                    "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
+                                    cActive
+                                      ? "bg-white/15 text-white shadow-inner"
+                                      : "text-white/65 hover:text-white hover:bg-white/8",
+                                  )}
+                                >
+                                  <CI size={12} className="shrink-0 opacity-75" />
+                                  <span className="flex-1 truncate">{c.label}</span>
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </nav>
 
       <div className="p-3 border-t border-white/10">

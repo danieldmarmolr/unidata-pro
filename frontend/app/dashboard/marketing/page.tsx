@@ -3,15 +3,19 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { KpiCard } from "@/components/kpi-card";
+import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { MultiLineChart } from "@/components/multi-line-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
 import { DashboardHeader } from "@/components/dashboard-header";
-import { PeriodSegmented, Segmented, type Period } from "@/components/segmented";
+import { Segmented } from "@/components/segmented";
+import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatNumber } from "@/lib/utils";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeries, TimeSeriesPoint } from "@/lib/types";
 
@@ -77,18 +81,22 @@ function CohortHeatmap({ data }: { data: { cohort: string; data: Record<string, 
 
 export default function MarketingPage() {
   const [unit, setUnit] = useState<Unit>("unistore");
-  const [period, setPeriod] = useState<Period>("30d");
+  const period = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
+  const _qs = periodToQuery(period, customFrom, customTo);
+  const [drillCustomer, setDrillCustomer] = useState<{ id: number; name: string } | null>(null);
 
   const { data: dataUni, isLoading: lUni } = useQuery<MktUni>({
-    queryKey: ["dashboards", "mkt", "unistore", period],
-    queryFn: () => api(`/api/dashboards/marketing/unistore?period=${period}`),
+    queryKey: ["dashboards", "mkt", "unistore", period, customFrom, customTo],
+    queryFn: () => api(`/api/dashboards/marketing/unistore?${_qs}`),
     staleTime: 60_000,
     enabled: unit === "unistore",
   });
 
   const { data: dataDrop, isLoading: lDrop } = useQuery<MktDrop>({
-    queryKey: ["dashboards", "mkt", "unidrop", period],
-    queryFn: () => api(`/api/dashboards/marketing/unidrop?period=${period}`),
+    queryKey: ["dashboards", "mkt", "unidrop", period, customFrom, customTo],
+    queryFn: () => api(`/api/dashboards/marketing/unidrop?${_qs}`),
     staleTime: 60_000,
     enabled: unit === "unidrop",
   });
@@ -102,6 +110,7 @@ export default function MarketingPage() {
         title="Marketing"
         subtitle="Unistore: customers, LTV, cohort, geo · Unidrop: pixel events, signups, referrals"
       />
+      
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <DashboardHeader
           generatedAt={data?.generated_at}
@@ -115,7 +124,7 @@ export default function MarketingPage() {
                   { value: "unidrop", label: "Unidrop" },
                 ]}
               />
-              <PeriodSegmented value={period} onChange={setPeriod} />
+        <TodayPanel compact={period !== "today"} />
             </>
           }
         />
@@ -126,7 +135,7 @@ export default function MarketingPage() {
               <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
             ))
           ) : (
-            data.cards.map((c) => <KpiCard key={c.label} data={c} />)
+            data.cards.map((c) => <KpiCard key={c.label} data={c} drill={getCardDrill(c.label, { period })} />)
           )}
         </div>
 
@@ -147,9 +156,16 @@ export default function MarketingPage() {
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
               <CategoryTable
                 caption="Top 15 customers por LTV"
+                subtitle="Click en una fila para ver historial de ordenes"
                 data={dataUni.top_customers}
                 formatter="currency"
                 extraColumns={[{ key: "province", label: "Provincia", format: "raw" }]}
+                onRowClick={(r) => {
+                  const id = r.extra?.customer_id;
+                  if (typeof id === "number" && id > 0) {
+                    setDrillCustomer({ id, name: r.category });
+                  }
+                }}
               />
               <HBarChart
                 data={dataUni.top_provinces.map((p) => ({ name: p.category, value: p.value, extra: p.extra }))}
@@ -176,6 +192,16 @@ export default function MarketingPage() {
           </div>
         )}
       </div>
+
+      {drillCustomer && (
+        <DrillDownModal
+          title={`Historial de ${drillCustomer.name}`}
+          subtitle="Todas las ordenes registradas"
+          endpoint={`/api/drilldowns/customers/${drillCustomer.id}/orders`}
+          filename={`customer_${drillCustomer.id}_orders.csv`}
+          onClose={() => setDrillCustomer(null)}
+        />
+      )}
     </>
   );
 }

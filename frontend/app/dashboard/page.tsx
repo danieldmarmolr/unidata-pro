@@ -1,28 +1,213 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
+import { FileDown } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
+import { getCardDrill } from "@/lib/kpi-drill";
 import { RevenueChart } from "@/components/revenue-chart";
+import { DonutChart } from "@/components/donut-chart";
+import { CategoryTable } from "@/components/generic-table";
 import { IntegrationHealthList } from "@/components/integration-health";
 import { AlertsPanel } from "@/components/alerts-panel";
-import { api } from "@/lib/api";
-import type { ExecutiveOverview } from "@/lib/types";
+import { api, getToken } from "@/lib/api";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import type { ExecutiveOverview, CategoryValue, KpiCard as KpiCardT } from "@/lib/types";
+import { formatCurrency, formatNumber } from "@/lib/utils";
+
+type TodayAnchor = { key: string; label: string; value: number; delta_pct: number | null };
+type TodayBlock = { label: string; prefix?: string; suffix?: string; hint?: string; today: number; anchors: TodayAnchor[] };
+type TodaySnapshot = { today_date: string; blocks: TodayBlock[]; generated_at: string };
+
+function fmtVal(v: number, prefix?: string, suffix?: string): string {
+  return `${prefix ?? ""}${formatNumber(v)}${suffix ?? ""}`;
+}
+
+function TodayPanel({ data }: { data?: TodaySnapshot }) {
+  if (!data) {
+    return (
+      <div className="bg-surface border border-border rounded-xl p-6 mb-6 animate-pulse h-[260px]" />
+    );
+  }
+  return (
+    <div className="bg-gradient-to-br from-primary/8 to-accent/8 border border-primary/30 rounded-xl p-5 mb-6">
+      <div className="flex items-baseline justify-between mb-4">
+        <div>
+          <div className="text-sm font-bold text-text">
+            Comparador HOY ({(() => {
+              const [y, m, d] = data.today_date.split("-");
+              return `${d}/${m}/${y}`;
+            })()})
+          </div>
+          <div className="text-xs text-text-muted mt-0.5">vs mismo dia hace 7d / 30d / 1 ano</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+        {data.blocks.map((b) => (
+          <div key={b.label} className="bg-surface border border-border rounded-xl p-4">
+            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{b.label}</div>
+            <div className="text-2xl font-extrabold text-text mt-1 tabular-nums">
+              {fmtVal(b.today, b.prefix, b.suffix)}
+            </div>
+            {b.hint && <div className="text-[10px] text-text-muted mt-0.5">{b.hint}</div>}
+            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
+              {b.anchors.map((a) => (
+                <div key={a.key}>
+                  <div className="text-[9px] uppercase tracking-wider text-text-muted font-semibold">{a.label}</div>
+                  <div className="text-xs font-bold text-text-muted tabular-nums">
+                    {fmtVal(a.value, b.prefix, b.suffix)}
+                  </div>
+                  {a.delta_pct !== null && (
+                    <div className={"text-[10px] font-semibold " + (a.delta_pct >= 0 ? "text-emerald-600" : "text-error")}>
+                      {a.delta_pct >= 0 ? "+" : ""}{a.delta_pct.toFixed(0)}%
+                    </div>
+                  )}
+                  {a.delta_pct === null && a.value === 0 && (
+                    <div className="text-[10px] text-text-muted">sin datos</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type UnitMetric = {
+  label: string;
+  value: number | string;
+  prefix?: string;
+  suffix?: string;
+  delta?: number | null;
+};
+
+type UnitHealth = {
+  unit: string;
+  label: string;
+  color: string;
+  metrics: UnitMetric[];
+};
+
+type ExtendedExec = ExecutiveOverview & {
+  revenue_mix?: CategoryValue[];
+  unit_health?: UnitHealth[];
+  top_products_cross?: CategoryValue[];
+  lifecycle_mix?: CategoryValue[];
+};
+
+function UnitHealthCard({ u }: { u: UnitHealth }) {
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-2 h-8 rounded-full" style={{ backgroundColor: u.color }} />
+        <div className="text-sm font-bold text-text">{u.label}</div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {u.metrics.map((m) => (
+          <div key={m.label} className="bg-soft rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">
+              {m.label}
+            </div>
+            <div className="font-extrabold text-text mt-1 text-base tabular-nums">
+              {m.prefix ?? ""}
+              {typeof m.value === "number" ? formatNumber(m.value) : m.value}
+              {m.suffix ?? ""}
+            </div>
+            {m.delta !== null && m.delta !== undefined && (
+              <div
+                className={
+                  "text-[10px] font-semibold mt-0.5 " +
+                  (m.delta >= 0 ? "text-emerald-600" : "text-error")
+                }
+              >
+                {m.delta >= 0 ? "+" : ""}
+                {m.delta.toFixed(1)}% vs mes ant
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function ExecutiveDashboardPage() {
-  const { data, isLoading, error, refetch, isFetching } = useQuery<ExecutiveOverview>({
-    queryKey: ["dashboards", "executive"],
-    queryFn: () => api<ExecutiveOverview>("/api/dashboards/executive"),
+  const [generating, setGenerating] = useState(false);
+  const router = useRouter();
+  const period = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
+  const _qs = periodToQuery(period, customFrom, customTo);
+  const isToday = period === "today";
+
+  const { data, isLoading, error, refetch, isFetching } = useQuery<ExtendedExec>({
+    queryKey: ["dashboards", "executive", period, customFrom, customTo],
+    queryFn: () => api<ExtendedExec>(`/api/dashboards/executive?${_qs}`),
     staleTime: 60_000,
   });
+
+  const { data: today, isLoading: loadingToday } = useQuery<TodaySnapshot>({
+    queryKey: ["dashboards", "today"],
+    queryFn: () => api<TodaySnapshot>("/api/dashboards/today"),
+    staleTime: 60_000,
+    enabled: isToday,
+  });
+
+  async function downloadMonthlyPdf() {
+    setGenerating(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+      const res = await fetch(`${apiUrl}/api/reports/monthly`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ym = new Date().toISOString().slice(0, 7);
+      a.href = url;
+      a.download = `unidata_reporte_${ym}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`Error generando PDF: ${e instanceof Error ? e.message : e}`);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const cardHref = (c: KpiCardT): string | undefined => {
+    const lc = c.label.toLowerCase();
+    if (lc.includes("gmv") || lc.includes("ordenes unistore") || lc.includes("aov")) return "/dashboard/ventas";
+    if (lc.includes("cancel")) return "/dashboard/cs";
+    if (lc.includes("tiendas") || lc.includes("suscripciones") || lc.includes("mrr")) return "/dashboard/saas";
+    if (lc.includes("talo")) return "/dashboard/pagos";
+    if (lc.includes("devolucion")) return "/dashboard/devoluciones";
+    return undefined;
+  };
 
   return (
     <>
       <Topbar
         title="Dashboard gerencial"
-        subtitle="Vista consolidada del grupo Unistore - todas las unidades"
+        subtitle="Vista consolidada del grupo Unistore - Unistore + Unidrop + Unidev"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <div className="flex items-center justify-end mb-4">
+          <button
+            onClick={downloadMonthlyPdf}
+            disabled={generating}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-accent text-white font-semibold text-sm shadow-md shadow-primary/30 hover:shadow-lg hover:shadow-primary/40 transition disabled:opacity-50"
+          >
+            <FileDown size={14} />
+            {generating ? "Generando PDF..." : "Reporte ejecutivo (PDF)"}
+          </button>
+        </div>
+
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">
             Error cargando el dashboard: {(error as Error).message}{" "}
@@ -32,21 +217,33 @@ export default function ExecutiveDashboardPage() {
           </div>
         )}
 
-        {/* Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
-          {isLoading || !data ? (
-            Array.from({ length: 5 }).map((_, i) => (
-              <div
-                key={i}
-                className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse"
-              />
-            ))
-          ) : (
-            data.cards.map((c) => <KpiCard key={c.label} data={c} />)
-          )}
+        {/* HOY snapshot panel (only when period=today) */}
+        {isToday && (loadingToday ? <TodayPanel /> : <TodayPanel data={today} />)}
+
+        {/* Cards top */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-5 gap-4 mb-6">
+          {isLoading || !data
+            ? Array.from({ length: 9 }).map((_, i) => (
+                <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
+              ))
+            : data.cards.map((c) => <KpiCard key={c.label} data={c} drill={getCardDrill(c.label, { period, customFrom, customTo })} />)}
         </div>
 
-        {/* Chart + alerts */}
+        {/* Per-unit health */}
+        {data?.unit_health && data.unit_health.length > 0 && (
+          <div className="mb-6">
+            <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3">
+              Salud por unidad de negocio
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {data.unit_health.map((u) => (
+                <UnitHealthCard key={u.unit} u={u} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Revenue chart + Revenue mix donut */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
           <div className="xl:col-span-2">
             {isLoading || !data ? (
@@ -59,24 +256,74 @@ export default function ExecutiveDashboardPage() {
             {isLoading || !data ? (
               <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
             ) : (
-              <AlertsPanel alerts={data.top_alerts} />
+              <DonutChart
+                caption="Mix de revenue (mes en curso)"
+                data={(data.revenue_mix ?? []).map((r) => ({ name: r.category, value: r.value }))}
+                height={300}
+              />
             )}
           </div>
         </div>
 
-        {/* Integration health */}
-        <div className="grid grid-cols-1 gap-4">
+        {/* Top products cross-canal + Lifecycle */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
           {isLoading || !data ? (
-            <div className="bg-surface border border-border rounded-xl p-5 h-[200px] animate-pulse" />
+            <>
+              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+            </>
           ) : (
-            <IntegrationHealthList items={data.integration_health} />
+            <>
+              <CategoryTable
+                caption="Top 15 productos cross-canal (30d)"
+                subtitle="TN + ML combinados · click para abrir SKU 360"
+                data={data.top_products_cross ?? []}
+                formatter="currency"
+                extraColumns={[
+                  { key: "sku", label: "SKU", format: "raw" },
+                  { key: "units", label: "Unid", format: "number" },
+                  { key: "tn", label: "TN", format: "currency" },
+                  { key: "ml", label: "ML", format: "currency" },
+                ]}
+                onRowClick={(r) => {
+                  const sku = r.extra?.sku;
+                  if (typeof sku === "string" && sku) {
+                    router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
+                  }
+                }}
+              />
+              <CategoryTable
+                caption="Lifecycle de customers Unistore"
+                subtitle="Nuevo · 2da · Convertido · Recurrente"
+                data={data.lifecycle_mix ?? []}
+                formatter="number"
+                extraColumns={[{ key: "revenue", label: "Revenue total", format: "currency" }]}
+              />
+            </>
           )}
+        </div>
+
+        {/* Alerts + Integration health */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+          <div>
+            {isLoading || !data ? (
+              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+            ) : (
+              <AlertsPanel alerts={data.top_alerts} />
+            )}
+          </div>
+          <div className="xl:col-span-2">
+            {isLoading || !data ? (
+              <div className="bg-surface border border-border rounded-xl p-5 h-[200px] animate-pulse" />
+            ) : (
+              <IntegrationHealthList items={data.integration_health} />
+            )}
+          </div>
         </div>
 
         {data && (
           <div className="mt-6 text-xs text-text-muted text-right">
-            Datos generados:{" "}
-            {new Date(data.generated_at).toLocaleString("es-AR")}
+            Datos generados: {new Date(data.generated_at).toLocaleString("es-AR")}
             {isFetching && " · refrescando..."}
           </div>
         )}

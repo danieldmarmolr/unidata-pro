@@ -9,12 +9,13 @@ import datetime as dt
 
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
+from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365}
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
-def finanzas_unistore(period: str = "30d") -> dict:
-    days = PERIOD_DAYS.get(period, 30)
+def finanzas_unistore(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unistore")
     p = {"days": days}
 

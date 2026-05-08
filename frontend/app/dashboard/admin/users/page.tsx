@@ -10,7 +10,7 @@ type User = {
   id: number;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "admin" | "user" | "gerencia" | "analista" | "lector";
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -105,8 +105,11 @@ export default function AdminUsersPage() {
                       }
                       className="px-2 py-1 text-xs rounded border border-border bg-bg outline-none focus:border-primary disabled:opacity-50"
                     >
-                      <option value="user">user</option>
                       <option value="admin">admin</option>
+                      <option value="gerencia">gerencia</option>
+                      <option value="analista">analista</option>
+                      <option value="lector">lector</option>
+                      <option value="user">user</option>
                     </select>
                   </td>
                   <td className="px-3 py-2 text-center">
@@ -220,8 +223,11 @@ function NewUserModal({
             onChange={(e) => setRole(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
           >
-            <option value="user">user · solo ve dashboards</option>
-            <option value="admin">admin · gestiona usuarios + audit log</option>
+            <option value="admin">admin · todo (gestiona usuarios + audit)</option>
+            <option value="gerencia">gerencia · KPIs cross-unidad estrategicos</option>
+            <option value="analista">analista · drill profundo + SQL libre</option>
+            <option value="lector">lector · vistas read-only basicas</option>
+            <option value="user">user · todos los dashboards (sin SQL/admin)</option>
           </select>
         </div>
         {error && <div className="bg-red-50 border border-red-200 text-error rounded-lg px-3 py-2 text-xs">{error}</div>}

@@ -56,5 +56,9 @@ export type SalesOverview = {
   top_products: TopProduct[];
   top_provinces: CategoryValue[];
   daily_revenue: TimeSeriesPoint[];
+  by_region?: CategoryValue[];
+  top_markup?: CategoryValue[];
+  cost_data_available?: boolean;
+  by_hour?: CategoryValue[];
   generated_at: string;
 };

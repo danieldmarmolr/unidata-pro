@@ -3,7 +3,13 @@
 import type { TopProduct } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-export function TopProductsTable({ data }: { data: TopProduct[] }) {
+export function TopProductsTable({
+  data,
+  onRowClick,
+}: {
+  data: TopProduct[];
+  onRowClick?: (p: TopProduct) => void;
+}) {
   const maxRevenue = Math.max(0, ...data.map((d) => d.revenue));
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
@@ -32,7 +38,11 @@ export function TopProductsTable({ data }: { data: TopProduct[] }) {
               return (
                 <tr
                   key={`${p.product_id}-${i}`}
-                  className="border-t border-border hover:bg-soft transition"
+                  onClick={onRowClick ? () => onRowClick(p) : undefined}
+                  className={
+                    "border-t border-border hover:bg-soft transition " +
+                    (onRowClick ? "cursor-pointer" : "")
+                  }
                 >
                   <td className="pl-2 py-2.5 text-text-muted text-xs font-mono">{i + 1}</td>
                   <td className="py-2.5 pr-3">

@@ -15,6 +15,7 @@ export function CategoryTable({
   formatter = "currency",
   extraColumns = [],
   showProgress = true,
+  onRowClick,
 }: {
   data: Row[];
   caption?: string;
@@ -22,6 +23,7 @@ export function CategoryTable({
   formatter?: "currency" | "number" | "raw";
   extraColumns?: { key: string; label: string; format?: "currency" | "number" | "raw" }[];
   showProgress?: boolean;
+  onRowClick?: (r: Row) => void;
 }) {
   const max = Math.max(0, ...data.map((d) => d.value));
   const fmt = (v: number, f?: string) => {
@@ -55,7 +57,14 @@ export function CategoryTable({
             {data.map((r, i) => {
               const pct = max > 0 ? (r.value / max) * 100 : 0;
               return (
-                <tr key={`${r.category}-${i}`} className="border-t border-border hover:bg-soft transition">
+                <tr
+                  key={`${r.category}-${i}`}
+                  onClick={onRowClick ? () => onRowClick(r) : undefined}
+                  className={
+                    "border-t border-border hover:bg-soft transition " +
+                    (onRowClick ? "cursor-pointer" : "")
+                  }
+                >
                   <td className="pl-2 py-2 text-text-muted text-xs font-mono">{i + 1}</td>
                   <td className="py-2 pr-3 font-medium text-text truncate max-w-[280px]" title={r.category}>
                     {r.category}

@@ -4,7 +4,16 @@
 .env.*.local
 backend/audit.db*
 backend/users.db*
+backend/costs.db*
 backend/keys/
+
+# llaves SSH — NUNCA subir
+*.pem
+*.key
+**/.ssh/
+
+# Playwright
+.playwright-mcp/
 
 # python
 backend/venv/

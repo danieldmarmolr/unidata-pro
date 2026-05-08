@@ -9,13 +9,14 @@ import datetime as dt
 
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
+from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365}
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 STOCK_CRITICO_TH = 5  # unidades
 
 
-def logistica_unistore(period: str = "30d", area: str = "all") -> dict:
-    days = PERIOD_DAYS.get(period, 30)
+def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unistore")
     p = {"days": days}
 
@@ -49,22 +50,22 @@ def logistica_unistore(period: str = "30d", area: str = "all") -> dict:
     """, {"days": days, "days2": days * 2}) or 0)
     delta_disp = ((despachados_periodo - despachados_prev) / despachados_prev * 100) if despachados_prev > 0 else None
 
-    # Lead time TN.Order.createdAt -> Digip.DespachoPedido.fecha
+    # Lead time Pedido Digip -> Despacho (filtra negativos provenientes de imports historicos)
     lead_avg = scalar(eng, """
-        SELECT AVG(EXTRACT(EPOCH FROM (dp.fecha - o."createdAt"))/86400.0)::float
-        FROM tienda_nube."Order" o
-        JOIN digip."Pedido" pd ON pd."orderId" = o.id
+        SELECT AVG(EXTRACT(EPOCH FROM (dp.fecha - pd."Fecha"))/86400.0)::float
+        FROM digip."Pedido" pd
         JOIN digip."DespachoPedido" dp ON dp."pedidoCodigo" = pd."Codigo"
         WHERE dp.fecha >= NOW() - make_interval(days => :days)
+          AND dp.fecha >= pd."Fecha"
     """, p)
 
-    # Pedidos atascados: TN.Order paid pero sin Fulfillment a >5 dias
+    # Pedidos atascados: TN.Order paid >5 dias atras Y shippingStatus aun en estado abierto.
+    # Estados abiertos reales en TN: 'unpacked', 'unshipped', 'partially_packed', 'partially_fulfilled'.
     stuck = int(scalar(eng, """
         SELECT COUNT(*)
         FROM tienda_nube."Order" o
-        LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
         WHERE o."paymentStatus" = 'paid'
-          AND o."shippingStatus" IS DISTINCT FROM 'fulfilled'
+          AND o."shippingStatus" IN ('unpacked','unshipped','partially_packed','partially_fulfilled')
           AND o."createdAt" < NOW() - INTERVAL '5 days'
     """) or 0)
 
@@ -134,14 +135,14 @@ def logistica_unistore(period: str = "30d", area: str = "all") -> dict:
         {"category": "5. Fulfillment", "value": float(ff_count)},
     ]
 
-    # ---------- Lead time daily 60 dias ----------
+    # ---------- Lead time daily 60 dias (Pedido Digip -> Despacho, solo positivos) ----------
     lt_rows = q(eng, """
         SELECT date_trunc('day', dp.fecha)::date,
-               AVG(EXTRACT(EPOCH FROM (dp.fecha - o."createdAt"))/86400.0)::float
-        FROM tienda_nube."Order" o
-        JOIN digip."Pedido" pd ON pd."orderId" = o.id
+               AVG(EXTRACT(EPOCH FROM (dp.fecha - pd."Fecha"))/86400.0)::float
+        FROM digip."Pedido" pd
         JOIN digip."DespachoPedido" dp ON dp."pedidoCodigo" = pd."Codigo"
         WHERE dp.fecha >= NOW() - INTERVAL '60 days'
+          AND dp.fecha >= pd."Fecha"
         GROUP BY 1 ORDER BY 1
     """) or []
     lead_time_daily = [{"date": r[0].strftime("%Y-%m-%d") if r[0] else "",
@@ -202,9 +203,8 @@ def logistica_unistore(period: str = "30d", area: str = "all") -> dict:
         SELECT o.id, o.number, o.total, o."paymentStatus", o."shippingStatus",
                o."createdAt", EXTRACT(DAY FROM (NOW() - o."createdAt"))::int AS dias
         FROM tienda_nube."Order" o
-        LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
         WHERE o."paymentStatus" = 'paid'
-          AND o."shippingStatus" IS DISTINCT FROM 'fulfilled'
+          AND o."shippingStatus" IN ('unpacked','unshipped','partially_packed','partially_fulfilled')
           AND o."createdAt" < NOW() - INTERVAL '5 days'
         ORDER BY o."createdAt" ASC
         LIMIT 20

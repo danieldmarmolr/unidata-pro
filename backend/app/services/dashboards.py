@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 
 from app.db.engines import get_engine
-from app.services._utils import q as _q, scalar as _scalar
+from app.services._utils import q as _q, scalar as _scalar, resolve_window
 
 log = logging.getLogger("unidata.dashboards")
 
@@ -21,13 +21,15 @@ log = logging.getLogger("unidata.dashboards")
 #                  EXECUTIVE OVERVIEW
 # =========================================================
 
-def executive_overview() -> dict:
+def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     """
-    Construye el dashboard gerencial cross-unidad.
-    Devuelve dict listo para serializar como ExecutiveOverview.
+    Construye el dashboard gerencial cross-unidad usando la ventana del filtro.
     """
     uni = get_engine("unistore")
     drop = get_engine("unidrop")
+    win = resolve_window(period, from_iso, to_iso)
+    win_params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"], "days": win["days"]}
+    period_label = period.upper() if period in ("today", "yesterday") else period
 
     # ---------- Cards ----------
     cards: list[dict] = []
@@ -36,37 +38,35 @@ def executive_overview() -> dict:
     gmv_uni_tn = _scalar(uni, """
         SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END), 0)
         FROM tienda_nube."Order"
-        WHERE "createdAt" >= date_trunc('month', NOW())
-    """) or 0
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+    """, win_params) or 0
     gmv_uni_ml = _scalar(uni, """
         SELECT COALESCE(SUM(COALESCE(total_amount,0)), 0)
         FROM meli.meli_orders
-        WHERE date_created >= date_trunc('month', NOW())
+        WHERE date_created >= :from_ts AND date_created < :to_ts
           AND status IN ('paid','confirmed','shipped','delivered')
-    """) or 0
+    """, win_params) or 0
     gmv_uni = float(gmv_uni_tn) + float(gmv_uni_ml)
 
     # vs mes anterior - mismo dia del mes
     gmv_uni_tn_prev = _scalar(uni, """
         SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END), 0)
         FROM tienda_nube."Order"
-        WHERE "createdAt" >= date_trunc('month', NOW() - INTERVAL '1 month')
-          AND "createdAt" <  date_trunc('month', NOW())
-          AND EXTRACT(DAY FROM "createdAt") <= EXTRACT(DAY FROM NOW())
-    """) or 0
+        WHERE "createdAt" >= (:from_ts - make_interval(days => :days))
+              AND "createdAt" <  :from_ts
+    """, win_params) or 0
     gmv_uni_ml_prev = _scalar(uni, """
         SELECT COALESCE(SUM(COALESCE(total_amount,0)), 0)
         FROM meli.meli_orders
-        WHERE date_created >= date_trunc('month', NOW() - INTERVAL '1 month')
-          AND date_created <  date_trunc('month', NOW())
-          AND EXTRACT(DAY FROM date_created) <= EXTRACT(DAY FROM NOW())
+        WHERE date_created >= (:from_ts - make_interval(days => :days))
+              AND date_created <  :from_ts
           AND status IN ('paid','confirmed','shipped','delivered')
-    """) or 0
+    """, win_params) or 0
     gmv_uni_prev = float(gmv_uni_tn_prev) + float(gmv_uni_ml_prev)
     delta_gmv = ((gmv_uni - gmv_uni_prev) / gmv_uni_prev * 100) if gmv_uni_prev > 0 else None
 
     cards.append({
-        "label": "GMV Unistore (mes en curso)",
+        "label": f"GMV Unistore ({period_label})",
         "value": round(gmv_uni, 0),
         "prefix": "$ ",
         "suffix": "",
@@ -78,13 +78,13 @@ def executive_overview() -> dict:
     orders_uni = _scalar(uni, """
         SELECT (
             (SELECT COUNT(*) FROM tienda_nube."Order"
-              WHERE "createdAt" >= date_trunc('month', NOW())) +
+              WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts) +
             (SELECT COUNT(*) FROM meli.meli_orders
-              WHERE date_created >= date_trunc('month', NOW()))
+              WHERE date_created >= :from_ts AND date_created < :to_ts)
         )
-    """) or 0
+    """, win_params) or 0
     cards.append({
-        "label": "Ordenes Unistore (mes)",
+        "label": f"Ordenes Unistore ({period_label})",
         "value": int(orders_uni),
         "hint": "TN + Mercado Libre",
     })
@@ -118,16 +118,16 @@ def executive_overview() -> dict:
     # Card 5: Volumen procesado por Talo (Unidrop, mes en curso)
     talo_amount = _scalar(drop, """
         SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransaction"
-        WHERE "createdAt" >= date_trunc('month', NOW())
-          AND status IN ('completed','succeeded','approved','paid')
-    """)
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+          AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
+    """, win_params)
     if talo_amount is None:
         talo_amount = _scalar(drop, """
             SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransaction"
-            WHERE "createdAt" >= date_trunc('month', NOW())
-        """) or 0
+            WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+        """, win_params) or 0
     cards.append({
-        "label": "Volumen pagos Talo (mes)",
+        "label": f"Volumen pagos Talo ({period_label})",
         "value": round(float(talo_amount), 0),
         "prefix": "$ ",
         "hint": "PaymentTransaction Unidrop",
@@ -231,13 +231,12 @@ def executive_overview() -> dict:
     # ---------- Alertas ----------
     alerts: list[str] = []
 
-    # Pedidos Unistore con paymentStatus paid pero sin Fulfillment hace > 5 dias
+    # Pedidos Unistore con paymentStatus paid hace > 5 dias y aun en estado abierto
     stuck = _scalar(uni, """
         SELECT COUNT(*)
         FROM tienda_nube."Order" o
-        LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
         WHERE o."paymentStatus" = 'paid'
-          AND o."shippingStatus" IS DISTINCT FROM 'fulfilled'
+          AND o."shippingStatus" IN ('unpacked','unshipped','partially_packed','partially_fulfilled')
           AND o."createdAt" < NOW() - INTERVAL '5 days'
     """)
     if stuck and int(stuck) > 0:
@@ -270,9 +269,248 @@ def executive_overview() -> dict:
     if not alerts:
         alerts.append("Sin alertas activas. Todo viene corriendo en orden.")
 
+    # =====================================================
+    # EXTENDED STRATEGIC VIEW
+    # =====================================================
+    # ---------- Cards adicionales ----------
+
+    # AOV mes Unistore
+    aov_uni = _scalar(uni, """
+        SELECT COALESCE(AVG(NULLIF(total,0)), 0)::float
+        FROM tienda_nube."Order"
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+          AND "paymentStatus" = 'paid'
+    """, win_params) or 0
+    cards.append({
+        "label": "AOV Unistore (mes)",
+        "value": round(float(aov_uni), 0),
+        "prefix": "$ ",
+        "hint": "Ticket promedio TN paid",
+    })
+
+    # % cancel Unistore mes
+    cancel_pct = _scalar(uni, """
+        SELECT CASE WHEN COUNT(*)=0 THEN 0
+               ELSE 100.0 * COUNT(*) FILTER (WHERE status='cancelled') / COUNT(*) END
+        FROM tienda_nube."Order"
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+    """, win_params) or 0
+    cards.append({
+        "label": "% cancelaciones (mes)",
+        "value": round(float(cancel_pct), 1),
+        "suffix": "%",
+        "hint": "Sobre todas las orders TN del mes",
+    })
+
+    # MRR Unidrop estimado (subs activas * 25k aprox por defecto)
+    # mejor: cobros confirmados de PaymentTransactionSubscription mes
+    mrr_drop = _scalar(drop, """
+        SELECT COALESCE(SUM(amount),0)::float FROM mercado_libre_dev."PaymentTransactionSubscription"
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+          AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
+    """, win_params) or 0
+    cards.append({
+        "label": "MRR Unidrop (mes)",
+        "value": round(float(mrr_drop), 0),
+        "prefix": "$ ",
+        "hint": "Cobros de suscripciones MELI",
+    })
+
+    # Devoluciones mes (Unidev)
+    dev_count = 0
+    dev_amount = 0.0
+    try:
+        dev_eng = get_engine("unidev")
+        dev_count = int(_scalar(dev_eng, """
+            SELECT COUNT(*) FROM public.devoluciones
+            WHERE fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+        """, win_params) or 0)
+        dev_amount = float(_scalar(dev_eng, """
+            SELECT COALESCE(SUM(di.cantidad_solicitada * di.monto_unitario), 0)::float
+            FROM public.devoluciones d
+            JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id
+            WHERE d.fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+        """, win_params) or 0)
+    except Exception as e:
+        log.warning("dev metrics fail: %s", e)
+
+    cards.append({
+        "label": "Devoluciones (mes)",
+        "value": dev_count,
+        "hint": f"$ {dev_amount:,.0f} en monto" if dev_amount else "",
+    })
+
+    # ---------- Revenue mix (todas las fuentes) ----------
+    revenue_mix = [
+        {"category": "TN orders (Unistore)", "value": round(float(gmv_uni_tn), 0)},
+        {"category": "ML orders (Unistore)", "value": round(float(gmv_uni_ml), 0)},
+        {"category": "Talo pagos (Unidrop)", "value": round(float(talo_amount or 0), 0)},
+        {"category": "Subs MELI (Unidrop)", "value": round(float(mrr_drop), 0)},
+    ]
+
+    # ---------- Health por unidad ----------
+    unit_health: list[dict] = []
+
+    # Unistore
+    uni_orders_prev = _scalar(uni, """
+        SELECT (
+            (SELECT COUNT(*) FROM tienda_nube."Order"
+             WHERE "createdAt" >= (:from_ts - make_interval(days => :days))
+              AND "createdAt" <  :from_ts) +
+            (SELECT COUNT(*) FROM meli.meli_orders
+             WHERE date_created >= (:from_ts - make_interval(days => :days))
+              AND date_created <  :from_ts)
+        )
+    """, win_params) or 0
+    unit_health.append({
+        "unit": "unistore",
+        "label": "Unistore",
+        "color": "#7a3eae",
+        "metrics": [
+            {"label": "GMV mes", "value": round(gmv_uni, 0), "prefix": "$ ", "delta": round(delta_gmv, 1) if delta_gmv is not None else None},
+            {"label": "Orders mes", "value": int(orders_uni), "delta": round((int(orders_uni)-int(uni_orders_prev))/int(uni_orders_prev)*100,1) if int(uni_orders_prev)>0 else None},
+            {"label": "AOV", "value": round(float(aov_uni), 0), "prefix": "$ "},
+            {"label": "% cancel", "value": round(float(cancel_pct), 1), "suffix": "%"},
+        ],
+    })
+
+    # Unidrop
+    new_users_drop = _scalar(drop, """
+        SELECT COUNT(*) FROM public."User"
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+    """, win_params) or 0
+    expiring_soon = _scalar(drop, """
+        SELECT COUNT(*) FROM public."User"
+        WHERE end_date_subscription BETWEEN NOW() AND NOW() + INTERVAL '15 days'
+    """) or 0
+    unit_health.append({
+        "unit": "unidrop",
+        "label": "Unidrop",
+        "color": "#a259ff",
+        "metrics": [
+            {"label": "Suscripciones activas", "value": int(subs_drop)},
+            {"label": "MRR mes", "value": round(float(mrr_drop), 0), "prefix": "$ "},
+            {"label": "Usuarios nuevos mes", "value": int(new_users_drop)},
+            {"label": "Vencen <15d", "value": int(expiring_soon)},
+        ],
+    })
+
+    # Unidev
+    dev_open = 0
+    dev_resolved = 0
+    try:
+        dev_eng = get_engine("unidev")
+        dev_open = int(_scalar(dev_eng, """
+            SELECT COUNT(*) FROM public.devoluciones
+            WHERE estado_general NOT IN ('resuelto','cerrado','cancelado','aprobada')
+        """) or 0)
+        dev_resolved = int(_scalar(dev_eng, """
+            SELECT COUNT(*) FROM public.devoluciones
+            WHERE estado_general IN ('resuelto','cerrado','aprobada')
+              AND fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+        """, win_params) or 0)
+    except Exception:
+        pass
+    unit_health.append({
+        "unit": "unidev",
+        "label": "Unidev (Devoluciones)",
+        "color": "#ec4899",
+        "metrics": [
+            {"label": "Devoluciones mes", "value": dev_count},
+            {"label": "Monto mes", "value": round(dev_amount, 0), "prefix": "$ "},
+            {"label": "Abiertas", "value": dev_open},
+            {"label": "Resueltas mes", "value": dev_resolved},
+        ],
+    })
+
+    # ---------- Top productos cross-canal (TN + ML) ----------
+    top_cross_rows = _q(uni, """
+        WITH tn_p AS (
+            SELECT oi.sku,
+                   MAX(oi.name) AS name,
+                   SUM(oi.quantity)::int AS units,
+                   SUM(oi.quantity * oi.price)::float AS revenue
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            WHERE o."paymentStatus" = 'paid'
+              AND o."createdAt" >= NOW() - INTERVAL '30 days'
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku
+        ),
+        ml_p AS (
+            SELECT mi.seller_sku AS sku,
+                   MAX(mi.title) AS name,
+                   SUM(mi.quantity)::int AS units,
+                   SUM(mi.unit_price * mi.quantity)::float AS revenue
+            FROM meli.meli_order_items mi
+            JOIN meli.meli_orders mo ON mo.id = mi.meli_order_id
+            WHERE mo.date_created >= NOW() - INTERVAL '30 days'
+              AND mo.status IN ('paid','confirmed','shipped','delivered')
+              AND mi.seller_sku IS NOT NULL
+            GROUP BY mi.seller_sku
+        ),
+        merged AS (
+            SELECT sku, name, units, revenue, 'tn' AS src FROM tn_p
+            UNION ALL
+            SELECT sku, name, units, revenue, 'ml' AS src FROM ml_p
+        )
+        SELECT sku,
+               MAX(name) AS name,
+               SUM(units)::int AS units,
+               SUM(revenue)::float AS revenue,
+               SUM(CASE WHEN src='tn' THEN revenue ELSE 0 END)::float AS rev_tn,
+               SUM(CASE WHEN src='ml' THEN revenue ELSE 0 END)::float AS rev_ml
+        FROM merged
+        GROUP BY sku
+        ORDER BY revenue DESC LIMIT 15
+    """) or []
+    top_products_cross = [{
+        "category": (r[1] or r[0] or "?")[:60],
+        "value": float(r[3] or 0),
+        "extra": {
+            "sku": r[0],
+            "units": int(r[2] or 0),
+            "tn": round(float(r[4] or 0), 0),
+            "ml": round(float(r[5] or 0), 0),
+        },
+    } for r in top_cross_rows]
+
+    # ---------- Lifecycle de customers Unistore ----------
+    lifecycle_rows = _q(uni, """
+        WITH base AS (
+            SELECT "customerId" AS cid,
+                   COUNT(*) FILTER (WHERE "paymentStatus"='paid') AS paid_orders,
+                   SUM(CASE WHEN "paymentStatus"='paid' THEN total ELSE 0 END)::float AS revenue
+            FROM tienda_nube."Order"
+            WHERE "customerId" IS NOT NULL
+            GROUP BY 1
+        )
+        SELECT
+            CASE
+                WHEN paid_orders >= 4 THEN 'Recurrente'
+                WHEN paid_orders = 3 THEN 'Convertido a Recurrente'
+                WHEN paid_orders = 2 THEN '2da compra'
+                WHEN paid_orders = 1 THEN 'Nuevo'
+                ELSE 'Sin compras pagas'
+            END AS estado,
+            COUNT(*)::int AS clientes,
+            SUM(revenue)::float AS revenue
+        FROM base
+        GROUP BY 1 ORDER BY 2 DESC
+    """) or []
+    lifecycle_mix = [{
+        "category": r[0],
+        "value": int(r[1] or 0),
+        "extra": {"revenue": round(float(r[2] or 0), 0)},
+    } for r in lifecycle_rows]
+
     return {
         "cards": cards,
         "revenue_by_channel": revenue_series,
+        "revenue_mix": revenue_mix,
+        "unit_health": unit_health,
+        "top_products_cross": top_products_cross,
+        "lifecycle_mix": lifecycle_mix,
         "integration_health": integrations,
         "top_alerts": alerts[:8],
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),

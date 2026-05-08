@@ -53,7 +53,7 @@ def init() -> None:
                     email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
                     name          TEXT NOT NULL DEFAULT '',
                     password_hash TEXT NOT NULL,
-                    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
+                    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','gerencia','analista','lector')),
                     is_active     INTEGER NOT NULL DEFAULT 1,
                     created_at    TEXT NOT NULL,
                     updated_at    TEXT NOT NULL,
@@ -62,6 +62,30 @@ def init() -> None:
             """)
             c.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             c.commit()
+
+            # Migracion: si CHECK constraint es la vieja (solo admin/user), recrear tabla
+            schema = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+            if schema and "'gerencia'" not in (schema["sql"] or ""):
+                c.executescript("""
+                    PRAGMA foreign_keys=OFF;
+                    CREATE TABLE users_new (
+                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                        email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                        name          TEXT NOT NULL DEFAULT '',
+                        password_hash TEXT NOT NULL,
+                        role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','gerencia','analista','lector')),
+                        is_active     INTEGER NOT NULL DEFAULT 1,
+                        created_at    TEXT NOT NULL,
+                        updated_at    TEXT NOT NULL,
+                        created_by    TEXT
+                    );
+                    INSERT INTO users_new SELECT * FROM users;
+                    DROP TABLE users;
+                    ALTER TABLE users_new RENAME TO users;
+                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                    PRAGMA foreign_keys=ON;
+                """)
+                c.commit()
 
             # Seed admin si no hay ningun user
             count = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
@@ -128,8 +152,8 @@ def list_all() -> list[dict]:
 
 def create(email: str, name: str, password: str, role: str, created_by: str) -> dict:
     init()
-    if role not in ("admin", "user"):
-        raise ValueError("role debe ser 'admin' o 'user'")
+    if role not in ("admin", "user", "gerencia", "analista", "lector"):
+        raise ValueError("role debe ser admin/user/gerencia/analista/lector")
     if not email or "@" not in email:
         raise ValueError("email invalido")
     if not password or len(password) < 6:
@@ -164,7 +188,7 @@ def update(
     if name is not None:
         sets.append("name = ?"); params.append(name.strip())
     if role is not None:
-        if role not in ("admin", "user"):
+        if role not in ("admin", "user", "gerencia", "analista", "lector"):
             raise ValueError("role invalido")
         sets.append("role = ?"); params.append(role)
     if is_active is not None:

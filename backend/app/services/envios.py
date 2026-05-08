@@ -8,13 +8,14 @@ import datetime as dt
 
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
+from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365}
+PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
-def envios_unidrop(period: str = "30d", courier: str = "all") -> dict:
+def envios_unidrop(period: str = "30d", courier: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     """courier: all | oca | lightdata"""
-    days = PERIOD_DAYS.get(period, 30)
+    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unidrop")
     p = {"days": days}
 
