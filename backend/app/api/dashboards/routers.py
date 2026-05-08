@@ -266,6 +266,46 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
     return dropshippers_svc.cohort_signups()
 
 
+from app.services import lotes_analytics as lotes_svc
+
+
+@router.get("/lotes")
+def get_lotes(
+    _: Annotated[str, Depends(current_user)],
+    proveedor: Annotated[str | None, Query()] = None,
+    origen: Annotated[str | None, Query()] = None,
+    lote: Annotated[str | None, Query()] = None,
+    fecha_desde: Annotated[str | None, Query()] = None,
+    fecha_hasta: Annotated[str | None, Query()] = None,
+) -> dict:
+    """Gestion de Lotes - replica del PowerBI ERP Analytics.
+
+    Devuelve KPIs agregados (Total Costos, Facturacion, Markup, Cobertura, Consumo)
+    + lista de lotes con sus metricas individuales.
+    """
+    filters = {
+        "proveedor": proveedor,
+        "origen": origen,
+        "lote": lote,
+        "fecha_desde": fecha_desde,
+        "fecha_hasta": fecha_hasta,
+    }
+    return lotes_svc.lotes_overview(filters)
+
+
+@router.get("/lotes/{lote_id}/detail")
+def get_lote_detail(
+    lote_id: int,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Detalle del lote: KPIs + items con su estado de consumo + atribucion de ventas."""
+    detail = lotes_svc.lote_detail(lote_id)
+    if not detail:
+        from fastapi import HTTPException
+        raise HTTPException(404, f"Lote {lote_id} no encontrado")
+    return detail
+
+
 @router.get("/today")
 def get_today(
     _: Annotated[str, Depends(current_user)],

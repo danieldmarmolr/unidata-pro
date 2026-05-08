@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<title>UNIDATA · Apple-style</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#7a3eae;--accent:#a259ff;
+    --bg:#000;--surface:#0a0a0a;--card:#111114;--card-2:#1a1a1f;
+    --text:#f5f5f7;--muted:#86868b;--dim:#424245;--line:rgba(255,255,255,0.08);
+    --success:#30d158;--warn:#ff9f0a;--error:#ff453a;
+  }
+  *,*:before,*:after{box-sizing:border-box;margin:0;padding:0;}
+  html,body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    -webkit-font-smoothing:antialiased;background:#000;color:var(--text);
+  }
+  .frame{
+    width:1080px;height:1920px;background:var(--bg);
+    display:none;position:relative;overflow:hidden;
+  }
+  body[data-frame="0"] .frame[data-id="0"],
+  body[data-frame="1"] .frame[data-id="1"],
+  body[data-frame="2"] .frame[data-id="2"],
+  body[data-frame="3"] .frame[data-id="3"],
+  body[data-frame="4"] .frame[data-id="4"],
+  body[data-frame="5"] .frame[data-id="5"],
+  body[data-frame="6"] .frame[data-id="6"],
+  body[data-frame="7"] .frame[data-id="7"],
+  body[data-frame="8"] .frame[data-id="8"],
+  body[data-frame="9"] .frame[data-id="9"],
+  body[data-frame="10"] .frame[data-id="10"],
+  body[data-frame="11"] .frame[data-id="11"],
+  body[data-frame="12"] .frame[data-id="12"],
+  body[data-frame="13"] .frame[data-id="13"]{display:flex;}
+
+  /* ─── Hero text frames (intro / closers) ─── */
+  .hero-frame{
+    align-items:center;justify-content:center;flex-direction:column;
+    text-align:center;padding:120px;
+  }
+  .hero-text{
+    font-size:148px;font-weight:700;letter-spacing:-5px;line-height:0.95;
+  }
+  .hero-text.thin{font-weight:200;letter-spacing:-3px;}
+  .hero-text.dim{color:var(--muted);}
+  .hero-sub{
+    font-size:36px;font-weight:300;color:var(--muted);
+    margin-top:36px;letter-spacing:-0.5px;
+  }
+  .accent{color:var(--accent);}
+  .accent-grad{
+    background:linear-gradient(135deg,#fff 0%,#c084fc 60%,#a259ff 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  }
+
+  /* ─── Logo reveal ─── */
+  .logo-mark{
+    width:200px;height:200px;border-radius:48px;
+    background:linear-gradient(135deg,var(--accent),var(--primary));
+    display:flex;align-items:center;justify-content:center;
+    color:white;font-weight:900;font-size:120px;
+    box-shadow:0 60px 140px rgba(162,89,255,0.45),
+               0 0 0 1px rgba(255,255,255,0.06) inset;
+    margin-bottom:48px;
+  }
+  .logo-name{
+    font-size:108px;font-weight:800;letter-spacing:-4px;color:var(--text);
+  }
+  .logo-tagline{
+    font-size:24px;font-weight:400;color:var(--muted);
+    margin-top:16px;letter-spacing:1px;text-transform:uppercase;
+  }
+
+  /* ─── Stat slide ─── */
+  .stat-frame{align-items:center;justify-content:center;flex-direction:column;text-align:center;}
+  .stat-num{
+    font-size:340px;font-weight:800;letter-spacing:-14px;line-height:0.85;
+    background:linear-gradient(180deg,#fff 0%,#86868b 100%);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  }
+  .stat-num .plus{font-size:200px;vertical-align:top;}
+  .stat-label{
+    font-size:42px;font-weight:300;color:var(--muted);
+    margin-top:24px;letter-spacing:-0.5px;
+  }
+
+  /* ─── Showcase frames (dashboard product shots) ─── */
+  .showcase{
+    flex-direction:column;align-items:center;padding:120px 80px 100px;
+  }
+  .showcase-eyebrow{
+    font-size:18px;font-weight:600;color:var(--accent);
+    text-transform:uppercase;letter-spacing:6px;margin-bottom:24px;
+  }
+  .showcase-title{
+    font-size:140px;font-weight:700;letter-spacing:-5px;line-height:0.9;color:var(--text);
+  }
+  .showcase-sub{
+    font-size:30px;font-weight:300;color:var(--muted);
+    margin-top:24px;letter-spacing:-0.4px;text-align:center;max-width:780px;
+  }
+  .device{
+    margin-top:80px;width:920px;background:#0e0e12;
+    border:1px solid var(--line);border-radius:32px;padding:24px;
+    box-shadow:
+      0 60px 120px rgba(162,89,255,0.18),
+      0 30px 60px rgba(0,0,0,0.5),
+      0 0 0 1px rgba(255,255,255,0.04) inset;
+    position:relative;
+  }
+  .device::before{
+    content:'';display:flex;gap:8px;margin-bottom:18px;
+    background-image:
+      radial-gradient(circle 6px at 6px 6px, #ff5f57 100%, transparent 100%),
+      radial-gradient(circle 6px at 26px 6px, #febc2e 100%, transparent 100%),
+      radial-gradient(circle 6px at 46px 6px, #28c840 100%, transparent 100%);
+    background-repeat:no-repeat;height:14px;
+  }
+  .device-screen{
+    background:#1a1a20;border-radius:18px;padding:32px;
+    min-height:760px;
+  }
+
+  /* mini-dashboard cards inside showcase */
+  .mini-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
+  .mini-kpi{
+    background:#22222a;border:1px solid rgba(255,255,255,0.06);
+    border-radius:14px;padding:18px 20px;
+  }
+  .mini-kpi .num{font-size:34px;font-weight:700;letter-spacing:-1px;color:var(--text);line-height:1;}
+  .mini-kpi .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-top:8px;font-weight:500;}
+  .mini-kpi .delta{font-size:13px;font-weight:600;margin-top:6px;}
+  .mini-kpi .delta.up{color:var(--success);}
+  .mini-kpi .delta.dn{color:var(--error);}
+
+  .mini-card{
+    background:#22222a;border:1px solid rgba(255,255,255,0.06);
+    border-radius:14px;padding:24px 26px;margin-top:16px;
+  }
+  .mini-card-title{
+    font-size:14px;font-weight:600;color:var(--muted);
+    text-transform:uppercase;letter-spacing:1.5px;margin-bottom:18px;
+  }
+  .mini-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:15px;}
+  .mini-row:last-child{border-bottom:none;}
+  .mini-row .lbl{color:var(--text);font-weight:500;}
+  .mini-row .val{color:var(--accent);font-weight:700;}
+
+  .line-svg{width:100%;height:180px;}
+  .donut-wrap{display:flex;align-items:center;gap:24px;}
+  .donut{width:120px;height:120px;flex-shrink:0;}
+
+  .funnel-step{
+    background:linear-gradient(90deg,var(--primary),var(--accent));
+    color:white;padding:14px 22px;margin-bottom:8px;border-radius:10px;font-weight:600;font-size:15px;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .funnel-step.s2{width:80%;opacity:0.85;}
+  .funnel-step.s3{width:64%;opacity:0.7;}
+
+  .heatmap{display:grid;grid-template-columns:repeat(12,1fr);gap:3px;margin-top:8px;}
+  .hm-cell{aspect-ratio:1;border-radius:3px;}
+
+  .sql-mini{
+    background:#0a0a0e;border-radius:12px;padding:24px;
+    font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:16px;line-height:1.7;color:#d4d4d8;
+  }
+  .sql-kw{color:#c084fc;font-weight:600;}
+  .sql-fn{color:#7dd3fc;}
+  .sql-str{color:#86efac;}
+  .sql-num{color:#fde68a;}
+  .sql-cmt{color:#52525b;font-style:italic;}
+  .sql-tbl{color:#fbcfe8;}
+
+  /* ─── Final closing CTA ─── */
+  .cta-final{
+    align-items:center;justify-content:center;flex-direction:column;text-align:center;
+    background:radial-gradient(ellipse at center,#1a0d2e 0%,#000 60%);
+  }
+  .cta-final .logo-mark{margin-bottom:60px;}
+  .cta-final .now{
+    margin-top:60px;font-size:24px;font-weight:600;color:var(--text);
+    background:rgba(255,255,255,0.08);padding:18px 36px;border-radius:999px;
+    border:1px solid rgba(255,255,255,0.12);letter-spacing:-0.2px;
+  }
+  .cta-final .tags{
+    margin-top:48px;display:flex;gap:12px;font-size:13px;
+    color:var(--muted);font-weight:500;letter-spacing:3px;
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══ FRAME 0 · "Esto lo armamos…" ═══ -->
+<div class="frame hero-frame" data-id="0">
+  <div class="hero-text thin">Esto lo armamos</div>
+  <div class="hero-text thin" style="margin-top:8px;">entre nosotros.</div>
+</div>
+
+<!-- ═══ FRAME 1 · "Para nosotros." ═══ -->
+<div class="frame hero-frame" data-id="1">
+  <div class="hero-text thin dim">Entre nosotros.</div>
+  <div class="hero-text" style="font-weight:700;margin-top:-12px;">Para nosotros.</div>
+</div>
+
+<!-- ═══ FRAME 2 · "Basta del Excel." ═══ -->
+<div class="frame hero-frame" data-id="2">
+  <div class="hero-text" style="font-weight:600;">Basta del<br>Excel del lunes.</div>
+  <div class="hero-sub" style="margin-top:48px;">Hoy ya está, miralo.</div>
+</div>
+
+<!-- ═══ FRAME 3 · Logo reveal ═══ -->
+<div class="frame hero-frame" data-id="3">
+  <div class="logo-mark">U</div>
+  <div class="logo-name">UNIDATA</div>
+  <div class="logo-tagline">Nuestra plataforma de datos</div>
+</div>
+
+<!-- ═══ FRAME 4 · Stat 14 dashboards ═══ -->
+<div class="frame stat-frame" data-id="4">
+  <div class="stat-num">14<span class="plus">+</span></div>
+  <div class="stat-label">dashboards que ya están andando.</div>
+</div>
+
+<!-- ═══ FRAME 5 · Showcase Home ═══ -->
+<div class="frame showcase" data-id="5">
+  <div class="showcase-eyebrow">Hub central</div>
+  <div class="showcase-title">Home.</div>
+  <div class="showcase-sub">Cómo viene tu día. En 10 segundos.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="mini-card" style="margin-top:0;background:linear-gradient(135deg,rgba(122,62,174,0.18),rgba(162,89,255,0.18));border:1px solid rgba(162,89,255,0.2);">
+        <div class="mini-card-title" style="color:var(--accent);">Así viene el día</div>
+        <div style="font-size:24px;font-weight:600;line-height:1.3;color:var(--text);letter-spacing:-0.5px;">Ventas <span style="color:var(--success);">+18% vs ayer</span>. Conversión <span style="color:var(--accent);">3.4%</span>. Logística sin demoras.</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px;">
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">📊</div><div class="lbl" style="margin-top:8px;">Ventas</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">💰</div><div class="lbl" style="margin-top:8px;">Finanzas</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">📦</div><div class="lbl" style="margin-top:8px;">Productos</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">🚚</div><div class="lbl" style="margin-top:8px;">Logística</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">📈</div><div class="lbl" style="margin-top:8px;">Marketing</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">💳</div><div class="lbl" style="margin-top:8px;">Pagos</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">↩️</div><div class="lbl" style="margin-top:8px;">Devoluciones</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">🤝</div><div class="lbl" style="margin-top:8px;">Cust. Success</div></div>
+        <div class="mini-kpi" style="text-align:center;"><div style="font-size:30px;">🛍️</div><div class="lbl" style="margin-top:8px;">Dropshippers</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 6 · Showcase Ventas ═══ -->
+<div class="frame showcase" data-id="6">
+  <div class="showcase-eyebrow">Comercial</div>
+  <div class="showcase-title">Ventas.</div>
+  <div class="showcase-sub">GMV en vivo, por canal. Sin esperar al lunes.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="mini-strip">
+        <div class="mini-kpi"><div class="num">$8.4M</div><div class="lbl">Revenue</div><div class="delta up">▲ 18%</div></div>
+        <div class="mini-kpi"><div class="num">342</div><div class="lbl">Órdenes</div><div class="delta up">▲ 13%</div></div>
+        <div class="mini-kpi"><div class="num">$24.5k</div><div class="lbl">AOV</div><div class="delta up">▲ 5%</div></div>
+        <div class="mini-kpi"><div class="num">3.4%</div><div class="lbl">Conv.</div><div class="delta dn">▼ 0.3%</div></div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-card-title">Revenue · 12 meses</div>
+        <svg class="line-svg" viewBox="0 0 800 180" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#a259ff" stop-opacity="0.5"/>
+              <stop offset="100%" stop-color="#a259ff" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+          <path fill="url(#g1)" d="M0,140 L67,125 L134,130 L200,108 L267,115 L334,80 L400,88 L467,62 L534,72 L600,42 L667,35 L734,20 L800,28 L800,180 L0,180 Z"/>
+          <path stroke="#a259ff" stroke-width="3" fill="none" d="M0,140 L67,125 L134,130 L200,108 L267,115 L334,80 L400,88 L467,62 L534,72 L600,42 L667,35 L734,20 L800,28"/>
+          <circle cx="800" cy="28" r="6" fill="#a259ff"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 7 · Showcase Finanzas ═══ -->
+<div class="frame showcase" data-id="7">
+  <div class="showcase-eyebrow">Finanzas</div>
+  <div class="showcase-title">Margen.</div>
+  <div class="showcase-sub">Ventas vs facturación. Gap detection en tiempo real.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="mini-strip">
+        <div class="mini-kpi"><div class="num">$248M</div><div class="lbl">Facturado</div><div class="delta up">▲ 22%</div></div>
+        <div class="mini-kpi"><div class="num">$262M</div><div class="lbl">Ventas op.</div><div class="delta up">▲ 19%</div></div>
+        <div class="mini-kpi"><div class="num" style="color:var(--warn);">$14M</div><div class="lbl">Gap</div><div class="delta dn">⚠ 5.3%</div></div>
+        <div class="mini-kpi"><div class="num">38.4%</div><div class="lbl">Margen</div><div class="delta up">▲ 1.2%</div></div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-card-title">Facturación vs Ventas · 12 meses</div>
+        <svg class="line-svg" viewBox="0 0 800 180" preserveAspectRatio="none">
+          <path stroke="#a259ff" stroke-width="3" fill="none" d="M0,130 L67,125 L134,118 L200,108 L267,100 L334,88 L400,85 L467,72 L534,68 L600,58 L667,50 L734,40 L800,32"/>
+          <path stroke="#7a3eae" stroke-width="3" fill="none" stroke-dasharray="6 4" d="M0,140 L67,132 L134,128 L200,118 L267,108 L334,98 L400,90 L467,80 L534,76 L600,64 L667,58 L734,48 L800,42"/>
+          <circle cx="800" cy="32" r="5" fill="#a259ff"/>
+          <circle cx="800" cy="42" r="5" fill="#7a3eae"/>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 8 · Showcase Marketing ═══ -->
+<div class="frame showcase" data-id="8">
+  <div class="showcase-eyebrow">Crecimiento</div>
+  <div class="showcase-title">Cohorts.</div>
+  <div class="showcase-sub">CAC, LTV y retención. Sin armar planillas.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="mini-strip">
+        <div class="mini-kpi"><div class="num">1,284</div><div class="lbl">Nuevos</div><div class="delta up">▲ 14%</div></div>
+        <div class="mini-kpi"><div class="num">38%</div><div class="lbl">Repeat</div><div class="delta up">▲ 2%</div></div>
+        <div class="mini-kpi"><div class="num">$87k</div><div class="lbl">LTV</div><div class="delta up">▲ 8%</div></div>
+        <div class="mini-kpi"><div class="num">$3.2k</div><div class="lbl">CAC</div><div class="delta up">▼ 12%</div></div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-card-title">Retention · Mes 1 → Mes 6</div>
+        <div class="heatmap" id="hm-apple"></div>
+        <script>
+          (function(){
+            const hm=document.getElementById('hm-apple');if(!hm)return;
+            const data=[
+              [100,72,58,49,42,38,35,32,30,28,26,24],
+              [100,68,54,46,40,36,33,30,28,26,24,0],
+              [100,75,61,52,45,40,37,34,32,29,0,0],
+              [100,70,57,48,42,38,35,32,29,0,0,0],
+              [100,73,60,51,44,40,37,33,0,0,0,0],
+              [100,69,55,47,41,37,34,0,0,0,0,0],
+            ];
+            data.forEach(row=>row.forEach(v=>{
+              const c=document.createElement('div');c.className='hm-cell';
+              const op=v===0?0:Math.max(0.1,v/100);
+              c.style.background=v===0?'rgba(255,255,255,0.04)':`rgba(162,89,255,${op})`;
+              c.style.color=v>50?'white':'rgba(255,255,255,0.7)';
+              c.style.fontSize='10px';c.style.fontWeight='600';
+              c.style.display='flex';c.style.alignItems='center';c.style.justifyContent='center';
+              c.textContent=v===0?'':v;
+              hm.appendChild(c);
+            }));
+          })();
+        </script>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 9 · Showcase Logística ═══ -->
+<div class="frame showcase" data-id="9">
+  <div class="showcase-eyebrow">Operaciones</div>
+  <div class="showcase-title">Logística.</div>
+  <div class="showcase-sub">Funnel completo. Cuello de botella en segundos.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="mini-strip">
+        <div class="mini-kpi"><div class="num">87</div><div class="lbl">Pendientes</div></div>
+        <div class="mini-kpi"><div class="num">52</div><div class="lbl">Preparando</div></div>
+        <div class="mini-kpi"><div class="num">3.2d</div><div class="lbl">Lead time</div></div>
+        <div class="mini-kpi"><div class="num">8.4k</div><div class="lbl">Stock</div></div>
+      </div>
+      <div class="mini-card">
+        <div class="mini-card-title">Despachos · 60 días</div>
+        <div class="funnel-step"><span>Orden pagada</span><span>2,847 · 100%</span></div>
+        <div class="funnel-step s2"><span>Pedido a Digip WMS</span><span>2,691 · 94.5%</span></div>
+        <div class="funnel-step s3"><span>Despachado</span><span>2,512 · 88.2%</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 10 · Showcase SQL ═══ -->
+<div class="frame showcase" data-id="10">
+  <div class="showcase-eyebrow">Power users</div>
+  <div class="showcase-title">SQL.</div>
+  <div class="showcase-sub">Tu pregunta, tu respuesta. Solo lectura, siempre seguro.</div>
+  <div class="device">
+    <div class="device-screen">
+      <div class="sql-mini">
+<span class="sql-cmt">-- Top 10 SKUs · últimos 7 días</span><br>
+<span class="sql-kw">SELECT</span> p.sku, p.name, <span class="sql-fn">SUM</span>(oi.qty) <span class="sql-kw">AS</span> u, <span class="sql-fn">SUM</span>(oi.qty*oi.price) <span class="sql-kw">AS</span> rev<br>
+<span class="sql-kw">FROM</span> <span class="sql-tbl">orders</span> o<br>
+<span class="sql-kw">JOIN</span> <span class="sql-tbl">order_items</span> oi <span class="sql-kw">ON</span> oi.order_id=o.id<br>
+<span class="sql-kw">JOIN</span> <span class="sql-tbl">products</span> p <span class="sql-kw">ON</span> p.sku=oi.sku<br>
+<span class="sql-kw">WHERE</span> o.paid_at &gt;= <span class="sql-kw">NOW</span>()-<span class="sql-str">'7d'</span>::<span class="sql-fn">interval</span><br>
+<span class="sql-kw">GROUP BY</span> p.sku, p.name <span class="sql-kw">ORDER BY</span> rev <span class="sql-kw">DESC</span> <span class="sql-kw">LIMIT</span> <span class="sql-num">10</span>;
+      </div>
+      <div class="mini-card">
+        <div class="mini-row"><div class="lbl">UNI-A23 · Termo Stanley</div><div class="val">$1.8M</div></div>
+        <div class="mini-row"><div class="lbl">UNI-B17 · Set mate</div><div class="val">$1.5M</div></div>
+        <div class="mini-row"><div class="lbl">UNI-C09 · Bombilla</div><div class="val">$1.2M</div></div>
+        <div class="mini-row"><div class="lbl">UNI-D45 · Yerba x500g</div><div class="val">$0.9M</div></div>
+      </div>
+      <div style="font-size:13px;color:var(--muted);margin-top:14px;text-align:right;">✓ 10 filas · 184ms · read-only</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 11 · "Una sola web." ═══ -->
+<div class="frame hero-frame" data-id="11">
+  <div class="hero-text thin">Una sola web.</div>
+  <div class="hero-text" style="font-weight:700;margin-top:-8px;" >Todo el grupo.</div>
+</div>
+
+<!-- ═══ FRAME 12 · "Mobile. Audit. SQL safe." ═══ -->
+<div class="frame hero-frame" data-id="12">
+  <div style="display:flex;flex-direction:column;gap:32px;align-items:flex-start;width:100%;max-width:780px;">
+    <div class="hero-text thin" style="font-size:96px;">Mobile.</div>
+    <div class="hero-text thin dim" style="font-size:96px;">Audit.</div>
+    <div class="hero-text" style="font-size:96px;font-weight:700;">SQL seguro.</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 13 · CTA final ═══ -->
+<div class="frame cta-final" data-id="13">
+  <div class="logo-mark">U</div>
+  <div class="hero-text accent-grad" style="font-size:120px;">UNIDATA.</div>
+  <div class="hero-sub" style="margin-top:24px;">Disponible ahora para todo el grupo.</div>
+  <div class="now">Pedí tu acceso →</div>
+  <div class="tags">UNISTORE &nbsp;·&nbsp; UNIDROP &nbsp;·&nbsp; UNIDEV &nbsp;·&nbsp; UNIFULL</div>
+</div>
+
+<script>
+  (function(){
+    const params=new URLSearchParams(location.search);
+    const f=params.get('frame')||'0';
+    document.body.setAttribute('data-frame',f);
+  })();
+</script>
+</body>
+</html>

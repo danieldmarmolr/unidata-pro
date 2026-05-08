@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<title>UNIDATA · Video frames</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary: #7a3eae;
+    --primary-dark: #4e1e7a;
+    --darkest: #21093a;
+    --accent: #a259ff;
+    --bg: #f8f9fc;
+    --surface: #ffffff;
+    --soft: #f5f0fb;
+    --border: #e0cff3;
+    --text: #21093a;
+    --muted: #6b7280;
+    --success: #25d366;
+    --warn: #f59e0b;
+    --error: #fb2c36;
+  }
+  *,*:before,*:after{box-sizing:border-box;margin:0;padding:0;}
+  html,body{font-family:'Inter',-apple-system,sans-serif;-webkit-font-smoothing:antialiased;background:#000;}
+  .frame{
+    width:1080px;height:1920px;background:var(--bg);color:var(--text);
+    display:none;position:relative;overflow:hidden;
+  }
+  body[data-frame="0"] .frame[data-id="0"],
+  body[data-frame="1"] .frame[data-id="1"],
+  body[data-frame="2"] .frame[data-id="2"],
+  body[data-frame="3"] .frame[data-id="3"],
+  body[data-frame="4"] .frame[data-id="4"],
+  body[data-frame="5"] .frame[data-id="5"],
+  body[data-frame="6"] .frame[data-id="6"],
+  body[data-frame="7"] .frame[data-id="7"],
+  body[data-frame="8"] .frame[data-id="8"]{display:block;}
+
+  /* ─── COMMON FRAME LAYOUT ─── */
+  .frame-header{
+    background:linear-gradient(135deg,var(--darkest) 0%,var(--primary-dark) 100%);
+    padding:60px 70px 50px;
+    color:white;position:relative;overflow:hidden;
+  }
+  .frame-header::before{
+    content:'';position:absolute;top:-200px;right:-200px;width:600px;height:600px;
+    background:radial-gradient(circle,var(--accent) 0%,transparent 70%);opacity:0.2;border-radius:50%;
+  }
+  .brand-row{display:flex;align-items:center;gap:18px;position:relative;z-index:2;}
+  .logo-box{
+    width:64px;height:64px;background:linear-gradient(135deg,var(--accent),var(--primary));
+    border-radius:16px;display:flex;align-items:center;justify-content:center;
+    color:white;font-weight:900;font-size:34px;
+    box-shadow:0 10px 30px rgba(162,89,255,0.45);
+  }
+  .brand-name{color:white;font-weight:800;font-size:32px;letter-spacing:-0.5px;}
+  .brand-sub{color:rgba(255,255,255,0.65);font-size:14px;font-weight:500;letter-spacing:0.5px;}
+  .screen-tag{
+    margin-top:30px;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:3px;
+    color:var(--accent);position:relative;z-index:2;
+  }
+  .screen-title{
+    font-size:64px;font-weight:800;letter-spacing:-2px;line-height:1;margin-top:14px;
+    color:white;position:relative;z-index:2;
+  }
+  .screen-sub{
+    font-size:22px;color:rgba(255,255,255,0.75);margin-top:18px;line-height:1.4;
+    position:relative;z-index:2;
+  }
+
+  .dashboard-area{
+    padding:50px 60px;flex:1;display:flex;flex-direction:column;gap:24px;
+    background:var(--bg);
+  }
+
+  .frame-footer{
+    position:absolute;bottom:0;left:0;right:0;
+    background:linear-gradient(135deg,var(--darkest),var(--primary));
+    padding:30px 60px;color:white;display:flex;align-items:center;justify-content:space-between;
+  }
+  .footer-mark{display:flex;align-items:center;gap:12px;}
+  .footer-logo{
+    width:36px;height:36px;background:linear-gradient(135deg,var(--accent),var(--primary));
+    border-radius:9px;display:flex;align-items:center;justify-content:center;
+    color:white;font-weight:900;font-size:18px;
+  }
+  .footer-name{font-weight:800;font-size:22px;letter-spacing:-0.3px;}
+  .footer-pill{
+    background:rgba(255,255,255,0.15);padding:8px 16px;border-radius:999px;
+    font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;
+    border:1px solid rgba(255,255,255,0.25);
+  }
+
+  /* ─── FRAME 0: ANTES ─── */
+  .antes{
+    background:#0f0f0f;color:white;width:1080px;height:1920px;
+    display:none;flex-direction:column;align-items:center;justify-content:center;
+    padding:80px;position:relative;overflow:hidden;
+  }
+  body[data-frame="0"] .antes{display:flex;}
+  .antes::before{
+    content:'';position:absolute;inset:0;background:
+      radial-gradient(circle at 20% 30%,rgba(251,44,54,0.15),transparent 50%),
+      radial-gradient(circle at 80% 70%,rgba(245,158,11,0.12),transparent 50%);
+  }
+  .antes-tag{
+    font-size:18px;font-weight:700;color:#fb2c36;letter-spacing:8px;
+    text-transform:uppercase;margin-bottom:32px;position:relative;z-index:2;
+  }
+  .antes-title{
+    font-size:120px;font-weight:900;color:white;letter-spacing:-4px;line-height:0.95;
+    text-align:center;position:relative;z-index:2;
+  }
+  .antes-title .strike{text-decoration:line-through;text-decoration-color:#fb2c36;text-decoration-thickness:8px;}
+  .antes-bullets{
+    margin-top:60px;display:flex;flex-direction:column;gap:24px;
+    position:relative;z-index:2;width:100%;max-width:760px;
+  }
+  .antes-b{
+    background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+    border-radius:16px;padding:24px 32px;display:flex;align-items:center;gap:20px;
+    font-size:24px;color:rgba(255,255,255,0.85);
+  }
+  .antes-x{
+    width:44px;height:44px;border-radius:50%;background:rgba(251,44,54,0.2);
+    color:#fb2c36;font-size:24px;font-weight:900;
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  }
+
+  /* ─── KPI STRIP & CARDS ─── */
+  .kpi-strip{
+    background:linear-gradient(135deg,rgba(122,62,174,0.08),rgba(162,89,255,0.08));
+    border:1px solid var(--border);border-radius:20px;padding:28px 30px;
+  }
+  .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:6px;}
+  .kpi{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;}
+  .kpi .num{font-size:38px;font-weight:800;color:var(--primary);letter-spacing:-1.2px;line-height:1;}
+  .kpi .lbl{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.8px;margin-top:8px;}
+  .kpi .delta{font-size:13px;font-weight:700;margin-top:4px;}
+  .kpi .delta.up{color:var(--success);}
+  .kpi .delta.dn{color:var(--error);}
+
+  .section-label{
+    font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;
+    color:var(--primary);margin-bottom:14px;
+  }
+
+  /* ─── CHARTS MOCKUP ─── */
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:28px;
+  }
+  .card-title{font-size:18px;font-weight:700;color:var(--text);margin-bottom:20px;letter-spacing:-0.3px;}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px;}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+
+  /* line chart svg styles */
+  .line-svg{width:100%;height:200px;}
+  .area-fill{fill:url(#grad);opacity:0.5;}
+  .area-line{stroke:var(--primary);stroke-width:3;fill:none;}
+
+  /* donut */
+  .donut-wrap{display:flex;align-items:center;gap:24px;}
+  .donut{width:140px;height:140px;flex-shrink:0;}
+  .donut-legend{display:flex;flex-direction:column;gap:10px;font-size:14px;}
+  .donut-item{display:flex;align-items:center;gap:10px;color:var(--muted);}
+  .donut-dot{width:12px;height:12px;border-radius:3px;}
+
+  /* tables */
+  .table-row{
+    display:grid;grid-template-columns:1fr auto;padding:12px 0;
+    border-bottom:1px solid var(--border);align-items:center;
+  }
+  .table-row:last-child{border-bottom:none;}
+  .table-name{font-size:15px;font-weight:600;color:var(--text);}
+  .table-val{font-size:15px;font-weight:700;color:var(--primary);}
+  .table-bar{
+    height:6px;background:var(--soft);border-radius:3px;margin-top:6px;overflow:hidden;
+  }
+  .table-bar div{height:100%;background:linear-gradient(90deg,var(--primary),var(--accent));border-radius:3px;}
+
+  /* Funnel */
+  .funnel-step{
+    background:linear-gradient(90deg,var(--primary),var(--accent));
+    color:white;padding:16px 24px;margin-bottom:8px;border-radius:10px;font-weight:700;
+    display:flex;justify-content:space-between;align-items:center;
+  }
+  .funnel-step.s2{width:78%;opacity:0.85;}
+  .funnel-step.s3{width:62%;opacity:0.7;}
+  .funnel-step .pct{font-size:14px;opacity:0.9;}
+
+  /* heatmap */
+  .heatmap{display:grid;grid-template-columns:repeat(12,1fr);gap:4px;}
+  .hm-cell{aspect-ratio:1;border-radius:4px;}
+
+  /* SQL editor mockup */
+  .sql-editor{
+    background:#1e1e2e;color:#e0e0e0;border-radius:14px;padding:24px 28px;
+    font-family:'JetBrains Mono','Consolas',monospace;font-size:18px;line-height:1.6;
+    border:1px solid var(--border);
+  }
+  .sql-kw{color:#c084fc;font-weight:600;}
+  .sql-fn{color:#7dd3fc;}
+  .sql-str{color:#86efac;}
+  .sql-num{color:#fde68a;}
+  .sql-cmt{color:#71717a;font-style:italic;}
+  .sql-tbl{color:#fbcfe8;}
+  .sql-cur{display:inline-block;width:10px;height:22px;background:#a259ff;vertical-align:middle;animation:blink 1s infinite;}
+  @keyframes blink{50%{opacity:0;}}
+
+  .result-table{
+    margin-top:16px;background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;
+  }
+  .result-row{
+    display:grid;grid-template-columns:80px 1fr 120px 100px;
+    padding:12px 18px;border-bottom:1px solid var(--border);
+    font-size:14px;align-items:center;
+  }
+  .result-row.head{background:var(--soft);font-weight:700;color:var(--primary);text-transform:uppercase;letter-spacing:1px;font-size:12px;}
+  .result-row:last-child{border-bottom:none;}
+  .badge-ok{background:rgba(37,211,102,0.15);color:#16a34a;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;display:inline-block;}
+  .badge-er{background:rgba(251,44,54,0.15);color:#dc2626;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;display:inline-block;}
+
+  /* Tile grid Home */
+  .tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;}
+  .tile{
+    background:var(--surface);border:1px solid var(--border);border-radius:16px;
+    padding:22px;display:flex;flex-direction:column;gap:8px;position:relative;overflow:hidden;
+  }
+  .tile.featured{
+    background:linear-gradient(135deg,rgba(122,62,174,0.08),rgba(162,89,255,0.08));
+    grid-column:span 1;
+  }
+  .tile-icon{
+    width:46px;height:46px;border-radius:12px;
+    background:linear-gradient(135deg,rgba(122,62,174,0.15),rgba(162,89,255,0.15));
+    display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:6px;
+  }
+  .tile-name{font-size:16px;font-weight:700;color:var(--text);}
+  .tile-desc{font-size:13px;color:var(--muted);line-height:1.4;}
+
+  /* CTA ─── */
+  .cta-frame{
+    background:linear-gradient(135deg,var(--darkest) 0%,var(--primary-dark) 50%,var(--primary) 100%);
+    width:1080px;height:1920px;display:none;flex-direction:column;align-items:center;justify-content:center;
+    color:white;padding:80px;position:relative;overflow:hidden;text-align:center;
+  }
+  body[data-frame="8"] .cta-frame{display:flex;}
+  .cta-frame::before{
+    content:'';position:absolute;inset:0;background:
+      radial-gradient(circle at 30% 20%,rgba(162,89,255,0.4),transparent 60%),
+      radial-gradient(circle at 70% 80%,rgba(122,62,174,0.5),transparent 60%);
+  }
+  .cta-logo{
+    width:140px;height:140px;border-radius:32px;
+    background:linear-gradient(135deg,var(--accent),var(--primary));
+    display:flex;align-items:center;justify-content:center;color:white;
+    font-weight:900;font-size:80px;margin-bottom:40px;position:relative;z-index:2;
+    box-shadow:0 30px 80px rgba(162,89,255,0.5);
+  }
+  .cta-h{font-size:96px;font-weight:900;letter-spacing:-3px;line-height:0.95;position:relative;z-index:2;}
+  .cta-h .glow{
+    background:linear-gradient(135deg,#fff,#c084fc);
+    -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+  }
+  .cta-p{font-size:28px;color:rgba(255,255,255,0.85);margin-top:32px;line-height:1.4;max-width:880px;position:relative;z-index:2;}
+  .cta-btn{
+    margin-top:60px;background:white;color:var(--darkest);
+    padding:24px 48px;border-radius:18px;font-size:24px;font-weight:800;
+    position:relative;z-index:2;box-shadow:0 20px 60px rgba(0,0,0,0.3);
+  }
+  .cta-tags{
+    margin-top:50px;display:flex;gap:14px;position:relative;z-index:2;
+    font-size:14px;font-weight:700;letter-spacing:2px;color:rgba(255,255,255,0.7);
+  }
+  .cta-tag{padding:10px 18px;border:1px solid rgba(255,255,255,0.25);border-radius:999px;}
+</style>
+</head>
+<body>
+
+<!-- ═══ FRAME 0 · ANTES ═══ -->
+<div class="antes">
+  <div class="antes-tag">Hasta hace poco…</div>
+  <div class="antes-title">Datos<br><span class="strike">dispersos.</span></div>
+  <div class="antes-bullets">
+    <div class="antes-b"><div class="antes-x">×</div>"Te lo paso el lunes"</div>
+    <div class="antes-b"><div class="antes-x">×</div>3 bases, 5 planillas, 0 visión</div>
+    <div class="antes-b"><div class="antes-x">×</div>Decisiones a ciegas</div>
+    <div class="antes-b"><div class="antes-x">×</div>Pedirle un reporte al área de datos</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 1 · HOME ═══ -->
+<div class="frame" data-id="1">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Home · Hub de navegación</div></div>
+    </div>
+    <div class="screen-tag">01 · Inicio</div>
+    <div class="screen-title">Cómo viene<br>tu día.</div>
+    <div class="screen-sub">Acceso directo a cada área del negocio. Una sola pantalla, todos los tableros.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="card" style="background:linear-gradient(135deg,rgba(122,62,174,0.1),rgba(162,89,255,0.1));border:none;">
+      <div class="section-label">Así viene el día</div>
+      <div style="font-size:32px;font-weight:800;line-height:1.2;color:var(--text);letter-spacing:-1px;">Hoy las ventas vienen <span style="color:var(--success);">+18% vs ayer</span> y la conversión cerró en <span style="color:var(--primary);">3.4%</span>. Logística sin demoras.</div>
+    </div>
+    <div class="tile-grid">
+      <div class="tile"><div class="tile-icon">📊</div><div class="tile-name">Ventas</div><div class="tile-desc">GMV · AOV · Conversión</div></div>
+      <div class="tile"><div class="tile-icon">💰</div><div class="tile-name">Finanzas</div><div class="tile-desc">Márgenes · Cash</div></div>
+      <div class="tile"><div class="tile-icon">📦</div><div class="tile-name">Productos</div><div class="tile-desc">Stock · Rotación</div></div>
+      <div class="tile"><div class="tile-icon">🚚</div><div class="tile-name">Logística</div><div class="tile-desc">Entregas · Stock</div></div>
+      <div class="tile"><div class="tile-icon">📈</div><div class="tile-name">Marketing</div><div class="tile-desc">CAC · LTV · ROAS</div></div>
+      <div class="tile"><div class="tile-icon">💳</div><div class="tile-name">Pagos</div><div class="tile-desc">TN · MELI · TaloPay</div></div>
+      <div class="tile"><div class="tile-icon">↩️</div><div class="tile-name">Devoluciones</div><div class="tile-desc">RMA · Tasas · Causas</div></div>
+      <div class="tile"><div class="tile-icon">🤝</div><div class="tile-name">Customer Success</div><div class="tile-desc">Churn · LTV · NPS</div></div>
+      <div class="tile"><div class="tile-icon">🛍️</div><div class="tile-name">Dropshippers</div><div class="tile-desc">Red · Pagos · MELI</div></div>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">14 dashboards · en vivo</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 2 · VENTAS ═══ -->
+<div class="frame" data-id="2">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Ventas · Tienda Nube · MELI · Dropshippers</div></div>
+    </div>
+    <div class="screen-tag">02 · Ventas</div>
+    <div class="screen-title">GMV en vivo<br>por canal.</div>
+    <div class="screen-sub">¿Qué vendió hoy cada tienda? La respuesta está acá. Sin esperar al lunes.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="kpi-strip">
+      <div class="section-label">Hoy · vs ayer</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">$8.4M</div><div class="lbl">Revenue</div><div class="delta up">▲ 18.2%</div></div>
+        <div class="kpi"><div class="num">342</div><div class="lbl">Órdenes</div><div class="delta up">▲ 12.8%</div></div>
+        <div class="kpi"><div class="num">$24.5k</div><div class="lbl">AOV</div><div class="delta up">▲ 4.7%</div></div>
+        <div class="kpi"><div class="num">3.4%</div><div class="lbl">Conv. rate</div><div class="delta dn">▼ 0.3%</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Revenue · últimos 12 meses</div>
+      <svg class="line-svg" viewBox="0 0 800 200" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#a259ff"/>
+            <stop offset="100%" stop-color="#a259ff" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path class="area-fill" d="M0,160 L67,140 L134,150 L200,120 L267,130 L334,90 L400,100 L467,70 L534,80 L600,50 L667,40 L734,20 L800,30 L800,200 L0,200 Z"/>
+        <path class="area-line" d="M0,160 L67,140 L134,150 L200,120 L267,130 L334,90 L400,100 L467,70 L534,80 L600,50 L667,40 L734,20 L800,30"/>
+        <circle cx="800" cy="30" r="6" fill="#a259ff"/>
+      </svg>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Top productos</div>
+        <div class="table-row"><div><div class="table-name">UNI-A23</div><div class="table-bar"><div style="width:92%"></div></div></div><div class="table-val">$1.8M</div></div>
+        <div class="table-row"><div><div class="table-name">UNI-B17</div><div class="table-bar"><div style="width:78%"></div></div></div><div class="table-val">$1.5M</div></div>
+        <div class="table-row"><div><div class="table-name">UNI-C09</div><div class="table-bar"><div style="width:64%"></div></div></div><div class="table-val">$1.2M</div></div>
+        <div class="table-row"><div><div class="table-name">UNI-D45</div><div class="table-bar"><div style="width:48%"></div></div></div><div class="table-val">$0.9M</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Status pagos</div>
+        <div class="donut-wrap">
+          <svg class="donut" viewBox="0 0 42 42">
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#e0cff3" stroke-width="6"/>
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#7a3eae" stroke-width="6" stroke-dasharray="68 100" stroke-dashoffset="0"/>
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#a259ff" stroke-width="6" stroke-dasharray="22 100" stroke-dashoffset="-68"/>
+            <circle cx="21" cy="21" r="15.9" fill="transparent" stroke="#f59e0b" stroke-width="6" stroke-dasharray="10 100" stroke-dashoffset="-90"/>
+          </svg>
+          <div class="donut-legend">
+            <div class="donut-item"><div class="donut-dot" style="background:#7a3eae"></div>Aprobados · 68%</div>
+            <div class="donut-item"><div class="donut-dot" style="background:#a259ff"></div>Pendientes · 22%</div>
+            <div class="donut-item"><div class="donut-dot" style="background:#f59e0b"></div>Otros · 10%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">VENTAS · UNISTORE</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 3 · LOGÍSTICA ═══ -->
+<div class="frame" data-id="3">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Logística · Despachos · Stock</div></div>
+    </div>
+    <div class="screen-tag">03 · Logística</div>
+    <div class="screen-title">Sin pedidos<br>colgados.</div>
+    <div class="screen-sub">Funnel completo desde la orden pagada hasta el despacho. Detectás el cuello de botella en segundos.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="kpi-strip">
+      <div class="section-label">Operativa actual</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">87</div><div class="lbl">Pendientes</div></div>
+        <div class="kpi"><div class="num">52</div><div class="lbl">Preparando</div></div>
+        <div class="kpi"><div class="num">3.2d</div><div class="lbl">Lead time</div></div>
+        <div class="kpi"><div class="num">8.4k</div><div class="lbl">Stock total</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Funnel de despachos · últimos 60 días</div>
+      <div class="funnel-step"><span>Orden pagada</span><span class="pct">2,847 · 100%</span></div>
+      <div class="funnel-step s2"><span>Pedido a Digip WMS</span><span class="pct">2,691 · 94.5%</span></div>
+      <div class="funnel-step s3"><span>Despachado</span><span class="pct">2,512 · 88.2%</span></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Stock crítico · ≤5u</div>
+        <div class="table-row"><div class="table-name">UNI-K12</div><div class="table-val" style="color:var(--error)">2u</div></div>
+        <div class="table-row"><div class="table-name">UNI-M88</div><div class="table-val" style="color:var(--error)">3u</div></div>
+        <div class="table-row"><div class="table-name">UNI-Q47</div><div class="table-val" style="color:var(--warn)">5u</div></div>
+        <div class="table-row"><div class="table-name">UNI-T33</div><div class="table-val" style="color:var(--warn)">5u</div></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Pedidos > 5 días</div>
+        <div style="font-size:64px;font-weight:900;color:var(--error);letter-spacing:-2px;line-height:1;">12</div>
+        <div style="font-size:14px;color:var(--muted);margin-top:6px;">requieren atención inmediata</div>
+        <div style="margin-top:20px;background:rgba(251,44,54,0.08);padding:14px;border-radius:10px;border-left:3px solid var(--error);font-size:13px;color:var(--error);font-weight:600;">⚠ Click para ver el detalle de cada uno</div>
+      </div>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">LOGÍSTICA · UNISTORE</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 4 · FINANZAS ═══ -->
+<div class="frame" data-id="4">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Finanzas · Facturación · Márgenes</div></div>
+    </div>
+    <div class="screen-tag">04 · Finanzas</div>
+    <div class="screen-title">Ventas vs<br>facturación.</div>
+    <div class="screen-sub">Detección de gaps en tiempo real. Si algo no cierra, lo ves al instante.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="kpi-strip">
+      <div class="section-label">Mes en curso</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">$248M</div><div class="lbl">Facturado</div><div class="delta up">▲ 22%</div></div>
+        <div class="kpi"><div class="num">$262M</div><div class="lbl">Ventas op.</div><div class="delta up">▲ 19%</div></div>
+        <div class="kpi"><div class="num">$14M</div><div class="lbl">Gap</div><div class="delta dn">⚠ 5.3%</div></div>
+        <div class="kpi"><div class="num">38.4%</div><div class="lbl">Margen</div><div class="delta up">▲ 1.2%</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Facturación vs Ventas operativas · 12 meses</div>
+      <svg class="line-svg" viewBox="0 0 800 200" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="grad2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#7a3eae"/>
+            <stop offset="100%" stop-color="#7a3eae" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M0,140 L67,135 L134,128 L200,118 L267,110 L334,98 L400,95 L467,82 L534,78 L600,68 L667,60 L734,50 L800,42" stroke="#a259ff" stroke-width="3" fill="none"/>
+        <path d="M0,150 L67,142 L134,138 L200,128 L267,118 L334,108 L400,100 L467,90 L534,86 L600,74 L667,68 L734,58 L800,52" stroke="#7a3eae" stroke-width="3" fill="none" stroke-dasharray="6 4"/>
+        <circle cx="800" cy="42" r="5" fill="#a259ff"/>
+        <circle cx="800" cy="52" r="5" fill="#7a3eae"/>
+      </svg>
+      <div style="display:flex;gap:24px;margin-top:14px;font-size:13px;color:var(--muted);">
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:14px;height:3px;background:#a259ff;"></div>Ventas operativas</div>
+        <div style="display:flex;align-items:center;gap:8px;"><div style="width:14px;height:3px;background:#7a3eae;border-top:1px dashed transparent;"></div>Facturación</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Top conceptos facturados</div>
+      <div class="table-row"><div><div class="table-name">Productos importados</div><div class="table-bar"><div style="width:88%"></div></div></div><div class="table-val">$142M</div></div>
+      <div class="table-row"><div><div class="table-name">Servicios</div><div class="table-bar"><div style="width:54%"></div></div></div><div class="table-val">$68M</div></div>
+      <div class="table-row"><div><div class="table-name">Reventa</div><div class="table-bar"><div style="width:32%"></div></div></div><div class="table-val">$38M</div></div>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">FINANZAS · UNISTORE</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 5 · MARKETING ═══ -->
+<div class="frame" data-id="5">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Marketing · CAC · LTV · Cohorts</div></div>
+    </div>
+    <div class="screen-tag">05 · Marketing</div>
+    <div class="screen-title">Retención<br>por cohort.</div>
+    <div class="screen-sub">Saber qué clientes vuelven y cuáles se pierden, mes a mes. Sin armar planillas.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="kpi-strip">
+      <div class="section-label">Últimos 30 días</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">1,284</div><div class="lbl">Nuevos</div><div class="delta up">▲ 14%</div></div>
+        <div class="kpi"><div class="num">38%</div><div class="lbl">Repeat</div><div class="delta up">▲ 2.1%</div></div>
+        <div class="kpi"><div class="num">$87k</div><div class="lbl">LTV</div><div class="delta up">▲ 8%</div></div>
+        <div class="kpi"><div class="num">$3.2k</div><div class="lbl">CAC</div><div class="delta dn">▼ 12%</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Cohort retention · Mes 1 → Mes 6</div>
+      <div class="heatmap" id="hm"></div>
+      <script>
+        (function(){
+          const hm=document.getElementById('hm');
+          if(!hm)return;
+          const data=[
+            [100,72,58,49,42,38,35,32,30,28,26,24],
+            [100,68,54,46,40,36,33,30,28,26,24,0],
+            [100,75,61,52,45,40,37,34,32,29,0,0],
+            [100,70,57,48,42,38,35,32,29,0,0,0],
+            [100,73,60,51,44,40,37,33,0,0,0,0],
+            [100,69,55,47,41,37,34,0,0,0,0,0],
+          ];
+          data.forEach(row=>row.forEach(v=>{
+            const c=document.createElement('div');
+            c.className='hm-cell';
+            const op=v===0?0:Math.max(0.08,v/100);
+            c.style.background=v===0?'#f3f4f6':`rgba(122,62,174,${op})`;
+            c.style.color=v>50?'white':'#21093a';
+            c.style.fontSize='11px';
+            c.style.fontWeight='700';
+            c.style.display='flex';c.style.alignItems='center';c.style.justifyContent='center';
+            c.textContent=v===0?'':v+'%';
+            hm.appendChild(c);
+          }));
+        })();
+      </script>
+    </div>
+    <div class="card">
+      <div class="card-title">Top customers · LTV</div>
+      <div class="table-row"><div><div class="table-name">@cliente_premium_42</div><div class="table-bar"><div style="width:96%"></div></div></div><div class="table-val">$420k</div></div>
+      <div class="table-row"><div><div class="table-name">@maria_g_buenosaires</div><div class="table-bar"><div style="width:82%"></div></div></div><div class="table-val">$358k</div></div>
+      <div class="table-row"><div><div class="table-name">@drop_uni_retail</div><div class="table-bar"><div style="width:71%"></div></div></div><div class="table-val">$310k</div></div>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">MARKETING · UNISTORE</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 6 · SQL LIBRE ═══ -->
+<div class="frame" data-id="6">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">SQL libre · Solo lectura · Timeout 30s</div></div>
+    </div>
+    <div class="screen-tag">06 · SQL libre</div>
+    <div class="screen-title">Tu pregunta.<br>Tu respuesta.</div>
+    <div class="screen-sub">Editor profesional con autocomplete y schema visible. Tirate a probar — no podés romper nada.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="sql-editor">
+<span class="sql-cmt">-- Top 10 SKUs vendidos esta semana</span><br>
+<span class="sql-kw">SELECT</span><br>
+&nbsp;&nbsp;p.sku,<br>
+&nbsp;&nbsp;p.name,<br>
+&nbsp;&nbsp;<span class="sql-fn">SUM</span>(oi.qty) <span class="sql-kw">AS</span> unidades,<br>
+&nbsp;&nbsp;<span class="sql-fn">SUM</span>(oi.qty * oi.price) <span class="sql-kw">AS</span> revenue<br>
+<span class="sql-kw">FROM</span> <span class="sql-tbl">orders</span> o<br>
+<span class="sql-kw">JOIN</span> <span class="sql-tbl">order_items</span> oi <span class="sql-kw">ON</span> oi.order_id = o.id<br>
+<span class="sql-kw">JOIN</span> <span class="sql-tbl">products</span> p <span class="sql-kw">ON</span> p.sku = oi.sku<br>
+<span class="sql-kw">WHERE</span> o.paid_at &gt;= <span class="sql-kw">NOW</span>() - <span class="sql-str">'7 days'</span>::<span class="sql-fn">interval</span><br>
+<span class="sql-kw">GROUP BY</span> p.sku, p.name<br>
+<span class="sql-kw">ORDER BY</span> revenue <span class="sql-kw">DESC</span><br>
+<span class="sql-kw">LIMIT</span> <span class="sql-num">10</span>;<span class="sql-cur"></span>
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;">
+      <div style="background:linear-gradient(135deg,var(--primary),var(--accent));color:white;padding:14px 30px;border-radius:12px;font-weight:800;font-size:18px;">▶ Run query</div>
+      <div style="font-size:13px;color:var(--muted);">⏱ Timeout 30s · Solo SELECT/WITH/EXPLAIN</div>
+    </div>
+    <div class="result-table">
+      <div class="result-row head"><div>SKU</div><div>NOMBRE</div><div>UNIDADES</div><div>REVENUE</div></div>
+      <div class="result-row"><div>UNI-A23</div><div>Termo Stanley 1L</div><div>184</div><div style="color:var(--primary);font-weight:700;">$1.8M</div></div>
+      <div class="result-row"><div>UNI-B17</div><div>Set mate premium</div><div>156</div><div style="color:var(--primary);font-weight:700;">$1.5M</div></div>
+      <div class="result-row"><div>UNI-C09</div><div>Bombilla acero</div><div>241</div><div style="color:var(--primary);font-weight:700;">$1.2M</div></div>
+      <div class="result-row"><div>UNI-D45</div><div>Yerba x500g</div><div>312</div><div style="color:var(--primary);font-weight:700;">$0.9M</div></div>
+    </div>
+    <div style="font-size:13px;color:var(--muted);">✓ 10 filas · 184ms · Read-only</div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">SQL · TIENDA NUBE</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 7 · AUDIT ═══ -->
+<div class="frame" data-id="7">
+  <div class="frame-header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div><div class="brand-name">UNIDATA</div><div class="brand-sub">Audit · Trazabilidad completa</div></div>
+    </div>
+    <div class="screen-tag">07 · Auditoría</div>
+    <div class="screen-title">Toda query<br>queda registrada.</div>
+    <div class="screen-sub">Quién consultó qué, cuándo y con qué resultado. Trazabilidad real de extremo a extremo.</div>
+  </div>
+  <div class="dashboard-area" style="padding-bottom:140px;">
+    <div class="kpi-strip">
+      <div class="section-label">Últimos 200 eventos</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">200</div><div class="lbl">Total</div></div>
+        <div class="kpi"><div class="num" style="color:var(--success)">196</div><div class="lbl">Ok</div></div>
+        <div class="kpi"><div class="num" style="color:var(--error)">4</div><div class="lbl">Error</div></div>
+        <div class="kpi"><div class="num">12</div><div class="lbl">Usuarios</div></div>
+      </div>
+    </div>
+    <div class="result-table">
+      <div class="result-row head" style="grid-template-columns:120px 1fr 80px 100px;"><div>HORA</div><div>USUARIO · QUERY</div><div>FILAS</div><div>STATUS</div></div>
+      <div class="result-row" style="grid-template-columns:120px 1fr 80px 100px;"><div style="font-size:13px;color:var(--muted);">15:42</div><div><div style="font-weight:700;">@maria.g</div><div style="font-size:12px;color:var(--muted);font-family:monospace;">SELECT * FROM orders WHERE...</div></div><div>184</div><div><span class="badge-ok">ok</span></div></div>
+      <div class="result-row" style="grid-template-columns:120px 1fr 80px 100px;"><div style="font-size:13px;color:var(--muted);">15:38</div><div><div style="font-weight:700;">@juan.p</div><div style="font-size:12px;color:var(--muted);font-family:monospace;">SELECT sku, SUM(qty) FROM...</div></div><div>2.4k</div><div><span class="badge-ok">ok</span></div></div>
+      <div class="result-row" style="grid-template-columns:120px 1fr 80px 100px;"><div style="font-size:13px;color:var(--muted);">15:31</div><div><div style="font-weight:700;">@admin</div><div style="font-size:12px;color:var(--muted);font-family:monospace;">UPDATE products SET price=...</div></div><div>0</div><div><span class="badge-er">denied</span></div></div>
+      <div class="result-row" style="grid-template-columns:120px 1fr 80px 100px;"><div style="font-size:13px;color:var(--muted);">15:24</div><div><div style="font-weight:700;">@daniel.m</div><div style="font-size:12px;color:var(--muted);font-family:monospace;">WITH ranked AS (SELECT...</div></div><div>847</div><div><span class="badge-ok">ok</span></div></div>
+      <div class="result-row" style="grid-template-columns:120px 1fr 80px 100px;"><div style="font-size:13px;color:var(--muted);">15:18</div><div><div style="font-weight:700;">@laura.c</div><div style="font-size:12px;color:var(--muted);font-family:monospace;">SELECT customer_id, ltv...</div></div><div>1.2k</div><div><span class="badge-ok">ok</span></div></div>
+    </div>
+    <div style="background:rgba(122,62,174,0.06);border-left:3px solid var(--primary);padding:18px 22px;border-radius:10px;font-size:15px;color:var(--text);">
+      🛡 <b>Solo lectura · INSERT/UPDATE/DELETE bloqueados.</b><br>
+      <span style="font-size:13px;color:var(--muted);">No es para vigilarte. Es trazabilidad estándar — para que sepamos qué pasó si algo falla.</span>
+    </div>
+  </div>
+  <div class="frame-footer">
+    <div class="footer-mark"><div class="footer-logo">U</div><div class="footer-name">UNIDATA</div></div>
+    <div class="footer-pill">AUDIT · GLOBAL</div>
+  </div>
+</div>
+
+<!-- ═══ FRAME 8 · CTA ═══ -->
+<div class="cta-frame">
+  <div class="cta-logo">U</div>
+  <div class="cta-h">UNIDATA<br><span class="glow">ya está acá.</span></div>
+  <div class="cta-p">14 dashboards en producción.<br>Una sola web, datos en vivo, mobile-first.</div>
+  <div class="cta-btn">Pedí tu acceso →</div>
+  <div class="cta-tags">
+    <div class="cta-tag">UNISTORE</div>
+    <div class="cta-tag">UNIDROP</div>
+    <div class="cta-tag">UNIDEV</div>
+    <div class="cta-tag">UNIFULL</div>
+  </div>
+</div>
+
+<script>
+  (function(){
+    const params=new URLSearchParams(location.search);
+    const f=params.get('frame')||'0';
+    document.body.setAttribute('data-frame',f);
+  })();
+</script>
+</body>
+</html>
