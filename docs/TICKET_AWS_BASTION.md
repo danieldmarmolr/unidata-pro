@@ -25,22 +25,25 @@
 ## Contexto
 
 Estamos lanzando dos proyectos del grupo en Railway que necesitan acceder a
-las BBDD productivas a traves de los bastions SSH ya existentes:
+las BBDD productivas a traves de los bastions SSH ya existentes. **Son dos
+workspaces de Railway independientes**, gestionados por equipos distintos:
 
 1. **UNIDATA** (Daniel Marmol) — plataforma de analitica interna del grupo Unistore (FastAPI + Next.js).
    Lee datos productivos para dashboards, drilldowns y editor SQL libre.
+   Workspace Railway propio.
 
 2. **Unifull `crm-kommo-sync`** (equipo Unifull) — integracion automatizada que
    sincroniza datos del grupo con Kommo CRM. Read-only.
+   Workspace Railway propio (separado del de UNIDATA).
 
-**Hallazgo clave:** Railway asigna las "Static Outbound IPs" en pool **shared**
-por region. Ambos proyectos en `us-west-2` salen por la **misma IP**:
+Cada proyecto tiene **su propia IP estatica de salida** asignada por Railway
+en su workspace. Aunque ambos esten en la misma region (`us-west-2`), las IPs
+son tecnicamente independientes y tienen que ser **allowlisteadas por separado**
+en los SG de los bastions.
 
-```
-IP: 162.220.232.99/32
-```
-
-Esto significa que **una sola regla** en cada SG cubre los **dos proyectos**.
+> Nota: si Railway asigna por casualidad la misma IP shared a los dos
+> workspaces, sobra una regla — sin impacto. Pero el ticket asume IPs
+> distintas para ser conservador y no depender de coincidencias del pool.
 
 No estamos pidiendo:
 - Hacer las RDS publicas
@@ -70,22 +73,27 @@ No estamos pidiendo:
 
 ## Que se pide — 2 cambios
 
-### Parte 1: Allowlist de IP (cubre UNIDATA + Unifull en una sola regla)
+### Parte 1: Allowlist de IPs de Railway (una regla por proyecto)
 
-Agregar **una regla de inbound** (SSH/22/TCP) en cada uno de los 2 SG de los
-bastions, con la IP estatica de Railway como source.
+Agregar **dos reglas de inbound** (SSH/22/TCP) en cada uno de los 2 SG de los
+bastions: una con la IP estatica de UNIDATA y otra con la de Unifull.
 
-#### IP a allowlistar
+#### IPs a allowlistar
 
-```
-162.220.232.99/32
-```
+| Proyecto | IP estatica Railway | Workspace owner |
+|---|---|---|
+| **UNIDATA** | `162.220.232.99/32` | Daniel Marmol (confirmada y verificada en uso) |
+| **Unifull (crm-kommo-sync)** | `<IP_UNIFULL>/32` | Equipo Unifull (a confirmar antes de aplicar) |
 
-> Esta IP esta asignada al pool shared us-west-2 de Railway Pro plan. Cubre
-> UNIDATA backend y Unifull crm-kommo-sync simultaneamente. No cambia salvo
-> que ambos servicios se eliminen del plan Pro.
+> Daniel coordina con el equipo Unifull para que confirmen su IP exacta
+> (Settings -> Networking -> Static Outbound IPs en su workspace Railway).
+> Si por arquitectura del pool shared us-west-2 la IP coincide con la de
+> UNIDATA, alcanza con una sola regla — pero pedimos las dos por separado
+> en este ticket para no depender de coincidencias.
 
-#### Regla concreta (en cada SG)
+#### Reglas concretas (en CADA SG, total 4 reglas si las IPs son distintas)
+
+**Regla 1 — UNIDATA (en SG bastion Unistore + SG bastion Unidrop):**
 
 | Campo | Valor |
 |---|---|
@@ -93,7 +101,21 @@ bastions, con la IP estatica de Railway como source.
 | Protocol | TCP |
 | Port range | 22 |
 | Source | `162.220.232.99/32` |
-| Description | `Railway shared IP - UNIDATA + Unifull (crm-kommo-sync)` |
+| Description | `Railway UNIDATA backend - Daniel Marmol` |
+
+**Regla 2 — Unifull (en SG bastion Unistore + SG bastion Unidrop):**
+
+| Campo | Valor |
+|---|---|
+| Type | SSH |
+| Protocol | TCP |
+| Port range | 22 |
+| Source | `<IP_UNIFULL>/32` |
+| Description | `Railway Unifull crm-kommo-sync` |
+
+> Si al momento de ejecutar `<IP_UNIFULL>` resulta ser igual a `162.220.232.99`,
+> la regla 2 es duplicada de la regla 1 y se omite. Daniel confirma con
+> Unifull antes de aplicar.
 
 ### Parte 2: User PostgreSQL read-only para Unifull
 
@@ -147,17 +169,22 @@ Railway.
 
 ## Pasos detallados (para el data engineer)
 
-### Para Parte 1 (allowlist) — ~5-10 min
+### Para Parte 1 (allowlist) — ~10-15 min
 
 1. Login en https://console.aws.amazon.com -> cuenta AWS de Unistore -> region **us-east-2 (Ohio)**.
-2. **EC2** -> **Instances** -> filtrar por IP publica `3.139.209.227`.
+2. **EC2** -> **Instances** -> filtrar por IP publica `3.139.209.227` (bastion Unistore).
 3. Click en la instancia -> tab **Security** -> click al Security Group asociado.
-4. Tab **Inbound rules** -> **Edit inbound rules** -> **Add rule**:
+4. Tab **Inbound rules** -> **Edit inbound rules**.
+5. **Add rule** para UNIDATA:
    - Type: `SSH`
    - Source: `Custom` -> `162.220.232.99/32`
-   - Description: `Railway shared IP - UNIDATA + Unifull (crm-kommo-sync)`
-5. **Save rules**. Anotar el ID de la regla creada (`sgr-xxxxxx`).
-6. Repetir 2-5 para la instancia con IP `18.191.119.38`.
+   - Description: `Railway UNIDATA backend - Daniel Marmol`
+6. **Add rule** para Unifull (si la IP es distinta):
+   - Type: `SSH`
+   - Source: `Custom` -> `<IP_UNIFULL>/32`
+   - Description: `Railway Unifull crm-kommo-sync`
+7. **Save rules**. Anotar los IDs (`sgr-xxxxxx`).
+8. Repetir 2-7 para la instancia con IP `18.191.119.38` (bastion Unidrop).
 
 ### Para Parte 2 (user read-only Unifull) — ~3-5 min
 
@@ -202,8 +229,10 @@ Railway.
 
 ## Criterios de aceptacion
 
-- [ ] Regla SG agregada en bastion Unistore (`3.139.209.227`)
-- [ ] Regla SG agregada en bastion Unidrop (`18.191.119.38`)
+- [ ] Regla SG para UNIDATA (`162.220.232.99/32`) agregada en bastion Unistore (`3.139.209.227`)
+- [ ] Regla SG para UNIDATA (`162.220.232.99/32`) agregada en bastion Unidrop (`18.191.119.38`)
+- [ ] Regla SG para Unifull (`<IP_UNIFULL>/32`) agregada en bastion Unistore (omitida si IP coincide con UNIDATA)
+- [ ] Regla SG para Unifull (`<IP_UNIFULL>/32`) agregada en bastion Unidrop (omitida si IP coincide con UNIDATA)
 - [ ] User `unifull_readonly` creado en RDS Unistore (y opcional Unidrop si Kommo lo necesita)
 - [ ] Connection string entregada a Daniel por canal seguro
 - [ ] Smoke test UNIDATA pasa: `/api/sources/unistore/schemas` devuelve datos
@@ -251,9 +280,9 @@ sin acceso temporalmente hasta reaplicar.
 
 ## Tiempo estimado total
 
-- Parte 1 (allowlist en 2 SG): **5-10 min**
+- Parte 1 (allowlist hasta 4 reglas en 2 SG): **10-15 min**
 - Parte 2 (user read-only + entrega connection string): **3-5 min**
-- Total: **~10-15 min**
+- Total: **~15-20 min**
 
 ---
 
@@ -267,16 +296,17 @@ sin acceso temporalmente hasta reaplicar.
 
 ## FAQ del ticket
 
-**Q: Por que la misma IP para los dos proyectos?**
-A: Railway asigna Static Outbound IPs en pool **shared** por region en plan Pro.
-Cualquier proyecto del grupo en us-west-2 con esa feature usa la misma IP. No
-hay forma de pedir IPs separadas en este plan, y tampoco aporta seguridad
-adicional — el control de acceso real esta en SSH key + DB user.
+**Q: Por que dos reglas si quizas las IPs coinciden?**
+A: UNIDATA y Unifull corren en **dos workspaces independientes de Railway**
+(equipos distintos, billing distinto). Cada workspace tiene su propia IP
+estatica de salida en plan Pro. Aunque por arquitectura del pool shared en
+us-west-2 las IPs pueden coincidir, no hay garantia ni contrato — Railway
+podria asignar distintas IPs en cualquier momento. Por eso pedimos las dos
+reglas, asi el ticket no depende de coincidencias.
 
 **Q: Que pasa si manana sumamos un tercer proyecto del grupo en Railway?**
-A: Si esta en us-west-2 con Static Outbound IP -> usa la misma IP, no hace
-falta cambiar nada en el SG. Si esta en otra region -> nuevo ticket con
-nueva IP.
+A: Si tiene workspace propio, hay que pedir su IP estatica y allowlistearla
+con su propia regla. Esa es la operatoria estandar.
 
 **Q: Por que no usar el mismo user para los dos proyectos?**
 A: Principio de menor privilegio + auditoria limpia. Si Unifull genera trafico
