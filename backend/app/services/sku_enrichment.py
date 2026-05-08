@@ -64,7 +64,7 @@ def enrich_skus_unistore(skus: Iterable[str]) -> dict[str, dict]:
     if not missing:
         return result
 
-    # 2. Query a Tienda Nube (imagen primaria + barcode + nombre)
+    # 2. Query a Tienda Nube (solo imagen primaria + nombre - NO usamos su barcode)
     try:
         eng = get_engine("unistore")
         with eng.connect() as c:
@@ -72,7 +72,6 @@ def enrich_skus_unistore(skus: Iterable[str]) -> dict[str, dict]:
                 WITH variants AS (
                     SELECT
                         pv.sku,
-                        pv.barcode,
                         p.id AS product_id,
                         p.name AS product_name,
                         ROW_NUMBER() OVER (PARTITION BY pv.sku ORDER BY pv."updatedAt" DESC NULLS LAST, pv.id DESC) AS rn
@@ -86,7 +85,7 @@ def enrich_skus_unistore(skus: Iterable[str]) -> dict[str, dict]:
                     FROM tienda_nube."ProductImage" pi
                     ORDER BY pi."productId", pi.position ASC NULLS LAST, pi.id ASC
                 )
-                SELECT v.sku, v.product_name, v.barcode, fi.src AS image_url
+                SELECT v.sku, v.product_name, fi.src AS image_url
                 FROM variants v
                 LEFT JOIN first_image fi ON fi."productId" = v.product_id
                 WHERE v.rn = 1
@@ -97,44 +96,41 @@ def enrich_skus_unistore(skus: Iterable[str]) -> dict[str, dict]:
         logger.warning("enrich_skus_unistore: TN query failed: %s", e)
         tn_data = {}
 
-    # 3. Para SKUs sin barcode en TN, fallback a digip ArticuloUnidadMedidaCodigo
-    skus_needing_ean = [
-        s for s in missing
-        if s not in tn_data or not tn_data[s].get("barcode")
-    ]
-
+    # 3. EAN: SIEMPRE de digip (fuente de verdad)
+    # tienda_nube.ProductVariant.barcode no es el EAN, es un campo libre que casi nunca se llena.
+    # El EAN real esta en digip.ArticuloUnidadMedidaCodigo, priorizando codigos de 13 digitos.
     digip_eans: dict[str, str] = {}
-    if skus_needing_ean:
-        try:
-            eng = get_engine("unistore")
-            with eng.connect() as c:
-                rows = c.execute(text("""
-                    SELECT a."CodigoArticulo" AS sku, c."Codigo" AS codigo, LENGTH(c."Codigo") AS len
-                    FROM digip."Articulo" a
-                    JOIN digip."ArticuloUnidadMedida" u ON u."articuloCodigo" = a."CodigoArticulo"
-                    JOIN digip."ArticuloUnidadMedidaCodigo" c ON c."unidadMedidaId" = u.id
-                    WHERE a."CodigoArticulo" = ANY(:skus)
-                    ORDER BY a."CodigoArticulo",
-                             CASE WHEN LENGTH(c."Codigo") = 13 THEN 0
-                                  WHEN LENGTH(c."Codigo") = 12 THEN 1
-                                  WHEN LENGTH(c."Codigo") = 8  THEN 2
-                                  ELSE 3 END
-                """), {"skus": skus_needing_ean}).mappings().all()
+    try:
+        eng = get_engine("unistore")
+        with eng.connect() as c:
+            rows = c.execute(text("""
+                SELECT a."CodigoArticulo" AS sku, c."Codigo" AS codigo, LENGTH(c."Codigo") AS len
+                FROM digip."Articulo" a
+                JOIN digip."ArticuloUnidadMedida" u ON u."articuloCodigo" = a."CodigoArticulo"
+                JOIN digip."ArticuloUnidadMedidaCodigo" c ON c."unidadMedidaId" = u.id
+                WHERE a."CodigoArticulo" = ANY(:skus)
+                ORDER BY a."CodigoArticulo",
+                         -- Priorizar EAN-13, luego EAN-12 (UPC), luego EAN-8, luego cualquier otro
+                         CASE WHEN LENGTH(c."Codigo") = 13 THEN 0
+                              WHEN LENGTH(c."Codigo") = 12 THEN 1
+                              WHEN LENGTH(c."Codigo") = 8  THEN 2
+                              ELSE 3 END,
+                         c.id ASC
+            """), {"skus": missing}).mappings().all()
 
-            # tomar el primer codigo por sku (el ranking ORDER BY ya prioriza EAN-13)
-            for r in rows:
-                if r["sku"] not in digip_eans:
-                    digip_eans[r["sku"]] = r["codigo"]
-        except Exception as e:
-            logger.warning("enrich_skus_unistore: digip query failed: %s", e)
+        # tomar el primer codigo por sku (el ranking ORDER BY prioriza EAN-13)
+        for r in rows:
+            if r["sku"] not in digip_eans:
+                digip_eans[r["sku"]] = r["codigo"]
+    except Exception as e:
+        logger.warning("enrich_skus_unistore: digip query failed: %s", e)
 
     # 4. Mergear y cachear
     for sku in missing:
         tn = tn_data.get(sku, {})
-        ean = tn.get("barcode") or digip_eans.get(sku)
         enriched = {
             "image_url": tn.get("image_url"),
-            "ean": ean,
+            "ean": digip_eans.get(sku),  # SIEMPRE de digip
             "name": tn.get("product_name"),
         }
         result[sku] = enriched
