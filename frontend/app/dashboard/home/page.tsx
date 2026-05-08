@@ -73,6 +73,7 @@ const ROLE_VIEWS: Record<RoleKey, string[]> = {
   gerencia: [
     "gerencial", "ventas", "productos", "mapa", "marketing", "cs",
     "saas", "pagos", "devoluciones", "finanzas",
+    "catalog", "sources",
   ],
   analista: [
     "gerencial", "ventas", "productos", "mapa", "cs", "marketing",
@@ -80,10 +81,10 @@ const ROLE_VIEWS: Record<RoleKey, string[]> = {
     "catalog", "sources", "sql",
   ],
   lector: [
-    "gerencial", "ventas", "productos", "mapa", "cs",
+    "gerencial", "ventas", "productos", "mapa", "cs", "catalog", "sources",
   ],
   user: [
-    "gerencial", "ventas", "productos", "mapa", "cs", "saas", "pagos", "marketing",
+    "gerencial", "ventas", "productos", "mapa", "cs", "saas", "pagos", "marketing", "catalog", "sources",
   ],
 };
 
