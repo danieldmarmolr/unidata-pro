@@ -36,14 +36,19 @@ workspaces de Railway independientes**, gestionados por equipos distintos:
    sincroniza datos del grupo con Kommo CRM. Read-only.
    Workspace Railway propio (separado del de UNIDATA).
 
-Cada proyecto tiene **su propia IP estatica de salida** asignada por Railway
-en su workspace. Aunque ambos esten en la misma region (`us-west-2`), las IPs
-son tecnicamente independientes y tienen que ser **allowlisteadas por separado**
-en los SG de los bastions.
+**Importante:** ambos equipos confirmaron sus IPs estaticas y, por
+arquitectura del pool **shared** de Railway en region `us-west-2`, ambos
+proyectos salen por la **misma IP**:
 
-> Nota: si Railway asigna por casualidad la misma IP shared a los dos
-> workspaces, sobra una regla — sin impacto. Pero el ticket asume IPs
-> distintas para ser conservador y no depender de coincidencias del pool.
+```
+IP confirmada UNIDATA:  162.220.232.99/32 (Daniel Marmol)
+IP confirmada Unifull:  162.220.232.99/32 (equipo Unifull)
+```
+
+Esto es porque Railway en plan Pro asigna las Static Outbound IPs desde un
+pool compartido por region — multiples workspaces pueden recibir la misma IP.
+Para nuestros proyectos esto **simplifica el ticket**: una sola regla en cada
+SG cubre los dos proyectos sin ambiguedad.
 
 No estamos pidiendo:
 - Hacer las RDS publicas
@@ -73,27 +78,19 @@ No estamos pidiendo:
 
 ## Que se pide — 2 cambios
 
-### Parte 1: Allowlist de IPs de Railway (una regla por proyecto)
+### Parte 1: Allowlist de IP (una regla cubre ambos proyectos)
 
-Agregar **dos reglas de inbound** (SSH/22/TCP) en cada uno de los 2 SG de los
-bastions: una con la IP estatica de UNIDATA y otra con la de Unifull.
+Agregar **una regla de inbound** (SSH/22/TCP) en cada uno de los 2 SG de los
+bastions, con la IP estatica de Railway como source. Cubre tanto UNIDATA
+como Unifull (confirmado por ambos equipos que comparten la misma IP).
 
-#### IPs a allowlistar
+#### IP a allowlistar
 
-| Proyecto | IP estatica Railway | Workspace owner |
-|---|---|---|
-| **UNIDATA** | `162.220.232.99/32` | Daniel Marmol (confirmada y verificada en uso) |
-| **Unifull (crm-kommo-sync)** | `<IP_UNIFULL>/32` | Equipo Unifull (a confirmar antes de aplicar) |
+```
+162.220.232.99/32
+```
 
-> Daniel coordina con el equipo Unifull para que confirmen su IP exacta
-> (Settings -> Networking -> Static Outbound IPs en su workspace Railway).
-> Si por arquitectura del pool shared us-west-2 la IP coincide con la de
-> UNIDATA, alcanza con una sola regla — pero pedimos las dos por separado
-> en este ticket para no depender de coincidencias.
-
-#### Reglas concretas (en CADA SG, total 4 reglas si las IPs son distintas)
-
-**Regla 1 — UNIDATA (en SG bastion Unistore + SG bastion Unidrop):**
+#### Regla concreta (en cada SG)
 
 | Campo | Valor |
 |---|---|
@@ -101,21 +98,7 @@ bastions: una con la IP estatica de UNIDATA y otra con la de Unifull.
 | Protocol | TCP |
 | Port range | 22 |
 | Source | `162.220.232.99/32` |
-| Description | `Railway UNIDATA backend - Daniel Marmol` |
-
-**Regla 2 — Unifull (en SG bastion Unistore + SG bastion Unidrop):**
-
-| Campo | Valor |
-|---|---|
-| Type | SSH |
-| Protocol | TCP |
-| Port range | 22 |
-| Source | `<IP_UNIFULL>/32` |
-| Description | `Railway Unifull crm-kommo-sync` |
-
-> Si al momento de ejecutar `<IP_UNIFULL>` resulta ser igual a `162.220.232.99`,
-> la regla 2 es duplicada de la regla 1 y se omite. Daniel confirma con
-> Unifull antes de aplicar.
+| Description | `Railway us-west-2 - UNIDATA + Unifull (crm-kommo-sync)` |
 
 ### Parte 2: User PostgreSQL read-only para Unifull
 
@@ -169,22 +152,17 @@ Railway.
 
 ## Pasos detallados (para el data engineer)
 
-### Para Parte 1 (allowlist) — ~10-15 min
+### Para Parte 1 (allowlist) — ~5-10 min
 
 1. Login en https://console.aws.amazon.com -> cuenta AWS de Unistore -> region **us-east-2 (Ohio)**.
 2. **EC2** -> **Instances** -> filtrar por IP publica `3.139.209.227` (bastion Unistore).
 3. Click en la instancia -> tab **Security** -> click al Security Group asociado.
-4. Tab **Inbound rules** -> **Edit inbound rules**.
-5. **Add rule** para UNIDATA:
+4. Tab **Inbound rules** -> **Edit inbound rules** -> **Add rule**:
    - Type: `SSH`
    - Source: `Custom` -> `162.220.232.99/32`
-   - Description: `Railway UNIDATA backend - Daniel Marmol`
-6. **Add rule** para Unifull (si la IP es distinta):
-   - Type: `SSH`
-   - Source: `Custom` -> `<IP_UNIFULL>/32`
-   - Description: `Railway Unifull crm-kommo-sync`
-7. **Save rules**. Anotar los IDs (`sgr-xxxxxx`).
-8. Repetir 2-7 para la instancia con IP `18.191.119.38` (bastion Unidrop).
+   - Description: `Railway us-west-2 - UNIDATA + Unifull (crm-kommo-sync)`
+5. **Save rules**. Anotar el ID (`sgr-xxxxxx`).
+6. Repetir 2-5 para la instancia con IP `18.191.119.38` (bastion Unidrop).
 
 ### Para Parte 2 (user read-only Unifull) — ~3-5 min
 
@@ -229,10 +207,8 @@ Railway.
 
 ## Criterios de aceptacion
 
-- [ ] Regla SG para UNIDATA (`162.220.232.99/32`) agregada en bastion Unistore (`3.139.209.227`)
-- [ ] Regla SG para UNIDATA (`162.220.232.99/32`) agregada en bastion Unidrop (`18.191.119.38`)
-- [ ] Regla SG para Unifull (`<IP_UNIFULL>/32`) agregada en bastion Unistore (omitida si IP coincide con UNIDATA)
-- [ ] Regla SG para Unifull (`<IP_UNIFULL>/32`) agregada en bastion Unidrop (omitida si IP coincide con UNIDATA)
+- [ ] Regla SG (`162.220.232.99/32`) agregada en bastion Unistore (`3.139.209.227`) — cubre UNIDATA + Unifull
+- [ ] Regla SG (`162.220.232.99/32`) agregada en bastion Unidrop (`18.191.119.38`) — cubre UNIDATA + Unifull
 - [ ] User `unifull_readonly` creado en RDS Unistore (y opcional Unidrop si Kommo lo necesita)
 - [ ] Connection string entregada a Daniel por canal seguro
 - [ ] Smoke test UNIDATA pasa: `/api/sources/unistore/schemas` devuelve datos
@@ -280,9 +256,9 @@ sin acceso temporalmente hasta reaplicar.
 
 ## Tiempo estimado total
 
-- Parte 1 (allowlist hasta 4 reglas en 2 SG): **10-15 min**
+- Parte 1 (allowlist 1 regla en cada SG, total 2 reglas): **5-10 min**
 - Parte 2 (user read-only + entrega connection string): **3-5 min**
-- Total: **~15-20 min**
+- Total: **~10-15 min**
 
 ---
 
