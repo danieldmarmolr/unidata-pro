@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { login } from "@/lib/api";
 
@@ -96,8 +97,14 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <div className="mt-6 text-xs text-text-muted text-center">
-              Acceso solo para usuarios internos autorizados.
+            <div className="mt-6 text-xs text-text-muted text-center space-y-2">
+              <div>Acceso solo para colaboradores con email @unistor.ar.</div>
+              <div>
+                No tenes cuenta?{" "}
+                <Link href="/register" className="text-primary font-semibold hover:underline">
+                  Crear cuenta
+                </Link>
+              </div>
             </div>
           </div>
 

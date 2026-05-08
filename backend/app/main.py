@@ -63,19 +63,6 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/api/_meta/outbound-ip")
-def outbound_ip() -> dict:
-    """Endpoint temporal de diagnostico - devuelve la IP saliente del container.
-    Sirve para configurar allowlists en bastions de AWS. Borrar despues de usar."""
-    import urllib.request
-    try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=5) as r:
-            ip = r.read().decode().strip()
-        return {"outbound_ip": ip}
-    except Exception as e:
-        return {"error": str(e)}
-
-
 @app.get("/")
 def root() -> dict:
     return {"name": "UNIDATA API", "docs": "/api/docs"}

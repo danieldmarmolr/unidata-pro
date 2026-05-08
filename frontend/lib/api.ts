@@ -89,3 +89,52 @@ export async function login(email: string, password: string) {
   setUser(data.user);
   return data;
 }
+
+// ----- Self-registration (US-02) -----
+
+export type EmailStatus = {
+  email: string;
+  valid_domain: boolean;
+  exists: boolean;
+  needs_password: boolean;
+  is_active: boolean;
+};
+
+export async function checkEmailStatus(email: string): Promise<EmailStatus> {
+  const res = await fetch(`${API_URL}/api/auth/check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw new Error("No se pudo verificar el email");
+  return (await res.json()) as EmailStatus;
+}
+
+export async function registerSelf(email: string, name: string) {
+  const res = await fetch(`${API_URL}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail ?? "No se pudo registrar el email");
+  }
+  return (await res.json()) as { user: AuthUser; requires_password_setup: boolean };
+}
+
+export async function setInitialPassword(email: string, new_password: string) {
+  const res = await fetch(`${API_URL}/api/auth/set-initial-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, new_password }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.detail ?? "No se pudo setear la password");
+  }
+  const data = (await res.json()) as { access_token: string; user: AuthUser };
+  setToken(data.access_token);
+  setUser(data.user);
+  return data;
+}
