@@ -7,6 +7,8 @@ export type SkuEnrichment = {
   image_url: string | null;
   ean: string | null;
   name: string | null;
+  is_service?: boolean;
+  kind?: "product" | "service";
 };
 
 /**

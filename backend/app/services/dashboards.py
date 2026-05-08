@@ -435,6 +435,7 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
             WHERE o."paymentStatus" = 'paid'
               AND o."createdAt" >= NOW() - INTERVAL '30 days'
               AND oi.sku IS NOT NULL
+              AND oi.sku NOT ILIKE '%PVA%'
             GROUP BY oi.sku
         ),
         ml_p AS (

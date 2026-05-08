@@ -17,6 +17,7 @@ from typing import Iterable
 from sqlalchemy import text
 
 from app.db.engines import get_engine
+from app.services.sku_rules import is_service_sku
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +129,14 @@ def enrich_skus_unistore(skus: Iterable[str]) -> dict[str, dict]:
     # 4. Mergear y cachear
     for sku in missing:
         tn = tn_data.get(sku, {})
+        is_service = is_service_sku(sku)
         enriched = {
             "image_url": tn.get("image_url"),
             "ean": digip_eans.get(sku),  # SIEMPRE de digip
             "name": tn.get("product_name"),
+            "is_service": is_service,
+            # Tag visual: servicios de Unidrop se distinguen
+            "kind": "service" if is_service else "product",
         }
         result[sku] = enriched
         _cache_set(f"unistore:{sku}", enriched)

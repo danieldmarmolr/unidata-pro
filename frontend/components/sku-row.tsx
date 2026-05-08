@@ -55,10 +55,15 @@ export function SkuRow({ index, sku, name, rightValue, enrichment, onClick }: Pr
         )}
       </div>
 
-      {/* Texto: nombre + sku/ean en linea menor */}
+      {/* Texto: nombre + sku/ean + badge servicio */}
       <div className="flex-1 min-w-0">
-        <div className="text-sm text-text truncate" title={displayName}>
-          {displayName}
+        <div className="text-sm text-text truncate flex items-center gap-2" title={displayName}>
+          <span className="truncate">{displayName}</span>
+          {enrichment?.is_service && (
+            <span className="flex-shrink-0 text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+              Servicio Unidrop
+            </span>
+          )}
         </div>
         <div className="text-[10px] text-text-muted/70 mt-0.5 flex items-center gap-2 truncate">
           <span className="font-mono">{sku}</span>

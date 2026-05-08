@@ -35,18 +35,21 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         WHERE o."createdAt" >= NOW() - make_interval(days => :days)
           AND o."paymentStatus" = 'paid'
           AND oi.sku IS NOT NULL
+          AND oi.sku NOT ILIKE '%PVA%'
     """, p) or 0)
 
     sin_movimiento = int(scalar(eng_uni, """
         SELECT COUNT(DISTINCT pv.sku)
         FROM tienda_nube."ProductVariant" pv
         WHERE pv.sku IS NOT NULL
+          AND pv.sku NOT ILIKE '%PVA%'
           AND pv.sku NOT IN (
             SELECT DISTINCT oi.sku FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
             WHERE o."createdAt" >= NOW() - INTERVAL '90 days'
               AND o."paymentStatus" = 'paid'
               AND oi.sku IS NOT NULL
+              AND oi.sku NOT ILIKE '%PVA%'
           )
     """) or 0)
 
@@ -91,6 +94,7 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         WHERE o."createdAt" >= NOW() - make_interval(days => :days)
           AND o."paymentStatus" = 'paid'
           AND oi.sku IS NOT NULL
+          AND oi.sku NOT ILIKE '%PVA%'
         GROUP BY oi.sku
         ORDER BY revenue DESC LIMIT 20
     """, p) or []

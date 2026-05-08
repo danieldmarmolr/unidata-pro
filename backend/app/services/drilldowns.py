@@ -420,6 +420,7 @@ def tn_skus_no_movement(days: int = 90) -> dict:
             SELECT DISTINCT pv.sku
             FROM tienda_nube."ProductVariant" pv
             WHERE pv.sku IS NOT NULL
+              AND pv.sku NOT ILIKE '%PVA%'
               AND pv.sku NOT IN (
                 SELECT DISTINCT oi.sku FROM tienda_nube."OrderItem" oi
                 JOIN tienda_nube."Order" o ON o.id = oi."orderId"

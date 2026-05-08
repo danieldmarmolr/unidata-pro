@@ -162,6 +162,7 @@ def province_detail(
         WHERE o."paymentStatus" = 'paid'
           AND o."createdAt" >= NOW() - make_interval(days => :days)
           AND oi.sku IS NOT NULL
+          AND oi.sku NOT ILIKE '%PVA%'
           AND (
             LOWER(TRIM(c."billingProvince")) = LOWER(:p1)
             OR LOWER(TRIM(osa.province)) = LOWER(:p1)

@@ -103,6 +103,28 @@ sumar), debe:
 4. Documentado como `# CROSS-UNIT-VIEW` en el codigo para que devs futuros
    sepan que es excepcion intencional.
 
+### Reglas de clasificacion de SKUs (`sku_rules.py`)
+
+Convencion del grupo Unistore documentada en codigo:
+
+- **SKU contiene `PVA`** -> es un **servicio** de Unidrop (Primera Venta Asistida,
+  Capacitaciones MELI, etc), vendido a traves de la Tienda Nube de Unistore.
+- Estos SKUs se EXCLUYEN automaticamente de:
+  - Rankings de top productos
+  - Vistas de "productos sin movimiento"
+  - Top SKUs por provincia (mapa)
+  - Drilldowns de catalogo
+- Pero SI se computan en facturacion / revenue agregado (son ventas reales).
+- En `SkuRow` (frontend) aparecen con badge "Servicio Unidrop" cuando se
+  muestran intencionalmente.
+
+Una vista futura `Servicios Unidrop` (Sprint 3) los va a agrupar aparte para
+analytics dedicados de ese segmento.
+
+Helper centralizado: `app/services/sku_rules.py`. Si surgen mas patrones
+(ej. SKUs que empiezan con `SVC-`), se agregan a `SERVICE_SKU_PATTERNS` y
+todas las queries se actualizan automaticamente.
+
 #### Razones de negocio para esta regla
 
 - **Modelos de negocio diferentes:** Unistore vende productos propios via Tienda
