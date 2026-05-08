@@ -15,6 +15,17 @@ import { X } from "lucide-react";
 
 const TOPO_URL = "/argentina-provinces.json";
 
+// Tipos minimos para el geojson
+type GeoFeature = {
+  type: "Feature";
+  geometry: any;
+  properties: { NAME_1?: string; [k: string]: any };
+};
+type GeoCollection = {
+  type: "FeatureCollection";
+  features: GeoFeature[];
+};
+
 type GeoOverview = {
   totals: { orders: number; revenue: number; customers: number; provinces_with_data: number };
   by_province: { province: string; orders: number; revenue: number; customers: number }[];
@@ -55,6 +66,28 @@ export default function MapaPage() {
   const router = useRouter();
   const [metric, setMetric] = useState<Metric>("revenue");
   const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
+
+  // FIX: fetch manual del geojson en lugar de pasar la URL a Geographies.
+  // En Next.js 16 + Turbopack, react-simple-maps no resuelve la URL por si solo.
+  const [geoData, setGeoData] = useState<GeoCollection | null>(null);
+  const [geoError, setGeoError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancel = false;
+    fetch(TOPO_URL)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((j: GeoCollection) => {
+        if (!cancel) setGeoData(j);
+      })
+      .catch((e) => {
+        if (!cancel) setGeoError(e.message ?? "fallo cargar mapa");
+      });
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   const qs = periodToQuery(period, customFrom, customTo);
 
@@ -120,8 +153,12 @@ export default function MapaPage() {
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           {/* MAP */}
           <div className="xl:col-span-2 bg-surface border border-border rounded-xl p-3">
-            {isLoading ? (
+            {isLoading || (!geoData && !geoError) ? (
               <div className="h-[600px] animate-pulse bg-soft rounded" />
+            ) : geoError ? (
+              <div className="h-[600px] flex items-center justify-center text-error text-sm bg-soft rounded">
+                Error cargando mapa: {geoError}
+              </div>
             ) : (
               <div className="relative bg-white rounded-lg">
                 <ComposableMap
@@ -131,7 +168,7 @@ export default function MapaPage() {
                   height={900}
                   style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 280px)" }}
                 >
-                  <Geographies geography={TOPO_URL}>
+                  <Geographies geography={geoData!}>
                     {({ geographies }: { geographies: any[] }) => (
                       <>
                         {geographies.map((geo) => {
