@@ -1,29 +1,21 @@
 """
-Tabla de usuarios + roles (SQLite local).
+Tabla de usuarios + roles (PostgreSQL via Supabase).
 Auto-migra al boot. Seedea al admin desde .env si no existe ningun user.
-Roles: 'admin' | 'user'.
+Roles: 'admin' | 'user' | 'gerencia' | 'analista' | 'lector'.
 """
 from __future__ import annotations
 
 import datetime as dt
 import os
-import sqlite3
 import threading
-from pathlib import Path
 
 import bcrypt
+import psycopg2.errors
 
-DB_PATH = Path(__file__).parent.parent.parent / "users.db"
+from app.db.local_persistence import get_conn
+
 _LOCK = threading.RLock()
 _INITIALIZED = False
-
-
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
 
 
 def _hash(password: str) -> str:
@@ -46,75 +38,56 @@ def init() -> None:
     with _LOCK:
         if _INITIALIZED:
             return
-        with _conn() as c:
-            c.execute("""
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS users (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    id            BIGSERIAL PRIMARY KEY,
+                    email         TEXT NOT NULL,
                     name          TEXT NOT NULL DEFAULT '',
                     password_hash TEXT NOT NULL,
-                    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','gerencia','analista','lector')),
-                    is_active     INTEGER NOT NULL DEFAULT 1,
-                    created_at    TEXT NOT NULL,
-                    updated_at    TEXT NOT NULL,
+                    role          TEXT NOT NULL DEFAULT 'user'
+                                  CHECK (role IN ('admin','user','gerencia','analista','lector')),
+                    is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     created_by    TEXT
                 )
             """)
-            c.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
-            c.commit()
+            # Unique case-insensitive en email (equivalente a SQLite COLLATE NOCASE)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower
+                ON users (LOWER(email))
+            """)
 
-            # Migracion: si CHECK constraint es la vieja (solo admin/user), recrear tabla
-            schema = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
-            if schema and "'gerencia'" not in (schema["sql"] or ""):
-                c.executescript("""
-                    PRAGMA foreign_keys=OFF;
-                    CREATE TABLE users_new (
-                        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                        email         TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                        name          TEXT NOT NULL DEFAULT '',
-                        password_hash TEXT NOT NULL,
-                        role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user','gerencia','analista','lector')),
-                        is_active     INTEGER NOT NULL DEFAULT 1,
-                        created_at    TEXT NOT NULL,
-                        updated_at    TEXT NOT NULL,
-                        created_by    TEXT
-                    );
-                    INSERT INTO users_new SELECT * FROM users;
-                    DROP TABLE users;
-                    ALTER TABLE users_new RENAME TO users;
-                    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-                    PRAGMA foreign_keys=ON;
-                """)
-                c.commit()
-
-            # Seed admin si no hay ningun user
-            count = c.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            # Seed admin si la tabla esta vacia
+            cur.execute("SELECT COUNT(*) AS n FROM users")
+            count = cur.fetchone()["n"]
             if count == 0:
                 seed_email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
                 seed_password = os.environ.get("ADMIN_PASSWORD") or ""
                 seed_name = os.environ.get("ADMIN_NAME") or "Admin"
                 if seed_email and seed_password:
-                    now = dt.datetime.now(dt.timezone.utc).isoformat()
-                    c.execute(
+                    cur.execute(
                         """
-                        INSERT INTO users (email, name, password_hash, role, is_active, created_at, updated_at, created_by)
-                        VALUES (?, ?, ?, 'admin', 1, ?, ?, 'seed')
+                        INSERT INTO users
+                          (email, name, password_hash, role, is_active, created_by)
+                        VALUES (%s, %s, %s, 'admin', TRUE, 'seed')
                         """,
-                        (seed_email, seed_name, _hash(seed_password), now, now),
+                        (seed_email, seed_name, _hash(seed_password)),
                     )
-                    c.commit()
         _INITIALIZED = True
 
 
 # ----- Auth -----
 
-def find_active_by_email(email: str) -> sqlite3.Row | None:
+def find_active_by_email(email: str) -> dict | None:
     init()
-    with _LOCK, _conn() as c:
-        return c.execute(
-            "SELECT * FROM users WHERE email = ? COLLATE NOCASE AND is_active = 1",
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM users WHERE LOWER(email) = LOWER(%s) AND is_active = TRUE",
             (email.strip().lower(),),
-        ).fetchone()
+        )
+        return cur.fetchone()
 
 
 def authenticate(email: str, password: str) -> dict | None:
@@ -126,27 +99,30 @@ def authenticate(email: str, password: str) -> dict | None:
     return _to_dict(row)
 
 
-def find_by_id(user_id: int) -> sqlite3.Row | None:
+def find_by_id(user_id: int) -> dict | None:
     init()
-    with _LOCK, _conn() as c:
-        return c.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+        return cur.fetchone()
 
 
-def find_by_email(email: str) -> sqlite3.Row | None:
+def find_by_email(email: str) -> dict | None:
     init()
-    with _LOCK, _conn() as c:
-        return c.execute(
-            "SELECT * FROM users WHERE email = ? COLLATE NOCASE",
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM users WHERE LOWER(email) = LOWER(%s)",
             (email.strip().lower(),),
-        ).fetchone()
+        )
+        return cur.fetchone()
 
 
 # ----- Admin CRUD -----
 
 def list_all() -> list[dict]:
     init()
-    with _LOCK, _conn() as c:
-        rows = c.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+        rows = cur.fetchall()
     return [_to_dict(r) for r in rows]
 
 
@@ -158,20 +134,21 @@ def create(email: str, name: str, password: str, role: str, created_by: str) -> 
         raise ValueError("email invalido")
     if not password or len(password) < 6:
         raise ValueError("password muy corto (min 6 chars)")
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    with _LOCK, _conn() as c:
-        try:
-            cur = c.execute(
+    try:
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
                 """
-                INSERT INTO users (email, name, password_hash, role, is_active, created_at, updated_at, created_by)
-                VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                INSERT INTO users
+                  (email, name, password_hash, role, is_active, created_by)
+                VALUES (%s, %s, %s, %s, TRUE, %s)
+                RETURNING *
                 """,
-                (email.strip().lower(), name.strip(), _hash(password), role, now, now, created_by),
+                (email.strip().lower(), name.strip(), _hash(password), role, created_by),
             )
-            c.commit()
-            return _to_dict(c.execute("SELECT * FROM users WHERE id = ?", (cur.lastrowid,)).fetchone())
-        except sqlite3.IntegrityError:
-            raise ValueError("ya existe un usuario con ese email") from None
+            row = cur.fetchone()
+            return _to_dict(row)
+    except psycopg2.errors.UniqueViolation:
+        raise ValueError("ya existe un usuario con ese email") from None
 
 
 def update(
@@ -186,25 +163,27 @@ def update(
     sets: list[str] = []
     params: list = []
     if name is not None:
-        sets.append("name = ?"); params.append(name.strip())
+        sets.append("name = %s"); params.append(name.strip())
     if role is not None:
         if role not in ("admin", "user", "gerencia", "analista", "lector"):
             raise ValueError("role invalido")
-        sets.append("role = ?"); params.append(role)
+        sets.append("role = %s"); params.append(role)
     if is_active is not None:
-        sets.append("is_active = ?"); params.append(1 if is_active else 0)
+        sets.append("is_active = %s"); params.append(bool(is_active))
     if new_password is not None:
         if len(new_password) < 6:
             raise ValueError("password muy corto (min 6 chars)")
-        sets.append("password_hash = ?"); params.append(_hash(new_password))
+        sets.append("password_hash = %s"); params.append(_hash(new_password))
     if not sets:
         return None
-    sets.append("updated_at = ?"); params.append(dt.datetime.now(dt.timezone.utc).isoformat())
+    sets.append("updated_at = NOW()")
     params.append(user_id)
-    with _LOCK, _conn() as c:
-        c.execute(f"UPDATE users SET {', '.join(sets)} WHERE id = ?", params)
-        c.commit()
-        row = c.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"UPDATE users SET {', '.join(sets)} WHERE id = %s RETURNING *",
+            params,
+        )
+        row = cur.fetchone()
     return _to_dict(row) if row else None
 
 
@@ -221,10 +200,14 @@ def change_password(user_id: int, current_password: str, new_password: str) -> b
 
 # ----- internals -----
 
-def _to_dict(row: sqlite3.Row | None) -> dict:
+def _to_dict(row: dict | None) -> dict:
     if row is None:
         return {}
     d = dict(row)
     d.pop("password_hash", None)
     d["is_active"] = bool(d.get("is_active"))
+    # ISO format para timestamps
+    for k in ("created_at", "updated_at"):
+        if k in d and d[k] is not None and not isinstance(d[k], str):
+            d[k] = d[k].isoformat()
     return d

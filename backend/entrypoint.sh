@@ -31,10 +31,7 @@ else
     export BASTION_KEY_PATH_UNIDEV="${BASTION_KEY_PATH_UNIDEV:-/app/keys/unistore-bastion.pem}"
 fi
 
-# audit.db y users.db viven en /app/data (volumen persistente).
-# Como las paths estan codeadas relativas al modulo, hacemos symlinks.
-[ -L /app/audit.db ] || ln -sf /app/data/audit.db /app/audit.db
-[ -L /app/users.db ] || ln -sf /app/data/users.db /app/users.db
-[ -L /app/costs.db ] || ln -sf /app/data/costs.db /app/costs.db
+# Persistencia de UNIDATA: ahora vive en PostgreSQL (Supabase) via DATABASE_URL.
+# El volumen /app/data se conserva por compatibilidad pero ya no se usa para SQLite.
 
 exec "$@"

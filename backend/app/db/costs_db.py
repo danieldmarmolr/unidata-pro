@@ -1,5 +1,5 @@
 """
-Costos de importacion (lote + item por SKU). SQLite local.
+Costos de importacion (lote + item por SKU). PostgreSQL via Supabase.
 Auto-migra al boot. Replace-on-import por (lote): si subis el mismo lote
 otra vez, se reemplazan todos sus items.
 """
@@ -7,21 +7,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import sqlite3
 import threading
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent.parent / "costs.db"
+from app.db.local_persistence import get_conn
+
 _LOCK = threading.RLock()
 _INITIALIZED = False
-
-
-def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    c.row_factory = sqlite3.Row
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA foreign_keys=ON")
-    return c
 
 
 def init() -> None:
@@ -31,55 +22,61 @@ def init() -> None:
     with _LOCK:
         if _INITIALIZED:
             return
-        with _conn() as c:
-            c.executescript("""
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS cost_lote (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lote          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    id            BIGSERIAL PRIMARY KEY,
+                    lote          TEXT NOT NULL,
                     proveedor     TEXT,
                     fecha_ingreso TEXT,
                     origen        TEXT,
                     envio         TEXT,
                     moneda        TEXT,
                     source_file   TEXT,
-                    imported_at   TEXT NOT NULL,
+                    imported_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     imported_by   TEXT NOT NULL,
                     items_count   INTEGER NOT NULL DEFAULT 0
-                );
-
+                )
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_lote_lote_lower
+                ON cost_lote (LOWER(lote))
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS cost_item (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lote_id       INTEGER NOT NULL REFERENCES cost_lote(id) ON DELETE CASCADE,
-                    sku           TEXT NOT NULL COLLATE NOCASE,
+                    id            BIGSERIAL PRIMARY KEY,
+                    lote_id       BIGINT NOT NULL REFERENCES cost_lote(id) ON DELETE CASCADE,
+                    sku           TEXT NOT NULL,
                     producto      TEXT,
                     categoria     TEXT,
                     sub_categoria TEXT,
                     ncm           TEXT,
                     cantidad      INTEGER,
-                    valor_max_usd REAL,
-                    valor_min_usd REAL,
-                    costo_total_sin_iva_usd REAL,
-                    costo_con_iva_usd       REAL,
-                    precio_ars              REAL,
-                    rentabilidad_ars        REAL,
-                    pct_rentabilidad        REAL,
-                    alto_m REAL, largo_m REAL, ancho_m REAL,
-                    peso_kg REAL, cbm_un REAL,
+                    valor_max_usd DOUBLE PRECISION,
+                    valor_min_usd DOUBLE PRECISION,
+                    costo_total_sin_iva_usd DOUBLE PRECISION,
+                    costo_con_iva_usd       DOUBLE PRECISION,
+                    precio_ars              DOUBLE PRECISION,
+                    rentabilidad_ars        DOUBLE PRECISION,
+                    pct_rentabilidad        DOUBLE PRECISION,
+                    alto_m DOUBLE PRECISION, largo_m DOUBLE PRECISION, ancho_m DOUBLE PRECISION,
+                    peso_kg DOUBLE PRECISION, cbm_un DOUBLE PRECISION,
                     raw_payload   TEXT,
-                    created_at    TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_costitem_sku ON cost_item(sku);
-                CREATE INDEX IF NOT EXISTS idx_costitem_lote ON cost_item(lote_id);
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_costitem_sku ON cost_item (LOWER(sku))")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_costitem_lote ON cost_item (lote_id)")
 
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS usd_rate_cache (
                     id          INTEGER PRIMARY KEY CHECK (id = 1),
-                    venta       REAL NOT NULL,
-                    compra      REAL,
+                    venta       DOUBLE PRECISION NOT NULL,
+                    compra      DOUBLE PRECISION,
                     source      TEXT NOT NULL,
-                    fetched_at  TEXT NOT NULL
-                );
+                    fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
             """)
-            c.commit()
         _INITIALIZED = True
 
 
@@ -101,33 +98,37 @@ def upsert_lote(
 ) -> dict:
     """Replace-on-import: borra el lote existente con mismo nombre + lo recrea."""
     init()
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    with _LOCK, _conn() as c:
-        existing = c.execute("SELECT id FROM cost_lote WHERE lote = ? COLLATE NOCASE", (lote,)).fetchone()
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM cost_lote WHERE LOWER(lote) = LOWER(%s)",
+            (lote,),
+        )
+        existing = cur.fetchone()
         replaced = False
         if existing:
-            c.execute("DELETE FROM cost_lote WHERE id = ?", (existing["id"],))
+            cur.execute("DELETE FROM cost_lote WHERE id = %s", (existing["id"],))
             replaced = True
-        cur = c.execute(
+        cur.execute(
             """
             INSERT INTO cost_lote
-              (lote, proveedor, fecha_ingreso, origen, envio, moneda, source_file, imported_at, imported_by, items_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+              (lote, proveedor, fecha_ingreso, origen, envio, moneda, source_file, imported_by, items_count)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
             """,
-            (lote, proveedor, fecha_ingreso, origen, envio, moneda, source_file, now, imported_by, len(items)),
+            (lote, proveedor, fecha_ingreso, origen, envio, moneda, source_file, imported_by, len(items)),
         )
-        lote_id = cur.lastrowid
+        lote_id = cur.fetchone()["id"]
 
         for it in items:
-            c.execute(
+            cur.execute(
                 """
                 INSERT INTO cost_item
                   (lote_id, sku, producto, categoria, sub_categoria, ncm, cantidad,
                    valor_max_usd, valor_min_usd, costo_total_sin_iva_usd, costo_con_iva_usd,
                    precio_ars, rentabilidad_ars, pct_rentabilidad,
                    alto_m, largo_m, ancho_m, peso_kg, cbm_un,
-                   raw_payload, created_at)
-                VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?,?,?, ?,?)
+                   raw_payload)
+                VALUES (%s,%s,%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s, %s,%s,%s,%s,%s, %s)
                 """,
                 (
                     lote_id,
@@ -147,54 +148,54 @@ def upsert_lote(
                     it.get("alto_m"), it.get("largo_m"), it.get("ancho_m"),
                     it.get("peso_kg"), it.get("cbm_un"),
                     json.dumps(it.get("raw_payload") or {}, ensure_ascii=False),
-                    now,
                 ),
             )
-        c.commit()
         return {"lote_id": lote_id, "replaced": replaced, "items_count": len(items)}
 
 
 def list_lotes() -> list[dict]:
     init()
-    with _LOCK, _conn() as c:
-        rows = c.execute("""
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("""
             SELECT l.*,
                    (SELECT COUNT(DISTINCT sku) FROM cost_item WHERE lote_id = l.id) AS skus
             FROM cost_lote l
             ORDER BY l.imported_at DESC
-        """).fetchall()
-    return [dict(r) for r in rows]
+        """)
+        rows = cur.fetchall()
+    return [_normalize(r) for r in rows]
 
 
 def get_lote(lote_id: int) -> dict | None:
     init()
-    with _LOCK, _conn() as c:
-        l = c.execute("SELECT * FROM cost_lote WHERE id = ?", (lote_id,)).fetchone()
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM cost_lote WHERE id = %s", (lote_id,))
+        l = cur.fetchone()
         if not l:
             return None
-        items = c.execute("SELECT * FROM cost_item WHERE lote_id = ? ORDER BY sku", (lote_id,)).fetchall()
-    return {"lote": dict(l), "items": [dict(i) for i in items]}
+        cur.execute("SELECT * FROM cost_item WHERE lote_id = %s ORDER BY sku", (lote_id,))
+        items = cur.fetchall()
+    return {"lote": _normalize(l), "items": [_normalize(i) for i in items]}
 
 
 def delete_lote(lote_id: int) -> bool:
     init()
-    with _LOCK, _conn() as c:
-        cur = c.execute("DELETE FROM cost_lote WHERE id = ?", (lote_id,))
-        c.commit()
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("DELETE FROM cost_lote WHERE id = %s", (lote_id,))
         return cur.rowcount > 0
 
 
 # ============================================================
-# COSTOS VIGENTES POR SKU (último lote por SKU)
+# COSTOS VIGENTES POR SKU (ultimo lote por SKU)
 # ============================================================
 
 def current_costs(search: str | None = None, limit: int = 500) -> list[dict]:
-    """Costo vigente = lote más reciente por SKU (por imported_at)."""
+    """Costo vigente = lote mas reciente por SKU (por imported_at)."""
     init()
     sql = """
         WITH ranked AS (
             SELECT i.*, l.lote, l.proveedor, l.fecha_ingreso, l.imported_at,
-                   ROW_NUMBER() OVER (PARTITION BY i.sku ORDER BY l.imported_at DESC, i.id DESC) AS rn
+                   ROW_NUMBER() OVER (PARTITION BY LOWER(i.sku) ORDER BY l.imported_at DESC, i.id DESC) AS rn
             FROM cost_item i
             JOIN cost_lote l ON l.id = i.lote_id
         )
@@ -202,29 +203,31 @@ def current_costs(search: str | None = None, limit: int = 500) -> list[dict]:
     """
     params: list = []
     if search:
-        sql += " AND (sku LIKE ? COLLATE NOCASE OR producto LIKE ? COLLATE NOCASE) "
+        sql += " AND (sku ILIKE %s OR producto ILIKE %s) "
         params.extend([f"%{search}%", f"%{search}%"])
-    sql += " ORDER BY sku LIMIT ?"
+    sql += " ORDER BY sku LIMIT %s"
     params.append(limit)
-    with _LOCK, _conn() as c:
-        rows = c.execute(sql, params).fetchall()
-    return [dict(r) for r in rows]
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [_normalize(r) for r in rows]
 
 
 def cost_by_sku(sku: str) -> dict | None:
     """Costo vigente + historial completo por SKU."""
     init()
-    with _LOCK, _conn() as c:
-        rows = c.execute("""
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("""
             SELECT i.*, l.lote, l.proveedor, l.fecha_ingreso, l.imported_at
             FROM cost_item i
             JOIN cost_lote l ON l.id = i.lote_id
-            WHERE i.sku = ? COLLATE NOCASE
+            WHERE LOWER(i.sku) = LOWER(%s)
             ORDER BY l.imported_at DESC
-        """, (sku,)).fetchall()
+        """, (sku,))
+        rows = cur.fetchall()
     if not rows:
         return None
-    items = [dict(r) for r in rows]
+    items = [_normalize(r) for r in rows]
     return {"sku": sku, "current": items[0], "history": items}
 
 
@@ -234,19 +237,36 @@ def cost_by_sku(sku: str) -> dict | None:
 
 def get_cached_rate() -> dict | None:
     init()
-    with _LOCK, _conn() as c:
-        r = c.execute("SELECT * FROM usd_rate_cache WHERE id = 1").fetchone()
-    return dict(r) if r else None
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM usd_rate_cache WHERE id = 1")
+        r = cur.fetchone()
+    return _normalize(r) if r else None
 
 
 def set_cached_rate(*, venta: float, compra: float | None, source: str) -> None:
     init()
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    with _LOCK, _conn() as c:
-        c.execute("""
+    with _LOCK, get_conn() as c, c.cursor() as cur:
+        cur.execute("""
             INSERT INTO usd_rate_cache (id, venta, compra, source, fetched_at)
-            VALUES (1, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET venta=excluded.venta, compra=excluded.compra,
-                                          source=excluded.source, fetched_at=excluded.fetched_at
-        """, (venta, compra, source, now))
-        c.commit()
+            VALUES (1, %s, %s, %s, NOW())
+            ON CONFLICT (id) DO UPDATE SET
+                venta = EXCLUDED.venta,
+                compra = EXCLUDED.compra,
+                source = EXCLUDED.source,
+                fetched_at = EXCLUDED.fetched_at
+        """, (venta, compra, source))
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def _normalize(row: dict | None) -> dict:
+    """Convierte timestamps a ISO string para serializar a JSON."""
+    if row is None:
+        return {}
+    d = dict(row)
+    for k, v in list(d.items()):
+        if isinstance(v, dt.datetime):
+            d[k] = v.isoformat()
+    return d
