@@ -31,13 +31,13 @@
 
 ---
 
-### US-02 — Registrarme con mi mail @unistor.ar
+### US-02 — Registrarme con mi mail @unistore.ar
 > **Como** colaborador nuevo
 > **Quiero** registrarme yo solo en UNIDATA con mi mail corporativo
 > **Para** no tener que esperar que el admin me cree la cuenta
 
 **Criterios de aceptacion:**
-- Form `/register` valida que email termine en `@unistor.ar`
+- Form `/register` valida que email termine en `@unistore.ar`
 - Crea cuenta con rol default `lector` (admin puede promover despues)
 - Primer login obliga a setear password
 - Si el email ya existe -> mensaje claro de "usa /login"
@@ -219,7 +219,7 @@
 |---|---|---|---|
 | AUTH-01 | ✅ DONE | Login con email/password + JWT 12h | US-01 |
 | AUTH-02 | ✅ DONE | Seed admin desde `ADMIN_EMAIL`/`ADMIN_PASSWORD` | US-01 |
-| AUTH-03 | 🔴 MVP V1 | Endpoint `POST /api/auth/register` con dominio `@unistor.ar` | US-02 |
+| AUTH-03 | 🔴 MVP V1 | Endpoint `POST /api/auth/register` con dominio `@unistore.ar` | US-02 |
 | AUTH-04 | 🔴 MVP V1 | Endpoint `POST /api/auth/set-initial-password` | US-02 |
 | AUTH-05 | 🔴 MVP V1 | Frontend `/register` + flujo primer-login | US-02 |
 | AUTH-06 | 🟡 BACKLOG | Admin > Usuarios: badge "Pendiente de password" + boton reset | US-08 |

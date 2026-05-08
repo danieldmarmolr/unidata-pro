@@ -132,5 +132,5 @@ Si queres ver implementacion real, el repo de UNIDATA es referencia: `github.com
 
 ## Contacto
 
-- **Daniel Marmol** — `daniel.marmol@unistor.ar` — autor de UNIDATA, ya hizo este flujo end-to-end
+- **Daniel Marmol** — `daniel.marmol@unistore.ar` — autor de UNIDATA, ya hizo este flujo end-to-end
 - **Mauro Candia** — data engineer / AWS — ejecuta el ticket

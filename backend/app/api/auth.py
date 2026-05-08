@@ -75,11 +75,11 @@ def change_password(
     return {"ok": True}
 
 
-# ----- Self-registration (Camino A: dominio @unistor.ar) -----
+# ----- Self-registration (Camino A: dominio @unistore.ar) -----
 
 @router.post("/register")
 def register(body: RegisterBody) -> dict:
-    """Self-registration con dominio @unistor.ar.
+    """Self-registration con dominio @unistore.ar.
     Crea cuenta en estado 'pendiente de password' (rol lector).
     Despues de esto el frontend debe pedirle al user que setee su password
     con POST /set-initial-password.

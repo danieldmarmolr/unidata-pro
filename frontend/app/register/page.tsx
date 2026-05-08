@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { registerSelf, setInitialPassword } from "@/lib/api";
 
-const ALLOWED_DOMAIN = "unistor.ar";
+const ALLOWED_DOMAIN = "unistore.ar";
 
 type Step = "register" | "password";
 

@@ -104,7 +104,7 @@ Agregar **una sola regla de inbound** (SSH/22/TCP) en cada uno de los 2 Security
 ## Verificacion (la hace Daniel desde Railway)
 
 1. Backend Railway: `https://backend-production-c1ee.up.railway.app/api/health` -> debe seguir devolviendo `{"status":"ok"}`.
-2. Login: `daniel.marmol@unistor.ar` / `unidata2026.` -> emite JWT.
+2. Login: `daniel.marmol@unistore.ar` / `unidata2026.` -> emite JWT.
 3. `GET /api/sources/unistore/schemas` con el JWT -> deberia devolver lista de schemas reales (no timeout). **Esto es el smoke test que confirma que el bastion deja pasar.**
 4. Frontend `https://frontend-production-7d1c.up.railway.app/` -> dashboard con datos de hoy (no ceros).
 
@@ -143,7 +143,7 @@ Eliminar las 2 reglas. Sin impacto en producciones existentes — solo deja a UN
 
 ## Asignacion
 
-- **Reporter:** Daniel Marmol (`daniel.marmol@unistor.ar`)
+- **Reporter:** Daniel Marmol (`daniel.marmol@unistore.ar`)
 - **Assignee:** Mauro Candia / Data Engineer con acceso AWS Console de Unistore
 - **Watchers:** Equipo Producto / Gerencia (opcional)
 

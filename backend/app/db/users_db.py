@@ -202,14 +202,14 @@ def change_password(user_id: int, current_password: str, new_password: str) -> b
     return True
 
 
-# ----- Self-registration (Camino A: dominio @unistor.ar) -----
+# ----- Self-registration (Camino A: dominio @unistore.ar) -----
 
-ALLOWED_REGISTRATION_DOMAIN = "unistor.ar"
+ALLOWED_REGISTRATION_DOMAIN = "unistore.ar"
 
 
 def register_pending(email: str, name: str) -> dict:
     """Crea un user nuevo SIN password (estado 'pendiente de password').
-    Valida dominio @unistor.ar. Rol default: lector.
+    Valida dominio @unistore.ar. Rol default: lector.
     Si ya existe el email -> ValueError.
     """
     init()
