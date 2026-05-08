@@ -445,3 +445,134 @@ H. Documentacion    ███████████████░░░░░
 | PEOPLE-17 | 🟡 BACKLOG | Audit log de accesos a perfiles + viewer en `/perfil` |
 | PEOPLE-18 | 🟡 BACKLOG | Export "mis datos" (GDPR-style) |
 | PEOPLE-19 | 🟡 BACKLOG | Texto consentimiento + checkbox en onboarding |
+
+---
+
+## 📚 USER STORIES — Sistema de notificaciones inteligentes
+
+> Vision: que UNIDATA no solo permita "ir a buscar la data", sino que la data
+> encuentre al usuario cuando algo relevante ocurre. Tres niveles de
+> sofisticacion, evolutivos.
+
+### US-17 — Recibir notificaciones de eventos relevantes
+> **Como** colaborador con permisos sobre un area de negocio
+> **Quiero** recibir notificaciones automaticas cuando algo importante pasa en los datos
+> **Para** enterarme en el momento sin tener que estar mirando dashboards
+
+**Criterios de aceptacion:**
+- Bell icon en topbar con badge de notificaciones no leidas
+- Feed `/notifications` con historico
+- Eventos tipicos: compra VIP (>$300k), stock critico, SKU trending, devoluciones altas, cliente premium nuevo
+- Click en notificacion -> abre el drilldown relacionado (orden, producto, cliente)
+- Marcar como leida / dismissar individuales o todas
+- Sonido opcional (toggle en perfil)
+
+**Tasks asociadas:** ALERTS-01..05
+
+---
+
+### US-18 — Configurar mis propias alertas (admin/gerencia)
+> **Como** admin o gerencia
+> **Quiero** crear y configurar reglas de alerta sobre los datos
+> **Para** ajustar UNIDATA a las preocupaciones especificas de mi area
+
+**Criterios de aceptacion:**
+- Pagina `/admin/alerts` para CRUD de reglas
+- Reglas tipo "threshold" (compra > X) y "frequency" (SKU vendido > N veces en ventana de tiempo)
+- Activar/pausar reglas individualmente
+- Elegir canal de delivery: in-app / Slack / email
+- Elegir audiencia: todos los admins / todos los gerentes / users especificos
+- Test de regla en datos historicos para validar antes de activar
+
+**Tasks asociadas:** ALERTS-06..09
+
+---
+
+### US-19 — Recibir notificaciones por Slack / email
+> **Como** usuario que no esta todo el dia mirando UNIDATA
+> **Quiero** recibir las alertas criticas por Slack o email
+> **Para** estar al tanto sin abrir la app
+
+**Criterios de aceptacion:**
+- Conectar workspace Slack via webhook (Slack App de Unistore)
+- Conectar email via Resend (free tier 100/dia, despues paga si crece)
+- Cada user define en su `/perfil` que canales prefiere por severity (info/warn/critical)
+- Mensajes formateados con titulo + 1 linea de contexto + link a UNIDATA
+
+**Tasks asociadas:** ALERTS-10..12
+
+---
+
+### US-20 — Alertas inteligentes con anomaly detection
+> **Como** gerencia
+> **Quiero** que UNIDATA me avise solo cuando algo es REALMENTE anomalo
+> **Para** no recibir falsos positivos en epocas de spike normal (Black Friday, fin de mes)
+
+**Criterios de aceptacion:**
+- Modelo de time-series forecast (Prophet) entrenado con 12 meses de historia
+- Alertas se disparan cuando `actual` esta fuera del intervalo de confianza al 95%
+- El modelo aprende estacionalidad automaticamente (dia de semana, mes, feriado)
+- Re-entrenamiento semanal automatico
+- Vista admin de "modelo health": precision/recall, falsos positivos esperados
+
+**Tasks asociadas:** ALERTS-13..16
+
+---
+
+### US-21 — Resumen ejecutivo diario en lenguaje natural (IA)
+> **Como** gerente
+> **Quiero** recibir cada manana un resumen narrativo de lo que paso ayer
+> **Para** entender el negocio en 30 segundos sin abrir 5 dashboards
+
+**Criterios de aceptacion:**
+- Cron diario 8:00 AM Argentina
+- Pasa metricas + alertas del dia anterior a Claude API
+- Genera resumen de 3-4 parrafos en castellano natural
+- Enviado por email + posteado en Slack
+- Tono conversacional, no bullet points
+- Mencion explicita de eventos extraordinarios (compras VIP, stockouts, etc)
+
+**Tasks asociadas:** ALERTS-17..19
+
+---
+
+## 🛠 TASKS Notification System (ALERTS-* serie)
+
+### Capa 1: Reglas configurables (Sprint 3)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| ALERTS-01 | 🟡 BACKLOG | Tablas: `alert_rules`, `alert_events`, `user_notifications` |
+| ALERTS-02 | 🟡 BACKLOG | Cron worker que evalua reglas cada 5 min |
+| ALERTS-03 | 🟡 BACKLOG | Engine de evaluacion para tipo "threshold" (operadores >, <, =, !=) |
+| ALERTS-04 | 🟡 BACKLOG | Engine para tipo "frequency" (count en ventana de tiempo) |
+| ALERTS-05 | 🟡 BACKLOG | Frontend: bell icon + feed + badge unread |
+
+### Capa 2: Configuracion + Delivery (Sprint 3-4)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| ALERTS-06 | 🟡 BACKLOG | Pagina `/admin/alerts` para CRUD de reglas |
+| ALERTS-07 | 🟡 BACKLOG | Test de reglas en datos historicos |
+| ALERTS-08 | 🟡 BACKLOG | Reglas seedeadas tipicas (VIP buy, stock critico, etc) |
+| ALERTS-09 | 🟡 BACKLOG | Preferencias del user en `/perfil` (canales por severity) |
+| ALERTS-10 | 🟡 BACKLOG | Integracion Slack (webhook) |
+| ALERTS-11 | 🟡 BACKLOG | Integracion email via Resend |
+| ALERTS-12 | 🟡 BACKLOG | Integracion MS Teams (post-Slack si hay demanda) |
+
+### Capa 3: ML Anomaly Detection (Sprint 5-6)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| ALERTS-13 | 🟡 BACKLOG | Pipeline de extract de metricas historicas (12 meses) |
+| ALERTS-14 | 🟡 BACKLOG | Modelo Prophet por metrica clave (revenue, orders, units) |
+| ALERTS-15 | 🟡 BACKLOG | Engine de evaluacion tipo "anomaly" (fuera del CI 95%) |
+| ALERTS-16 | 🟡 BACKLOG | Re-entrenamiento semanal automatico + dashboard model health |
+
+### Capa 4: IA generativa (Mes 4+)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| ALERTS-17 | 🟡 BACKLOG | Cron 8 AM AR: extrae snapshot del dia anterior |
+| ALERTS-18 | 🟡 BACKLOG | Llamada a Claude API con prompt + datos -> resumen narrativo |
+| ALERTS-19 | 🟡 BACKLOG | Distribucion automatica del resumen (email + Slack) a gerencia |
