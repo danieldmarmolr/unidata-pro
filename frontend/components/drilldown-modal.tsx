@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { X, Download, ExternalLink } from "lucide-react";
+import { X, Download, ExternalLink, User, MapPin } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
@@ -17,6 +18,20 @@ const CURRENCY_HINT = /total|amount|subtotal|revenue|commission|costo|precio|gmv
 const NUMBER_HINT = /^(qty|cantidad|unidades|ordenes|orders|n|count|days|dias)$/i;
 const PHONE_HINT = /^(phone|telefono|tel|whatsapp|celular)$/i;
 const EMAIL_HINT = /^(email|mail|correo)$/i;
+const CUSTOMER_NAME_HINT = /^(cliente|customer|customer_name|nombre_cliente|client|client_name)$/i;
+const PROVINCE_HINT = /^(provincia|province|region|departamento)$/i;
+const SKU_HINT = /^(sku|sku2|producto_sku|seller_sku|codigo|articulo)$/i;
+
+/** Busca en la fila el valor de una columna (case-insensitive, devuelve null si no esta). */
+function findColValue(columns: string[], row: unknown[], colNames: string[]): unknown {
+  for (const target of colNames) {
+    const idx = columns.findIndex((c) => c.toLowerCase() === target.toLowerCase());
+    if (idx >= 0 && row[idx] !== null && row[idx] !== undefined && row[idx] !== "") {
+      return row[idx];
+    }
+  }
+  return null;
+}
 
 /** Normaliza un telefono argentino para wa.me. */
 function waNumber(raw: string): string {
@@ -29,7 +44,18 @@ function waNumber(raw: string): string {
   return digits;
 }
 
-export function CellRenderer({ col, v }: { col: string; v: unknown }) {
+export function CellRenderer({
+  col,
+  v,
+  row,
+  columns,
+}: {
+  col: string;
+  v: unknown;
+  /** Fila completa - opcional, permite cross-reference entre columnas (ej: nombre cliente -> customer_id) */
+  row?: unknown[];
+  columns?: string[];
+}) {
   if (v === null || v === undefined || v === "") return <>—</>;
   if (typeof v === "number") {
     if (CURRENCY_HINT.test(col)) return <>{formatCurrency(v)}</>;
@@ -73,6 +99,58 @@ export function CellRenderer({ col, v }: { col: string; v: unknown }) {
     );
   }
   const s = String(v);
+
+  // Cliente: linkear al perfil si tenemos customer_id en la fila, sino busqueda por nombre
+  if (CUSTOMER_NAME_HINT.test(col)) {
+    let customerId: unknown = null;
+    if (row && columns) {
+      customerId = findColValue(columns, row, ["customer_id", "customerId", "cliente_id", "id_cliente"]);
+    }
+    const href = customerId
+      ? `/dashboard/customer/${encodeURIComponent(String(customerId))}`
+      : `/dashboard/customer?q=${encodeURIComponent(s)}`;
+    return (
+      <Link
+        href={href}
+        className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+        onClick={(e) => e.stopPropagation()}
+        title={customerId ? "Abrir perfil del cliente" : "Buscar cliente"}
+      >
+        <User size={10} className="opacity-60" />
+        {s}
+      </Link>
+    );
+  }
+
+  // Provincia: linkear al mapa con esa provincia seleccionada
+  if (PROVINCE_HINT.test(col)) {
+    return (
+      <Link
+        href={`/dashboard/mapa?province=${encodeURIComponent(s)}`}
+        className="inline-flex items-center gap-1 text-text hover:text-primary hover:underline"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver detalle en el mapa"
+      >
+        <MapPin size={10} className="opacity-50" />
+        {s}
+      </Link>
+    );
+  }
+
+  // SKU: linkear al detalle del producto
+  if (SKU_HINT.test(col) && s.length <= 40) {
+    return (
+      <Link
+        href={`/dashboard/productos/${encodeURIComponent(s)}`}
+        className="text-primary hover:underline font-mono"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver detalle del SKU"
+      >
+        {s}
+      </Link>
+    );
+  }
+
   // Phone -> WhatsApp link
   if (PHONE_HINT.test(col)) {
     const wa = waNumber(s);
@@ -232,19 +310,27 @@ export function DrillDownModal({
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                 <tr>
-                  {data.columns.map((c) => (
-                    <th key={c} className="text-left px-3 py-2 whitespace-nowrap">{c}</th>
-                  ))}
+                  {data.columns.map((c) => {
+                    // Si la columna es customer_id la ocultamos (uso interno solo para links)
+                    if (/^(customer_id|customerId|cliente_id|id_cliente)$/i.test(c)) return null;
+                    return <th key={c} className="text-left px-3 py-2 whitespace-nowrap">{c}</th>;
+                  })}
                 </tr>
               </thead>
               <tbody>
                 {data.rows.map((r, i) => (
                   <tr key={i} className="border-t border-border hover:bg-soft transition">
-                    {r.map((v, j) => (
-                      <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
-                        <CellRenderer col={data.columns[j]} v={v} />
-                      </td>
-                    ))}
+                    {r.map((v, j) => {
+                      const col = data.columns[j];
+                      // Si la columna es customer_id la ocultamos (la usamos solo para construir links)
+                      const isHiddenIdCol = /^(customer_id|customerId|cliente_id|id_cliente)$/i.test(col);
+                      if (isHiddenIdCol) return null;
+                      return (
+                        <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
+                          <CellRenderer col={col} v={v} row={r} columns={data.columns} />
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>

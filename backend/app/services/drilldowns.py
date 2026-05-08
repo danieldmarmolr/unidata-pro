@@ -57,7 +57,8 @@ def orders_by_province(unit: str, province: str, period: str = "30d") -> dict:
                o.total::float,
                COALESCE(NULLIF(TRIM(osa.city),''),'(sin ciudad)') AS ciudad,
                COALESCE(o."contactName",'') AS cliente,
-               COALESCE(osa.address,'') AS direccion
+               COALESCE(osa.address,'') AS direccion,
+               o."customerId" AS customer_id
         FROM tienda_nube."Order" o
         JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
         WHERE COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') = :prov
@@ -68,7 +69,7 @@ def orders_by_province(unit: str, province: str, period: str = "30d") -> dict:
     """, {"prov": province, "days": days}) or []
     return _serialize(
         rows,
-        ["order_id", "numero", "fecha", "payment", "shipping", "total", "ciudad", "cliente", "direccion"],
+        ["order_id", "numero", "fecha", "payment", "shipping", "total", "ciudad", "cliente", "direccion", "customer_id"],
     )
 
 
@@ -349,14 +350,20 @@ def saas_users_expiring(days_window: int = 7, segment: str = "all") -> dict:
 # ============================================================
 
 def _orders_serialize(rows: list) -> dict:
-    return _serialize(rows, ["id", "numero", "fecha", "payment", "shipping", "status", "total", "cliente", "provincia"])
+    # customer_id queda al final como columna oculta — el frontend la usa para construir
+    # el link al perfil del cliente y la oculta visualmente
+    return _serialize(rows, [
+        "id", "numero", "fecha", "payment", "shipping", "status",
+        "total", "cliente", "provincia", "customer_id",
+    ])
 
 
 _ORDER_SELECT = """
     SELECT o.id, o.number, o."createdAt"::text AS fecha,
            o."paymentStatus", o."shippingStatus", o.status,
            o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
-           COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia
+           COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
+           c.id AS customer_id
     FROM tienda_nube."Order" o
     LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
     WHERE {where}
