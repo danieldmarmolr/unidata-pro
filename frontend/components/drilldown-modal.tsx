@@ -278,15 +278,15 @@ export function DrillDownModal({
   if (!endpoint) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-6 animate-in fade-in" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-6 animate-in fade-in" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface rounded-2xl shadow-2xl border border-border w-full max-w-5xl max-h-[85vh] flex flex-col"
+        className="bg-surface rounded-t-2xl sm:rounded-2xl shadow-2xl border-t sm:border border-border w-full max-w-5xl max-h-[92vh] sm:max-h-[85vh] flex flex-col"
       >
-        <div className="flex items-start justify-between p-5 border-b border-border">
-          <div className="min-w-0">
-            <div className="text-base font-bold text-text truncate">{title}</div>
-            {subtitle && <div className="text-xs text-text-muted mt-1">{subtitle}</div>}
+        <div className="flex items-start justify-between p-4 sm:p-5 border-b border-border gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-sm sm:text-base font-bold text-text truncate">{title}</div>
+            {subtitle && <div className="text-[11px] sm:text-xs text-text-muted mt-1">{subtitle}</div>}
             {data && (
               <div className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
                 <span>{formatNumber(data.row_count)} resultados</span>
@@ -318,17 +318,17 @@ export function DrillDownModal({
                 });
                 window.open(`/dashboard/explore?${params.toString()}`, "_blank", "noopener");
               }}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
+              className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
               title="Abrir analisis completo en pestana nueva"
             >
-              <ExternalLink size={12} /> Abrir
+              <ExternalLink size={12} /> <span className="hidden sm:inline">Abrir</span>
             </button>
             {data && data.rows.length > 0 && (
               <button
                 onClick={() => downloadCsv(filename, data.columns, data.rows)}
-                className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
+                className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
               >
-                <Download size={12} /> CSV
+                <Download size={12} /> <span className="hidden sm:inline">CSV</span>
               </button>
             )}
             <button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Cerrar">

@@ -231,23 +231,23 @@ function LoteDetailModal({ loteId, onClose }: { loteId: number; onClose: () => v
   }, [data]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start justify-center p-4 overflow-y-auto" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface rounded-2xl shadow-2xl border border-border w-full max-w-6xl my-8 overflow-hidden"
+        className="bg-surface rounded-2xl shadow-2xl border border-border w-full max-w-6xl my-2 sm:my-8 overflow-hidden"
       >
         {/* Header con gradiente */}
-        <div className="bg-gradient-to-br from-primary via-accent to-fuchsia-600 p-6 text-white relative">
-          <button onClick={onClose} className="absolute top-4 right-4 text-white/70 hover:text-white">
+        <div className="bg-gradient-to-br from-primary via-accent to-fuchsia-600 p-4 sm:p-6 text-white relative">
+          <button onClick={onClose} className="absolute top-3 right-3 sm:top-4 sm:right-4 text-white/70 hover:text-white p-1">
             <X size={20} />
           </button>
           <div className="flex items-center gap-3 mb-3">
-            <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center">
-              <Boxes size={24} />
+            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-white/20 backdrop-blur flex items-center justify-center flex-shrink-0">
+              <Boxes size={22} className="sm:w-6 sm:h-6" />
             </div>
-            <div>
-              <div className="text-xs uppercase tracking-wider opacity-80">Detalle del lote</div>
-              <h2 className="text-2xl font-extrabold">{data?.lote ?? "..."}</h2>
+            <div className="min-w-0">
+              <div className="text-[10px] sm:text-xs uppercase tracking-wider opacity-80">Detalle del lote</div>
+              <h2 className="text-lg sm:text-2xl font-extrabold truncate">{data?.lote ?? "..."}</h2>
             </div>
           </div>
           {data && (
@@ -276,7 +276,7 @@ function LoteDetailModal({ loteId, onClose }: { loteId: number; onClose: () => v
           )}
         </div>
 
-        <div className="p-6">
+        <div className="p-3 sm:p-6">
           {isLoading || !data ? (
             <div className="space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -540,7 +540,7 @@ export default function LotesPage() {
         subtitle="Análisis de consumo, markup y cobertura por lote — alimentado desde el Excel VALOR PRODUCTO"
       />
 
-      <div className="flex-1 px-8 py-6 overflow-y-auto">
+      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
         <DashboardHeader
           generatedAt={data?.generated_at}
           isFetching={isFetching}
@@ -679,8 +679,8 @@ export default function LotesPage() {
           </select>
         </div>
 
-        {/* Tabla de lotes */}
-        <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        {/* Tabla de lotes (desktop) */}
+        <div className="hidden lg:block bg-surface border border-border rounded-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
@@ -759,6 +759,88 @@ export default function LotesPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Cards de lotes (mobile + tablet) */}
+        <div className="lg:hidden space-y-3">
+          {isLoading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="bg-surface border border-border rounded-xl p-4 animate-pulse">
+                <div className="h-5 bg-soft rounded w-2/3 mb-2" />
+                <div className="h-4 bg-soft rounded w-full mb-2" />
+                <div className="h-4 bg-soft rounded w-1/2" />
+              </div>
+            ))
+          ) : lotes.length === 0 ? (
+            <div className="bg-surface border border-border rounded-xl p-12 text-center text-text-muted text-sm">
+              No hay lotes que coincidan con los filtros.
+            </div>
+          ) : (
+            lotes.map((l) => {
+              const days = daysSince(l.fecha_ingreso);
+              return (
+                <button
+                  key={l.lote_id}
+                  onClick={() => setDrillLote(l.lote_id)}
+                  className="w-full bg-surface border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-md transition text-left"
+                >
+                  {/* Header */}
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-base font-bold text-text truncate">{l.lote}</div>
+                      <div className="text-xs text-text-muted mt-0.5">
+                        {l.proveedor || "—"}
+                        {l.fecha_ingreso && (
+                          <span className="ml-2">
+                            · {fmtDateAR(l.fecha_ingreso)}
+                            {days !== null && ` · hace ${days}d`}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <EstadoBadge estado={l.estado} />
+                  </div>
+
+                  {/* Consumo bar */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-[10px] uppercase font-bold text-text-muted mb-1">
+                      <span>Consumo del lote</span>
+                      <span>{formatNumber(l.u_vendidas)}/{formatNumber(l.u_compradas)} un</span>
+                    </div>
+                    <ConsumoBar pct={l.consumo_lote_pct} estado={l.estado} />
+                  </div>
+
+                  {/* KPIs grid 2x2 */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-soft/50 rounded-lg p-2">
+                      <div className="text-[9px] uppercase font-bold text-text-muted">Costo</div>
+                      <div className="font-bold text-text tabular-nums truncate">{formatCurrency(l.total_costo_ars)}</div>
+                    </div>
+                    <div className="bg-soft/50 rounded-lg p-2">
+                      <div className="text-[9px] uppercase font-bold text-text-muted">Facturación</div>
+                      <div className="font-bold text-text tabular-nums truncate">{formatCurrency(l.total_facturacion_ars)}</div>
+                    </div>
+                    <div className="bg-soft/50 rounded-lg p-2">
+                      <div className="text-[9px] uppercase font-bold text-text-muted">Markup</div>
+                      <div className={`font-bold tabular-nums ${l.markup_pct > 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                        {fmtPct(l.markup_pct)}
+                      </div>
+                    </div>
+                    <div className="bg-soft/50 rounded-lg p-2">
+                      <div className="text-[9px] uppercase font-bold text-text-muted">Cobertura pago</div>
+                      <div className={`font-bold tabular-nums ${l.cobertura_pago_pct >= 100 ? "text-emerald-600" : l.cobertura_pago_pct >= 50 ? "text-amber-600" : "text-rose-600"}`}>
+                        {fmtPct(l.cobertura_pago_pct)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-end gap-1 text-[10px] text-primary font-semibold">
+                    Ver detalle SKU por SKU <ChevronRight size={11} />
+                  </div>
+                </button>
+              );
+            })
+          )}
         </div>
 
         {data && (
