@@ -1,292 +1,289 @@
-# Handoff a Unifull — Configuracion de acceso a BBDD productivas
+# Handoff a Unifull — Configuracion `LEGACY_DATABASE_URL` para crm-kommo-sync
 
-> Documento que Daniel le pasa al equipo de Unifull (`crm-kommo-sync`)
-> con todo lo que necesitan para conectarse a las RDS productivas del grupo
-> via SSH bastion.
+> Documento que Daniel le pasa al equipo de Unifull.
+> El servicio `crm-kommo-sync` espera **una sola env var con la URL de Postgres**
+> (`LEGACY_DATABASE_URL`). Como la RDS de Unistore es privada, hay que abrir
+> un tunel SSH **a nivel de infraestructura** en su container, y la app
+> apunta a `localhost`.
+
+---
+
+## Resumen ejecutivo
+
+```
+Tu app             ─────►  LEGACY_DATABASE_URL=postgresql://...@127.0.0.1:5440/...
+                                                                   ▲
+                                                                   │
+                                                          (tunel SSH dentro
+                                                           de tu container)
+                                                                   │
+                                                                   ▼
+                            Bastion EC2 (3.139.209.227) en AWS
+                                                                   │
+                                                                   ▼
+                            RDS unistore-prod-db (privada en VPC)
+```
+
+Tu app no ve el tunel SSH — solo ve un Postgres en `localhost:5440`. El tunel
+corre como sidecar en el mismo container.
 
 ---
 
 ## Estado actual
 
-✅ **AWS Security Group ya esta allowlistado** para la IP estatica de Railway
-(`162.220.232.99/32`) en los 2 bastions del grupo. Esto fue confirmado por Mauro
-Candia el 2026-05-08 con los siguientes IDs de regla:
+✅ AWS Security Group ya allowlistado para la IP de Railway (`162.220.232.99/32`):
 
 | Bastion | IP publica | SG | ID regla |
 |---|---|---|---|
 | Unistore | `3.139.209.227` | `unistore-prod-bastion-sg` | `sgr-0ed7dc9cd769da5e3` |
 | Unidrop  | `18.191.119.38` | `launch-wizard-1`         | `sgr-0df2a3616e35bfc8d` |
 
-Como ambos workspaces de Railway (UNIDATA + Unifull) salen por la misma IP
-shared del pool us-west-2, **una sola regla cubre los dos proyectos**. No
-hace falta pedirle a Mauro nada mas en cuanto a networking.
+(Mauro confirmo el 2026-05-08. Misma IP cubre UNIDATA + Unifull por shared
+pool us-west-2.)
 
 ---
 
-## Lo que Unifull necesita pedir a Mauro
+## Lo que falta del lado de Mauro
 
-Es la **Parte 2** del ticket consolidado que ya esta abierto. Le pueden
-escribir directamente o sumarse al hilo. Necesitan dos cosas:
+1. **Llave SSH `.pem` del bastion** que necesites:
+   - `unistore-bastion-key.pem` para acceder a Unistore + Unidev
+   - `unidrop-bastion-key.pem` si tambien necesitas Unidrop
 
-### 1. Llave SSH `.pem` del bastion
+2. **User PostgreSQL read-only** dedicado (Parte 2 del ticket consolidado):
 
-La llave es la misma que usan los devs del grupo (incluido Daniel) para
-conectarse via DBeaver. Mauro tiene la fuente.
+   ```sql
+   CREATE USER unifull_readonly WITH PASSWORD '<password>';
+   GRANT CONNECT ON DATABASE unistore_api TO unifull_readonly;
+   GRANT USAGE ON SCHEMA public, tienda_nube, meli, contabilium, digip TO unifull_readonly;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public, tienda_nube, meli, contabilium, digip TO unifull_readonly;
+   ALTER DEFAULT PRIVILEGES IN SCHEMA public, tienda_nube, meli, contabilium, digip
+     GRANT SELECT ON TABLES TO unifull_readonly;
+   ```
 
-- **Para acceder a Unistore + Unidev:** llave del bastion `3.139.209.227`
-- **Para acceder a Unidrop:** llave del bastion `18.191.119.38`
+   > Confirmar a Mauro que schemas necesita Kommo. La lista de arriba es
+   > sugerida. Si solo necesitas `tienda_nube` y `public`, mejor — menor
+   > superficie expuesta.
 
-Recibirla por canal seguro (Vault, 1Password, archivo cifrado por Mauro).
-
-### 2. Credenciales de DB read-only dedicadas
-
-Pedirle a Mauro que cree el user con permisos solo `SELECT`:
-
-```sql
--- Sugerencia de SQL para Mauro:
-CREATE USER unifull_readonly WITH PASSWORD '<password generada>';
-GRANT CONNECT ON DATABASE unistore_api TO unifull_readonly;
-GRANT USAGE ON SCHEMA public, tienda_nube, meli, contabilium, digip TO unifull_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public, tienda_nube, meli, contabilium, digip TO unifull_readonly;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public, tienda_nube, meli, contabilium, digip
-  GRANT SELECT ON TABLES TO unifull_readonly;
-```
-
-> Nota: el listado de schemas a habilitar depende de que data necesita Kommo
-> sync. **El equipo Unifull tiene que confirmar a Mauro que tablas o schemas
-> consultan** para limitar el GRANT a lo justo (principio menor privilegio).
-
-Salida esperada de Mauro: connection string formato
-
-```
-postgresql://unifull_readonly:<password>@unistore-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com:5432/unistore_api?sslmode=require
-```
-
-(Si tambien necesitan Unidrop, pedir el mismo flujo para esa RDS.)
+   Mauro entrega la **password** por canal seguro.
 
 ---
 
-## Configuracion del lado Railway (cuando tengan llave + credentials)
+## Configuracion en Railway — paso a paso
 
-### Paso 1 — Variables de entorno en Railway
-
-Setear estas vars en el servicio `crm-kommo-sync` de Railway:
+### 1. Variables de entorno en Railway
 
 ```env
-# Bastion
+# Tu app espera estas dos (las que ya tenias previstas):
+LEGACY_DATABASE_URL=postgresql://unifull_readonly:<PASSWORD>@127.0.0.1:5440/unistore_api?sslmode=disable
+DRY_RUN_LEGACY=false
+
+# Configuracion del tunel SSH (las usa el entrypoint, NO tu app):
 BASTION_HOST=3.139.209.227
 BASTION_USER=ec2-user
 BASTION_PORT=22
 BASTION_KEY_BASE64=<base64 de la .pem>
-
-# RDS via tunel
-DB_HOST_REMOTE=unistore-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com
-DB_PORT_REMOTE=5432
-DB_NAME=unistore_api
-DB_USER=unifull_readonly
-DB_PASSWORD=<el password que les paso Mauro>
-
-# Puerto local del tunel (cualquiera libre)
-LOCAL_PORT=5440
+RDS_REMOTE_HOST=unistore-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com
+RDS_REMOTE_PORT=5432
+LOCAL_TUNNEL_PORT=5440
 ```
 
-### Paso 2 — Convertir la llave SSH a base64
+> Nota sobre `sslmode=disable`: dentro del tunel SSH la conexion ya esta
+> encriptada por SSH. Postgres no necesita TLS adicional. Si tu cliente
+> Postgres se queja, podes usar `sslmode=prefer` (acepta sin SSL si no esta
+> disponible).
 
-Las llaves multi-linea no entran en env vars de Railway. Convertirla:
+### 2. Convertir la .pem a base64
 
 ```bash
 # Linux / Mac
 base64 -w 0 unistore-bastion-key.pem
+# Output: una larga cadena en base64, sin saltos de linea
+# Pegala en Railway -> Variables -> BASTION_KEY_BASE64
+```
 
+```powershell
 # Windows PowerShell
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("unistore-bastion-key.pem"))
 ```
 
-Pegar el output (sin saltos de linea) en `BASTION_KEY_BASE64`.
+### 3. Modificar el Dockerfile / entrypoint
 
-### Paso 3 — Codigo: abrir tunel + conectar
+El tunel hay que abrirlo **antes** que arranque tu app. Hay dos formas
+limpias de hacerlo:
 
-#### Si el stack es Python:
+#### Opcion A — entrypoint script (recomendado, sirve para cualquier stack)
+
+Agregar al Dockerfile:
+
+```dockerfile
+# Sumar al Dockerfile, antes del CMD/ENTRYPOINT que ya tenias
+RUN apt-get update && apt-get install -y openssh-client autossh && rm -rf /var/lib/apt/lists/*
+
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["<tu comando original que arranca la app>"]
+```
+
+Crear `entrypoint.sh` en la raiz del proyecto:
 
 ```bash
-pip install sshtunnel psycopg2-binary
+#!/usr/bin/env bash
+set -e
+
+# 1. Materializar la llave SSH desde la env var base64
+mkdir -p /app/keys
+echo "$BASTION_KEY_BASE64" | base64 -d > /app/keys/bastion.pem
+chmod 600 /app/keys/bastion.pem
+
+# 2. Aceptar host key automaticamente la primera vez
+mkdir -p ~/.ssh
+ssh-keyscan -H "$BASTION_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+# 3. Abrir tunel persistente con autossh (auto-reconecta si se cae)
+autossh -M 0 -f -N \
+    -i /app/keys/bastion.pem \
+    -o "ServerAliveInterval=30" \
+    -o "ServerAliveCountMax=3" \
+    -o "ExitOnForwardFailure=yes" \
+    -o "StrictHostKeyChecking=no" \
+    -L "${LOCAL_TUNNEL_PORT}:${RDS_REMOTE_HOST}:${RDS_REMOTE_PORT}" \
+    "${BASTION_USER}@${BASTION_HOST}"
+
+# 4. Esperar 3 segundos para que el tunel este listo
+sleep 3
+
+# 5. Smoke test del tunel
+echo "Testing tunnel connectivity..."
+if nc -z 127.0.0.1 "$LOCAL_TUNNEL_PORT" 2>/dev/null; then
+    echo "OK: tunnel listening on localhost:${LOCAL_TUNNEL_PORT}"
+else
+    echo "ERROR: tunnel not responding on localhost:${LOCAL_TUNNEL_PORT}"
+    exit 1
+fi
+
+# 6. Arrancar la app (cualquier comando que pase como CMD)
+exec "$@"
 ```
 
-```python
-import os, base64, tempfile, psycopg2
-from sshtunnel import SSHTunnelForwarder
+Por que `autossh` y no `ssh` plano: si el tunel se cae (red intermitente),
+autossh lo levanta solo. Mucho mas robusto en produccion.
 
-# 1. Materializar la llave .pem desde la env var base64
-key_path = "/tmp/bastion.pem"
-with open(key_path, "wb") as f:
-    f.write(base64.b64decode(os.environ["BASTION_KEY_BASE64"]))
-os.chmod(key_path, 0o600)
+#### Opcion B — proceso paralelo en codigo (mas acoplado, no recomendado)
 
-# 2. Abrir tunel SSH
-tunnel = SSHTunnelForwarder(
-    (os.environ["BASTION_HOST"], int(os.environ.get("BASTION_PORT", 22))),
-    ssh_username=os.environ["BASTION_USER"],
-    ssh_pkey=key_path,
-    remote_bind_address=(os.environ["DB_HOST_REMOTE"], int(os.environ["DB_PORT_REMOTE"])),
-    local_bind_address=("127.0.0.1", int(os.environ.get("LOCAL_PORT", 5440))),
-)
-tunnel.start()
+Si preferis no tocar el Dockerfile, podes abrir el tunel desde el codigo
+de tu app antes del primer query. Pero esto acopla tu app a la infra. Si
+algun dia la RDS se vuelve publica o se mueve a otro setup, hay que
+reescribir codigo en lugar de solo cambiar env vars. Por eso recomendamos A.
 
-# 3. Conectar a Postgres a traves del tunel local
-conn = psycopg2.connect(
-    host="127.0.0.1",
-    port=tunnel.local_bind_port,
-    database=os.environ["DB_NAME"],
-    user=os.environ["DB_USER"],
-    password=os.environ["DB_PASSWORD"],
-    sslmode="require",
-)
+### 4. Verificar en Railway
 
-# 4. Smoke test
-with conn.cursor() as cur:
-    cur.execute("SELECT current_user, current_database(), now()")
-    print(cur.fetchone())
-    # Verificar que es read-only
-    try:
-        cur.execute("CREATE TABLE _test_readonly (id int)")
-        print("OOPS, deberia haber fallado")
-    except psycopg2.errors.InsufficientPrivilege:
-        print("OK: usuario es read-only como esperado")
+Despues del deploy, en los logs deberias ver:
+
 ```
-
-#### Si el stack es Node.js:
-
-```bash
-npm install ssh2 pg
-```
-
-```javascript
-import fs from "fs";
-import { Client as SSHClient } from "ssh2";
-import { Client as PgClient } from "pg";
-import net from "net";
-
-// 1. Decodificar la llave
-const keyBuffer = Buffer.from(process.env.BASTION_KEY_BASE64, "base64");
-
-// 2. Conectar al bastion via SSH y forwardear puerto
-const ssh = new SSHClient();
-ssh.connect({
-  host: process.env.BASTION_HOST,
-  port: parseInt(process.env.BASTION_PORT || "22"),
-  username: process.env.BASTION_USER,
-  privateKey: keyBuffer,
-});
-
-ssh.on("ready", () => {
-  const localServer = net.createServer((sock) => {
-    ssh.forwardOut(
-      "127.0.0.1", 0,
-      process.env.DB_HOST_REMOTE, parseInt(process.env.DB_PORT_REMOTE),
-      (err, stream) => {
-        if (err) return sock.end();
-        sock.pipe(stream).pipe(sock);
-      }
-    );
-  });
-  localServer.listen(parseInt(process.env.LOCAL_PORT || "5440"), "127.0.0.1", async () => {
-    // 3. Conectar a Postgres a traves del puerto forwardeado
-    const pg = new PgClient({
-      host: "127.0.0.1",
-      port: parseInt(process.env.LOCAL_PORT || "5440"),
-      database: process.env.DB_NAME,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      ssl: { rejectUnauthorized: false },
-    });
-    await pg.connect();
-    const r = await pg.query("SELECT current_user, current_database(), now()");
-    console.log(r.rows);
-    await pg.end();
-    ssh.end();
-  });
-});
+OK: tunnel listening on localhost:5440
+[tu app arrancando con LEGACY_DATABASE_URL=postgresql://...localhost:5440/...]
 ```
 
 ---
 
-## Smoke test desde Railway (verificacion)
+## Smoke test desde Railway shell
 
-Una vez deployado, los siguientes 4 chequeos confirman que todo funciona:
+Una vez deployado, podes ejecutar (desde el shell del container o un
+endpoint /debug):
 
 ```sql
--- 1. Usuario y DB correctos
-SELECT current_user, current_database();
--- Esperado: ('unifull_readonly', 'unistore_api')
+-- Confirma que estas conectado como el user correcto
+SELECT current_user, current_database(), now();
+-- Esperado: ('unifull_readonly', 'unistore_api', <timestamp>)
 
--- 2. Read-only confirmado (debe FALLAR)
-INSERT INTO public.<algunatabla> (col) VALUES (1);
--- Esperado: permission denied for table
+-- Confirma que es read-only (debe FALLAR)
+CREATE TABLE _test (id int);
+-- Esperado: permission denied
 
--- 3. Lectura real funciona
-SELECT COUNT(*) FROM tienda_nube."Order";
--- Esperado: numero entero (cantidad de ordenes en TN)
-
--- 4. Schemas accesibles
-SELECT DISTINCT table_schema FROM information_schema.tables
-WHERE table_schema NOT IN ('pg_catalog', 'information_schema');
--- Esperado: lista de schemas que Mauro habilito (public, tienda_nube, etc)
+-- Confirma que ves data real
+SELECT COUNT(*) FROM tienda_nube."Order" WHERE "createdAt"::date = CURRENT_DATE;
+-- Esperado: numero entero (ordenes de hoy)
 ```
 
 ---
 
-## Notas importantes
+## Si tambien necesitan Unidrop
 
-### Sobre la IP de Railway
+Repetir el setup con un segundo tunel:
 
-La IP `162.220.232.99` es **shared** en el pool us-west-2 de Railway Pro. Si
-en algun momento el equipo Unifull migra el workspace a otra region, o cambia
-de plan, **la IP cambia** y hay que reabrir ticket con Mauro para sumar la
-nueva. Mientras se mantenga el setup actual (Pro plan + us-west-2), no hay
-que tocar nada.
+```env
+# Segundas vars para Unidrop (si aplica)
+BASTION_HOST_UNIDROP=18.191.119.38
+BASTION_KEY_UNIDROP_BASE64=<base64 de unidrop-bastion-key.pem>
+RDS_REMOTE_HOST_UNIDROP=unidrop-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com
+LOCAL_TUNNEL_PORT_UNIDROP=5441
+LEGACY_DATABASE_URL_UNIDROP=postgresql://unifull_readonly_unidrop:<PASS>@127.0.0.1:5441/unidrop?sslmode=disable
+```
 
-### Sobre la llave SSH
-
-La misma llave .pem que usan los devs para DBeaver es la que va a Railway.
-**Tratarla con cuidado**:
-- Nunca commitearla al repo (gitignore + scan periodico)
-- Solo en env var encriptada de Railway, no en codigo
-- Si se filtra, pedirle a Mauro que la rote y vuelva a distribuir
-
-### Sobre el user read-only
-
-- **Solo SELECT.** Si en el codigo intentan INSERT/UPDATE/DELETE, falla con
-  `permission denied`. Esto es intencional y esperado.
-- **No mezclar con datos de Unidrop sin aviso.** Si Kommo necesita data de
-  Unidrop tambien, pedir un user `unifull_readonly_unidrop` separado y NO
-  reusar credenciales entre RDS distintas.
-- **Auditar regularmente** que tablas se consultan, para evitar drift de
-  alcance del GRANT.
-
-### Sobre el endpoint local del tunel
-
-El puerto `5440` (o el que elijas) tiene que estar libre en el container de
-Railway. Si tu codigo ya usa ese puerto para otra cosa, cambiarlo a otro
-no privilegiado (5432 va a chocar con clientes Postgres locales que asumen
-ese default).
+Y agregar al `entrypoint.sh` un segundo bloque de `autossh` con esos vars.
 
 ---
 
-## Si algo falla
+## Resumen para tu jira / kanban
 
-| Sintoma | Causa probable |
-|---|---|
-| `Connection timed out` al SSH | IP no allowlistada (revisar SG con Mauro) |
-| `Permission denied (publickey)` | Llave .pem incorrecta o mal decodificada |
-| `password authentication failed` | Credenciales DB equivocadas |
-| `permission denied for table X` | El user read-only no tiene SELECT en ese schema/tabla |
-| `connection refused` al RDS | Tunel no se levanto bien — chequear logs Railway |
-| `SSL/TLS required` | Falta `sslmode=require` en connection string |
+```
+[ ] Pedir a Mauro:
+    [ ] llave .pem del bastion Unistore
+    [ ] (opcional) llave .pem del bastion Unidrop
+    [ ] user PostgreSQL read-only + connection string
+
+[ ] Configurar Railway crm-kommo-sync:
+    [ ] Setear LEGACY_DATABASE_URL=postgresql://...@127.0.0.1:5440/...
+    [ ] Setear DRY_RUN_LEGACY=false
+    [ ] Setear BASTION_* y RDS_* env vars
+    [ ] Convertir .pem a base64, pegarla en BASTION_KEY_BASE64
+
+[ ] Codigo:
+    [ ] Sumar autossh al Dockerfile (apt-get install autossh)
+    [ ] Crear entrypoint.sh que abre el tunel antes de tu CMD
+    [ ] Push, redeploy
+
+[ ] Verificar:
+    [ ] Logs muestran "tunnel listening on localhost:5440"
+    [ ] Smoke test SQL: current_user = unifull_readonly
+    [ ] Smoke test: INSERT falla con permission denied (read-only OK)
+    [ ] Tu sync con Kommo lee datos reales
+```
+
+---
+
+## Troubleshooting
+
+| Sintoma | Causa probable | Fix |
+|---|---|---|
+| `Connection timed out` al SSH | IP de Railway no resuelve a la shared (raro pero posible si Railway cambio asignacion) | Pedir a Mauro re-confirmar SG con la nueva IP de salida |
+| `Permission denied (publickey)` | .pem mal decodificada o permisos chmod 600 mal seteados | Re-correr el `base64 -d` y verificar `chmod 600` |
+| `password authentication failed` | El user/password de Postgres estan mal | Re-pedir credenciales a Mauro |
+| `connection refused` al RDS | El tunel SSH no levanto | Mirar logs, ver si autossh se quedo colgado en el handshake |
+| `permission denied for table X` | El user read-only no tiene SELECT en ese schema | Pedir a Mauro que sume el GRANT en ese schema |
+| `relation "X" does not exist` | Estas apuntando a la DB equivocada | Confirmar que `LEGACY_DATABASE_URL` apunta a `unistore_api` (no a `postgres` ni `rdsadmin`) |
+| App se reinicia y el tunel queda zombie | autossh no esta limpiando — agregar trap SIGTERM | Cambiar `autossh -f` por usar tini o supervisord |
+
+---
+
+## Sobre seguridad
+
+- **La .pem es sensible.** Nunca commitearla. Solo en env var de Railway
+  (encriptada at-rest por su infra).
+- **El user `unifull_readonly` solo lee.** Si algun dev confunde un INSERT
+  o UPDATE en el codigo, falla con permission denied (es feature, no bug).
+- **El tunel SSH es punto-a-punto.** No se puede ver desde otra IP que la
+  de Railway us-west-2. Si Railway cambia la IP shared (raro), hay que
+  reabrir ticket.
+- **No mezclar credenciales** entre Unistore y Unidrop. Cada RDS tiene su
+  user dedicado.
 
 ---
 
 ## Contactos
 
-- **Daniel Marmol** (UNIDATA, autor de este doc): `daniel.marmol@unistore.ar`
-- **Mauro Candia** (data engineer / AWS): coordina llaves, SG y user creation
+- **Daniel Marmol** (UNIDATA): `daniel.marmol@unistore.ar`
+- **Mauro Candia** (data engineer / AWS): coordina llaves + creacion users
 - **Equipo Unifull**: implementa la integracion en `crm-kommo-sync`
