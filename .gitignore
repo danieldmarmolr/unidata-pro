@@ -38,3 +38,4 @@ frontend/.vercel/
 .DS_Store
 .idea/
 .vscode/
+.deploy/

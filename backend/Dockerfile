@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 # Dir donde Railway monta el volumen persistente (audit.db, users.db)
-VOLUME ["/app/data"]
+# Nota: Railway no soporta el directive VOLUME, el mount se configura en la UI/CLI
 
 # La SSH key se inyecta como variable de entorno BASTION_KEY_*_BASE64 (multi-line),
 # y el entrypoint la escribe a un path conocido al iniciar.
