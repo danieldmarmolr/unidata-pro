@@ -307,11 +307,141 @@ H. Documentacion    ███████████████░░░░░
 - **Auth completo:** AUTH-06 (admin reset password)
 - **Analytics interna:** ANL-01..07 (tracking + admin panel)
 - **Hardening:** SEC-02 (rate limit), SEC-03 (2FA), SEC-01 (backups)
+- **People Module Fase 2:** US-12 (Mi perfil enriquecido) - wizard de onboarding rico
 - **Mejoras de producto:** segun feedback de los primeros 5 usuarios
 
 ## Sprint 3+ (mes 2)
 
+- **People Module Fase 3:** US-13 (Discovery + similitudes) - red social interna
+- **People Module Fase 4:** US-14 (Dashboard People Analytics RRHH)
 - **M365 SSO** (reemplaza/coexiste con self-registration)
 - **Read-only DB users** (AWS-02)
 - **PostHog** integration para session replay (opcional)
 - **PDF export** branded
+
+## Mes 3+ (consolidacion)
+
+- **People Module Fase 5:** US-15 (Timeline de hitos), US-16 (Privacidad granular)
+- **Network graph** interactivo
+- **Mentor matching** automatico
+- **Integracion M365 calendar / Azure AD** para auto-fill de perfil
+
+---
+
+## 📚 USER STORIES — People Module (Fase 2-5, diseno guardado)
+
+> Guardado por confirmacion del 2026-05-08. Implementacion arranca **proxima semana**
+> tras anuncio interno y primer feedback de usuarios.
+
+### US-12 — Mi perfil enriquecido
+> **Como** colaborador
+> **Quiero** completar mi perfil con datos profesionales y personales (area, posicion, skills, idiomas, intereses)
+> **Para** que UNIDATA me conecte con colegas similares y RRHH tenga data viva del equipo
+
+**Criterios de aceptacion:**
+- Wizard de onboarding de 3 pasos al primer login (puede saltearse)
+- Pagina `/perfil` editable despues
+- Campos opcionales por defecto, visibilidad granular por campo
+- Catalogos: departments, positions, offices, skills (~50 skills iniciales), languages
+- Default visibility: area + posicion + skills publicos; telefono y datos personales solo a uno mismo + RRHH
+
+**Tasks asociadas:** PEOPLE-01..06
+
+### US-13 — Encontrar colegas similares / red interna
+> **Como** colaborador
+> **Quiero** descubrir colegas con skills o intereses similares
+> **Para** colaborar en proyectos cross-funcionales
+
+**Criterios de aceptacion:**
+- Pagina `/equipo` con cards filtrables por area / skill / oficina
+- Sugerencias "colegas similares a vos" (cosine similarity de skills + areas)
+- Search "quien sabe X en Unistore?"
+- Network graph (D3 o react-force-graph)
+
+**Tasks asociadas:** PEOPLE-07..09
+
+### US-14 — People Analytics (dashboard RRHH)
+> **Como** gerencia de People
+> **Quiero** un dashboard con metricas del equipo
+> **Para** decisiones de talento, capacitacion y retencion basadas en datos
+
+**Criterios de aceptacion:**
+- `/admin/people` accesible para roles `admin` y `gerencia`
+- Headcount por area / modalidad / seniority / tenure
+- Skills heatmap
+- Adopcion UNIDATA por area (engagement)
+- Onboarding funnel
+- Cumpleanios / aniversarios del mes
+- Cross-functional usage (gente de area A consulta data area B)
+
+**Tasks asociadas:** PEOPLE-10..13
+
+### US-15 — Timeline de hitos del colaborador
+> **Como** colaborador y como manager
+> **Quiero** ver una timeline de hitos profesionales (ingreso, promocion, certificaciones)
+> **Para** trayectoria visible y celebrar logros
+
+**Criterios de aceptacion:**
+- Tabla `people_events` con event_type, date, description
+- Feed personal en `/perfil`
+- Feed publico (con visibilidad opt-in) en `/equipo/<user>`
+- Notificaciones in-app de aniversarios
+
+**Tasks asociadas:** PEOPLE-14..16
+
+### US-16 — Privacidad granular
+> **Como** colaborador
+> **Quiero** controlar exactamente que datos mios son visibles a quien
+> **Para** sentir seguridad de aportar mas data sabiendo que la controlo yo
+
+**Criterios de aceptacion:**
+- Toggle por campo: yo / mi equipo / RRHH / todos
+- Audit log: ver quien vio mi perfil y cuando (`profile_access_log`)
+- Boton "Descargar mis datos" -> JSON con todo lo que UNIDATA tiene del user
+- Boton "Borrar mi perfil enriquecido" -> deja al user en estado basico
+- Texto de consentimiento en wizard inicial (cumple Habeas Data Argentina Ley 25.326)
+
+**Tasks asociadas:** PEOPLE-17..19
+
+---
+
+## 🛠 TASKS People Module (PEOPLE-* serie)
+
+### Fase 2: Mi perfil (Sprint 2)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| PEOPLE-01 | 🟡 BACKLOG | Tablas: `departments`, `positions`, `offices`, `skills`, `languages` (catalogos) |
+| PEOPLE-02 | 🟡 BACKLOG | Tabla `user_profiles` (1:1 con users) + `user_skills` + `user_languages` |
+| PEOPLE-03 | 🟡 BACKLOG | Seed inicial de catalogos (50 skills, areas tipicas Unistore) |
+| PEOPLE-04 | 🟡 BACKLOG | Endpoints `GET/PATCH /api/me/profile` + `GET /api/catalogs/*` |
+| PEOPLE-05 | 🟡 BACKLOG | Wizard onboarding 3 pasos al primer login (skipable) |
+| PEOPLE-06 | 🟡 BACKLOG | Pagina `/perfil` editable con visibilidad por campo |
+
+### Fase 3: Discovery (Sprint 3)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| PEOPLE-07 | 🟡 BACKLOG | Algoritmo similarity (cosine sobre skills + areas) |
+| PEOPLE-08 | 🟡 BACKLOG | Pagina `/equipo` con cards + filtros |
+| PEOPLE-09 | 🟡 BACKLOG | Network graph interactivo |
+
+### Fase 4: People Analytics (Sprint 3-4)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| PEOPLE-10 | 🟡 BACKLOG | Endpoints `/api/admin/people/*` (headcount, skills, etc) |
+| PEOPLE-11 | 🟡 BACKLOG | Pagina `/admin/people` con charts |
+| PEOPLE-12 | 🟡 BACKLOG | Cross-functional usage analysis |
+| PEOPLE-13 | 🟡 BACKLOG | Cumpleanios + aniversarios feed |
+
+### Fase 5: Timeline + Privacidad (Sprint 4-5)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| PEOPLE-14 | 🟡 BACKLOG | Tabla `people_events` + endpoints |
+| PEOPLE-15 | 🟡 BACKLOG | Feed timeline en `/perfil` |
+| PEOPLE-16 | 🟡 BACKLOG | Notificaciones in-app de aniversarios |
+| PEOPLE-17 | 🟡 BACKLOG | Audit log de accesos a perfiles + viewer en `/perfil` |
+| PEOPLE-18 | 🟡 BACKLOG | Export "mis datos" (GDPR-style) |
+| PEOPLE-19 | 🟡 BACKLOG | Texto consentimiento + checkbox en onboarding |
