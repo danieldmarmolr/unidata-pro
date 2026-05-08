@@ -1,49 +1,66 @@
-# Ticket Jira — Habilitar acceso de UNIDATA (Railway) a bastions de AWS
+# Ticket Jira — Habilitar acceso de UNIDATA + Unifull (Railway) a bastions de AWS
 
-> Ticket único y autocontenido para que el data engineer haga **un solo cambio** y UNIDATA quede en producción sin más fricción.
+> Ticket consolidado: **un solo cambio en AWS** que habilita los **dos
+> proyectos del grupo en Railway** (UNIDATA y Unifull `crm-kommo-sync`).
+> Se aprovecha que ambos comparten la misma IP estatica de salida.
 
 ---
 
 ## Project / Tipo
+
 - **Project:** Infra / DevOps
 - **Issue Type:** Task
 - **Priority:** Medium-High
-- **Componente:** AWS / Networking / Security Groups
-- **Etiquetas:** `unidata`, `bastion`, `security-group`, `production`, `railway`
+- **Componente:** AWS / Networking / Security Groups + Database
+- **Etiquetas:** `unidata`, `unifull`, `kommo`, `bastion`, `security-group`, `production`, `railway`
 
 ---
 
 ## Title (Summary)
 
-`[UNIDATA] Allowlistar IP estatica de Railway en SG de bastions Unistore + Unidrop`
+`[UNIDATA + Unifull] Allowlistar IP estatica de Railway en SG de bastions + crear read-only user para Unifull`
 
 ---
 
 ## Contexto
 
-Estamos lanzando **UNIDATA** — plataforma interna de analitica del grupo Unistore (FastAPI + Next.js, deployada en Railway).
+Estamos lanzando dos proyectos del grupo en Railway que necesitan acceder a
+las BBDD productivas a traves de los bastions SSH ya existentes:
 
-El backend necesita conectarse a las 3 BBDD productivas (`unistore_api`, `unidrop`, `unidev`) **a traves de los bastions SSH ya existentes** (mismo path que cuando un dev se conecta con DBeaver). No estamos pidiendo:
+1. **UNIDATA** (Daniel Marmol) — plataforma de analitica interna del grupo Unistore (FastAPI + Next.js).
+   Lee datos productivos para dashboards, drilldowns y editor SQL libre.
+
+2. **Unifull `crm-kommo-sync`** (equipo Unifull) — integracion automatizada que
+   sincroniza datos del grupo con Kommo CRM. Read-only.
+
+**Hallazgo clave:** Railway asigna las "Static Outbound IPs" en pool **shared**
+por region. Ambos proyectos en `us-west-2` salen por la **misma IP**:
+
+```
+IP: 162.220.232.99/32
+```
+
+Esto significa que **una sola regla** en cada SG cubre los **dos proyectos**.
+
+No estamos pidiendo:
 - Hacer las RDS publicas
-- Cambiar passwords
-- Tocar las BBDD
-- Crear users nuevos
-
-Solo necesitamos que **una IP fija** (la de salida de Railway) este allowlistada en los Security Groups de los 2 bastions.
-
-Este patron es el mismo que ya se uso para otros productos del grupo desplegados en Railway.
+- Cambiar passwords de prod
+- Tocar las BBDD existentes
+- Crear users nuevos en sistemas externos
 
 ---
 
 ## Recursos involucrados
 
 ### Bastion 1 — Unistore (sirve tambien para Unidev, misma instancia EC2)
+
 - **IP publica:** `3.139.209.227`
 - **Region:** `us-east-2` (Ohio)
 - **RDS detras:** `unistore-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com`
 - **DBs accedidas:** `unistore_api`, `unidev`
 
 ### Bastion 2 — Unidrop
+
 - **IP publica:** `18.191.119.38`
 - **Region:** `us-east-2` (Ohio)
 - **RDS detras:** `unidrop-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com`
@@ -51,19 +68,24 @@ Este patron es el mismo que ya se uso para otros productos del grupo desplegados
 
 ---
 
-## Que se pide
+## Que se pide — 2 cambios
 
-Agregar **una sola regla de inbound** (SSH/22/TCP) en cada uno de los 2 Security Groups de los bastions, con la IP estatica de Railway como source.
+### Parte 1: Allowlist de IP (cubre UNIDATA + Unifull en una sola regla)
 
-### IP a allowlistar
+Agregar **una regla de inbound** (SSH/22/TCP) en cada uno de los 2 SG de los
+bastions, con la IP estatica de Railway como source.
+
+#### IP a allowlistar
 
 ```
 162.220.232.99/32
 ```
 
-> Esta IP esta asignada a UNIDATA backend en Railway via la feature **Static Outbound IPs** (plan Pro). No cambia salvo que el servicio se elimine y se recree.
+> Esta IP esta asignada al pool shared us-west-2 de Railway Pro plan. Cubre
+> UNIDATA backend y Unifull crm-kommo-sync simultaneamente. No cambia salvo
+> que ambos servicios se eliminen del plan Pro.
 
-### Regla concreta (en cada SG)
+#### Regla concreta (en cada SG)
 
 | Campo | Valor |
 |---|---|
@@ -71,21 +93,61 @@ Agregar **una sola regla de inbound** (SSH/22/TCP) en cada uno de los 2 Security
 | Protocol | TCP |
 | Port range | 22 |
 | Source | `162.220.232.99/32` |
-| Description | `Railway UNIDATA backend - Daniel Marmol` |
+| Description | `Railway shared IP - UNIDATA + Unifull (crm-kommo-sync)` |
+
+### Parte 2: User PostgreSQL read-only para Unifull
+
+Esto es exclusivo de Unifull (UNIDATA usa users distintos por ahora).
+
+Crear un user dedicado **read-only** en RDS Unistore (donde viven `unistore_api`
+y `unidev`) con permisos solo `SELECT` sobre las tablas que la integracion
+Kommo necesita (a coordinar con dev de Unifull cuales son).
+
+#### Comando esperado
+
+```sql
+-- Generar password fuerte y guardarla en vault del grupo
+CREATE USER unifull_readonly WITH PASSWORD '<PASSWORD>';
+
+GRANT CONNECT ON DATABASE unistore_api TO unifull_readonly;
+GRANT USAGE ON SCHEMA public TO unifull_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO unifull_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT ON TABLES TO unifull_readonly;
+
+-- Si Kommo necesita data de Unidrop tambien, repetir en su RDS:
+-- (a confirmar con equipo Unifull antes de aplicar)
+```
+
+#### Output esperado
+
+Connection string formato:
+
+```
+postgresql://unifull_readonly:<password>@<rds-endpoint>:5432/unistore_api?sslmode=require
+```
+
+Mauro la entrega a Daniel por canal seguro (Vault / 1Password / DM cifrado).
+Daniel se la pasa al equipo de Unifull para que la guarden como env var en
+Railway.
 
 ---
 
 ## Que NO se toca
 
-- RDS Postgres (siguen privadas dentro de la VPC)
-- Users/passwords de Postgres
-- Llaves SSH de los bastions
-- Cualquier recurso productivo de Unistore.com / Unidrop.com / paneles internos
+- BBDD de produccion de Unistore.com / Unidrop.com / paneles internos
+- Llaves SSH de los bastions (los devs ya las tienen)
+- Configuracion del bastion EC2 mas alla del SG
+- Recursos productivos de los e-commerces
 - Costos / billing de la cuenta AWS
+- Users de UNIDATA (siguen usando los users de prod existentes hasta que
+  hagamos AWS-02 / read-only dedicado para UNIDATA en otro ticket)
 
 ---
 
 ## Pasos detallados (para el data engineer)
+
+### Para Parte 1 (allowlist) — ~5-10 min
 
 1. Login en https://console.aws.amazon.com -> cuenta AWS de Unistore -> region **us-east-2 (Ohio)**.
 2. **EC2** -> **Instances** -> filtrar por IP publica `3.139.209.227`.
@@ -93,75 +155,143 @@ Agregar **una sola regla de inbound** (SSH/22/TCP) en cada uno de los 2 Security
 4. Tab **Inbound rules** -> **Edit inbound rules** -> **Add rule**:
    - Type: `SSH`
    - Source: `Custom` -> `162.220.232.99/32`
-   - Description: `Railway UNIDATA backend - Daniel Marmol`
+   - Description: `Railway shared IP - UNIDATA + Unifull (crm-kommo-sync)`
 5. **Save rules**. Anotar el ID de la regla creada (`sgr-xxxxxx`).
 6. Repetir 2-5 para la instancia con IP `18.191.119.38`.
-7. Comentar en el ticket con los IDs de las reglas.
-8. Avisar a Daniel para validacion end-to-end.
+
+### Para Parte 2 (user read-only Unifull) — ~3-5 min
+
+7. Conectar a la RDS Unistore como superuser.
+8. Generar password fuerte (ej `openssl rand -base64 24`).
+9. Correr el bloque SQL del `CREATE USER` arriba.
+10. Validar:
+    ```sql
+    \du unifull_readonly
+    -- Debe aparecer SIN atributos de Superuser, Createrole, etc.
+    ```
+11. Build de la connection string final con la password.
+12. Entregar a Daniel por canal seguro.
+
+### Final
+
+13. Comentar en el ticket con: IDs de las 2 reglas SG creadas + confirmacion
+    de creacion de user.
+14. Avisar a Daniel para validacion end-to-end.
 
 ---
 
-## Verificacion (la hace Daniel desde Railway)
+## Verificacion
 
-1. Backend Railway: `https://backend-production-c1ee.up.railway.app/api/health` -> debe seguir devolviendo `{"status":"ok"}`.
-2. Login: `daniel.marmol@unistore.ar` / `unidata2026.` -> emite JWT.
-3. `GET /api/sources/unistore/schemas` con el JWT -> deberia devolver lista de schemas reales (no timeout). **Esto es el smoke test que confirma que el bastion deja pasar.**
-4. Frontend `https://frontend-production-7d1c.up.railway.app/` -> dashboard con datos de hoy (no ceros).
+### Smoke test UNIDATA (lo hace Daniel desde Railway)
+
+1. `GET https://backend-production-c1ee.up.railway.app/api/health` -> `{"status":"ok"}`.
+2. Login con admin -> JWT emitido.
+3. `GET /api/sources/unistore/schemas` con JWT -> deberia devolver lista de
+   schemas reales (no timeout). **Smoke test que confirma que el bastion deja pasar.**
+4. Frontend muestra dashboards con datos reales (no ceros).
+
+### Smoke test Unifull (lo hace equipo Unifull)
+
+1. Setear `DATABASE_URL` con la connection string nueva en Railway crm-kommo-sync.
+2. Conectar y correr `SELECT current_user, current_database();` -> debe devolver
+   `unifull_readonly`.
+3. Intentar un `INSERT INTO ...` -> debe **fallar con permission denied** (confirma read-only).
+4. Probar query real de la integracion Kommo -> debe devolver datos.
 
 ---
 
 ## Criterios de aceptacion
 
-- [ ] Regla agregada en SG del bastion Unistore (`3.139.209.227`)
-- [ ] Regla agregada en SG del bastion Unidrop (`18.191.119.38`)
-- [ ] Smoke test desde Railway pasa (`/api/sources/unistore/schemas` devuelve datos)
-- [ ] Comentario en el ticket con los IDs de las 2 reglas
+- [ ] Regla SG agregada en bastion Unistore (`3.139.209.227`)
+- [ ] Regla SG agregada en bastion Unidrop (`18.191.119.38`)
+- [ ] User `unifull_readonly` creado en RDS Unistore (y opcional Unidrop si Kommo lo necesita)
+- [ ] Connection string entregada a Daniel por canal seguro
+- [ ] Smoke test UNIDATA pasa: `/api/sources/unistore/schemas` devuelve datos
+- [ ] Smoke test Unifull pasa: `unifull_readonly` puede SELECT pero no INSERT
+- [ ] Comentario en el ticket con los IDs de las reglas + confirmacion del user
 
 ---
 
 ## Plan de rollback
 
-Eliminar las 2 reglas. Sin impacto en producciones existentes — solo deja a UNIDATA sin acceso a las BBDD hasta que se reaplique.
+| Cambio | Rollback |
+|---|---|
+| Regla SG | Eliminar la regla del SG. ~30 segundos. |
+| User PostgreSQL | `REVOKE` permisos + `DROP USER unifull_readonly;`. ~1 min. |
+
+Sin impacto en UNIDATA ni en Unifull pre-existente — solo deja a los proyectos
+sin acceso temporalmente hasta reaplicar.
 
 ---
 
 ## Notas de seguridad
 
-1. **Source `/32` (single host)**, NO `0.0.0.0/0`. Solo Railway puede entrar.
-2. La conexion sigue requiriendo la **llave privada** `.pem` del bastion para autenticarse. El SG es el primer filtro, no el unico.
-3. La IP de Railway esta fijada via su feature **Static Outbound IP** (paga). No deberia cambiar nunca. Si en el futuro Daniel migra la cuenta o cambia el plan, mandara nuevo ticket.
-4. **Mejora futura (no para este ticket):** crear un user PostgreSQL **read-only** dedicado para UNIDATA en cada DB. Hoy estamos usando los users de produccion existentes, lo que es subóptimo. Daniel armara ticket aparte cuando este lo cierre.
+1. **Source `/32` (single host), NO `0.0.0.0/0`.** Solo Railway puede entrar
+   por SSH al bastion.
+
+2. **La conexion SSH sigue requiriendo la llave privada `.pem`** del bastion
+   para autenticarse. El SG es el primer filtro, no el unico.
+
+3. **IP shared es estable mientras los proyectos sigan en Railway Pro / us-west-2.**
+   Si cambian de plan o migran de region, hay que reabrir ticket.
+
+4. **Mejora futura (no para este ticket):** UNIDATA hoy usa los users de prod
+   (`unistore`, `unidrop`). Crear users read-only dedicados para UNIDATA tambien
+   es buena practica — esta planificado como AWS-02 en `docs/PLAN_JIRA.md`.
+
+5. **Aislamiento entre proyectos:** UNIDATA y Unifull son sistemas distintos
+   con users distintos en la DB. Cada uno tiene su audit log separado. No
+   comparten data ni credentials a nivel de aplicacion — solo comparten la
+   IP de salida (que es shared por arquitectura de Railway).
+
+6. **Habeas Data:** ambos proyectos solo procesan datos del grupo Unistore.
+   No transmiten data a terceros sin proceso interno acordado.
 
 ---
 
-## Tiempo estimado
+## Tiempo estimado total
 
-- Ejecucion del data engineer: **5-10 min**
-- Validacion end-to-end con Daniel: **5 min**
+- Parte 1 (allowlist en 2 SG): **5-10 min**
+- Parte 2 (user read-only + entrega connection string): **3-5 min**
+- Total: **~10-15 min**
 
 ---
 
 ## Asignacion
 
-- **Reporter:** Daniel Marmol (`daniel.marmol@unistore.ar`)
+- **Reporter:** Daniel Marmol (`daniel.marmol@unistore.ar`) — coordinando ambos proyectos
 - **Assignee:** Mauro Candia / Data Engineer con acceso AWS Console de Unistore
-- **Watchers:** Equipo Producto / Gerencia (opcional)
+- **Watchers:** Equipo Unifull, Equipo Producto, Gerencia (opcional)
 
 ---
 
-## FAQ del ticket (preguntas que el data engineer puede tener)
+## FAQ del ticket
 
-**Q: Esto es lo mismo que se hizo para [otro producto en Railway]?**
-A: Si, es el mismo patron exacto. UNIDATA no introduce nada nuevo de seguridad respecto al precedente.
+**Q: Por que la misma IP para los dos proyectos?**
+A: Railway asigna Static Outbound IPs en pool **shared** por region en plan Pro.
+Cualquier proyecto del grupo en us-west-2 con esa feature usa la misma IP. No
+hay forma de pedir IPs separadas en este plan, y tampoco aporta seguridad
+adicional — el control de acceso real esta en SSH key + DB user.
 
-**Q: La IP de Railway puede cambiar?**
-A: No. Daniel activa **Static Outbound IP** (paga, ~USD 5/mes) en Railway que garantiza que la IP queda fija. Si por alguna razon Railway la rota, Daniel abre nuevo ticket — pero no se espera que pase.
+**Q: Que pasa si manana sumamos un tercer proyecto del grupo en Railway?**
+A: Si esta en us-west-2 con Static Outbound IP -> usa la misma IP, no hace
+falta cambiar nada en el SG. Si esta en otra region -> nuevo ticket con
+nueva IP.
 
-**Q: Por que no hacer la RDS publica con whitelist directo?**
-A: Porque exponer Postgres directo a internet (aun con whitelist) es peor postura de seguridad que mantener el bastion SSH como gate. El bastion ya existe, ya esta endurecido, y este es su uso natural.
+**Q: Por que no usar el mismo user para los dos proyectos?**
+A: Principio de menor privilegio + auditoria limpia. Si Unifull genera trafico
+sospechoso, podemos rastrearlo a su user; idem UNIDATA. Mezclar users hace
+imposible distinguir quien hizo que.
 
-**Q: Necesitan acceso al bastion como root?**
-A: No. Solo SSH al user `ec2-user` con la llave que Daniel ya tiene. Mismo flujo que un dev abriendo DBeaver.
+**Q: Por que UNIDATA no pide tambien user read-only en este ticket?**
+A: UNIDATA hoy ya esta funcionando con los users de prod existentes (lo
+heredamos asi). Mejorarlo a read-only dedicado esta planificado en otro ticket
+(AWS-02). Lo separamos para no agrandar este ticket. Ese si es discusion
+mas larga porque hay que listar todas las tablas que UNIDATA consulta.
 
-**Q: Esto requiere cambios en los .pem o llaves?**
-A: No. Cero cambios en llaves, cero cambios en passwords, cero cambios en RDS.
+**Q: La regla SG sigue funcionando si la IP cambia?**
+A: Si Railway cambia la IP shared (cosa rara pero posible si reorganizan su
+infra), la regla con `162.220.232.99/32` deja de funcionar y los dos proyectos
+caen al mismo tiempo. Daniel se entera por monitoreo y abre ticket
+de actualizacion. En ~3 anos de uso de Railway por la comunidad, este tipo
+de cambios es excepcional.
