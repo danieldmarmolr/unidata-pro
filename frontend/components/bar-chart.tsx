@@ -60,7 +60,7 @@ export function HBarChart({
           />
           <Tooltip
             cursor={{ fill: "#f5f0fb" }}
-            formatter={(v: number) => [fmt(v), ""]}
+            formatter={(v: unknown) => [fmt(Number(v) || 0), ""] as [string, string]}
           />
           <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={18}>
             {data.map((_, i) => (

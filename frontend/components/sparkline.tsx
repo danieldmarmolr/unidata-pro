@@ -57,7 +57,7 @@ export function DailyRevenueChart({
             tickFormatter={tickFmt}
           />
           <Tooltip
-            formatter={(v: number) => [formatCurrency(v), "Revenue"]}
+            formatter={(v: unknown) => [formatCurrency(Number(v) || 0), "Revenue"] as [string, string]}
             labelFormatter={(d) => new Date(d).toLocaleDateString("es-AR")}
           />
           <Area
