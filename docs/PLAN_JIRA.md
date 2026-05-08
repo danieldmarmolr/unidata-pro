@@ -1,200 +1,317 @@
-# UNIDATA — Plan de tickets Jira
+# UNIDATA — Plan Jira
 
-Plan separado por epic / categoria, con tickets listos para que tu agente los expanda. Foco: **acciones, pruebas, deploy**. Sin sobre-detalle.
-
----
-
-## EPIC 1 — Infraestructura cloud (deploy base)
-
-### [INFRA-01] Setup workspace Railway + Pro Plan
-**Estado:** ✅ HECHO
-**Resumen:** Workspace creada en Railway, upgrade a Pro plan ($20/mes) para acceder a Static Outbound IPs.
-**Pruebas:** N/A — verificable en `https://railway.com/account/plans`.
-
-### [INFRA-02] Crear servicios backend + frontend en Railway (proyecto unidata-pro)
-**Estado:** ✅ HECHO
-**Resumen:** Dos servicios en una misma project: `backend` (FastAPI, Dockerfile) y `frontend` (Next.js 16, Dockerfile multi-stage). Monorepo con `--path-as-root`.
-**Pruebas:** Ambos servicios `Online` en `railway status`.
-
-### [INFRA-03] Static Outbound IP en backend
-**Estado:** ✅ HECHO
-**Resumen:** Toggle activado, redeploy hecho, IP fija asignada.
-**IP asignada:** `162.220.232.99` (region us-west-2)
-**Pruebas:** `GET /api/_meta/outbound-ip` devuelve la IP fija.
-
-### [INFRA-04] Volumen persistente para datos de la app
-**Estado:** ⚠️ TRANSITORIO — se elimina en EPIC 4
-**Resumen:** Volumen 1GB montado en `/app/data` (hoy aloja `users.db`, `costs.db`, `audit.db` de SQLite).
-**Nota:** se desmonta cuando migremos a Supabase.
-
-### [INFRA-05] Variables de entorno backend (27 vars)
-**Estado:** ✅ HECHO
-**Resumen:** JWT_SECRET, ADMIN_*, ALLOWED_ORIGINS, BASTION_* y PROD_DB_* para Unistore/Unidev/Unidrop. Llaves SSH inyectadas como base64.
-**Pruebas:** App arranca sin KeyError.
-
-### [INFRA-06] Variables de entorno frontend
-**Estado:** ✅ HECHO
-**Resumen:** `NEXT_PUBLIC_API_URL` apuntando al backend de Railway.
+> **Estructura:** un solo Epic (UNIDATA) que contiene User Stories (lo que la herramienta permite a los usuarios) y Tasks tecnicas (implementacion). Los User Stories son la vista de producto; los Tasks son la vista de ingenieria. Cada US se cumple con uno o mas Tasks.
 
 ---
 
-## EPIC 2 — AWS / Networking (allowlist bastions)
+# 🎯 EPIC — UNIDATA: Plataforma de Analitica Interna del Grupo Unistore
 
-### [AWS-01] Ticket a Mauro: allowlistar IP de Railway en SG de bastions
-**Estado:** 🔴 PENDIENTE — accion del usuario
-**Resumen:** Agregar regla inbound SSH/22 con source `162.220.232.99/32` en los 2 SG:
-- Bastion Unistore: `3.139.209.227`
-- Bastion Unidrop:  `18.191.119.38`
-**Asignado a:** Mauro Candia (data engineer)
-**Detalle completo:** `docs/TICKET_AWS_BASTION.md`
-**Pruebas (las hace Daniel post-allowlist):**
-- `GET /api/sources/unistore/schemas` con JWT devuelve lista (no timeout)
-- Idem `/api/sources/unidrop/schemas`
+**Objetivo:** habilitar a colaboradores de Unistore / Unidev / Unidrop a consultar datos productivos de forma autoservicio, segura y auditable, sin necesidad de pedir reportes al equipo de datos.
 
-### [AWS-02] (Opcional, futuro) Crear users PostgreSQL read-only en cada DB
-**Estado:** 🟡 BACKLOG
-**Resumen:** Hoy UNIDATA usa los users de produccion (`unistore`, `unidrop`). Pedir a Mauro crear users dedicados con permisos `SELECT-only` para reducir riesgo.
-**Pruebas:** intento `INSERT` desde UNIDATA debe fallar con permission denied.
+**Owner:** Daniel Marmol
+**Stakeholders:** Gerencia, Analistas, Equipo IT (Mauro Candia)
+**Stack:** FastAPI (Python) + Next.js 16 + PostgreSQL (Supabase) + Railway + AWS RDS (read-only)
 
 ---
 
-## EPIC 3 — Persistencia propia de UNIDATA (migrar SQLite -> Supabase Postgres)
+## 📚 USER STORIES — Lo que UNIDATA permite
 
-### [DB-01] Crear proyecto Supabase
-**Estado:** 🔴 PENDIENTE — accion del usuario
-**Resumen:** Cuenta Supabase free tier, region West US (proximidad con Railway us-west-2).
-**Output:** `DATABASE_URL` de Postgres (puerto 6543, pooler) entregada al equipo backend.
+### US-01 — Login a la plataforma
+> **Como** colaborador de Unistore
+> **Quiero** loguearme con mi mail corporativo y password
+> **Para** acceder a los dashboards segun mi rol
 
-### [DB-02] Refactor `users_db.py` de SQLite a Postgres
-**Estado:** 🔴 PENDIENTE
-**Cambios principales:**
-- `sqlite3` -> `psycopg2`
-- Parametros `?` -> `%s`
-- `INTEGER PRIMARY KEY AUTOINCREMENT` -> `BIGSERIAL PRIMARY KEY`
-- `COLLATE NOCASE` -> indice `LOWER(email)` o `CITEXT`
-- Migracion inicial idempotente al boot
-**Pruebas:**
-- Login con `daniel.marmol@unistor.ar` despues del redeploy
-- Crear usuario nuevo desde Admin -> persiste tras redeploy
-- Constraint UNIQUE en email funciona (intentar duplicado falla)
+**Criterios de aceptacion:**
+- Login con email + password contra `users` en Supabase
+- JWT emitido valido por 12 hs
+- Roles: `admin`, `gerencia`, `analista`, `lector`, `user`
+- Lockout suave despues de 5 intentos fallidos (Sprint 2)
 
-### [DB-03] Refactor `costs_db.py` de SQLite a Postgres
-**Estado:** 🔴 PENDIENTE
-**Cambios:** mismo patron que DB-02.
-**Pruebas:** crear/editar/borrar costo desde UI, persiste tras redeploy.
-
-### [DB-04] Refactor `audit.py` (servicio audit log) de SQLite a Postgres
-**Estado:** 🔴 PENDIENTE
-**Cambios:** mismo patron.
-**Pruebas:** correr una query desde la UI, verificar entry en tabla `audit_log` con timestamp + user + sql.
-
-### [DB-05] Setear `DATABASE_URL` en Railway + redeploy
-**Estado:** 🔴 PENDIENTE
-**Pruebas:** logs muestran `engine connected to postgres` (no a sqlite). Endpoints leen/escriben en Supabase.
-
-### [DB-06] Limpieza: remover volumen Railway + symlinks SQLite en entrypoint
-**Estado:** 🔴 PENDIENTE
-**Cambios:** quitar `ln -sf` del `entrypoint.sh`, eliminar volumen del servicio backend en Railway.
-**Pruebas:** redeploy sin volumen, app arranca normal.
+**Tasks asociadas:** AUTH-01, AUTH-02, INFRA-05
 
 ---
 
-## EPIC 4 — Hardening produccion (post go-live)
+### US-02 — Registrarme con mi mail @unistor.ar
+> **Como** colaborador nuevo
+> **Quiero** registrarme yo solo en UNIDATA con mi mail corporativo
+> **Para** no tener que esperar que el admin me cree la cuenta
 
-### [SEC-01] Backups automaticos diarios de Supabase
-**Estado:** 🟡 BACKLOG
-**Resumen:** Supabase free tier hace backups diarios automaticos por defecto, validar que esten activos. Pro tier extiende retencion.
-**Pruebas:** validar en panel Supabase que hay snapshot reciente.
+**Criterios de aceptacion:**
+- Form `/register` valida que email termine en `@unistor.ar`
+- Crea cuenta con rol default `lector` (admin puede promover despues)
+- Primer login obliga a setear password
+- Si el email ya existe -> mensaje claro de "usa /login"
 
-### [SEC-02] Rate limiting en `/api/auth/login`
-**Estado:** 🟡 BACKLOG
-**Resumen:** 5 intentos / 5 min por IP en login. Libreria: `slowapi`.
-**Pruebas:** 6 intentos seguidos → 429 Too Many Requests.
+**Tasks asociadas:** AUTH-03, AUTH-04, AUTH-05, AUTH-06
 
-### [SEC-03] 2FA para roles `admin`
-**Estado:** 🟡 BACKLOG
-**Resumen:** TOTP con `pyotp`, QR para enrolarse.
-**Pruebas:** admin no puede loguearse sin segundo factor.
-
-### [SEC-04] Rotar `JWT_SECRET` y passwords expuestas en chat
-**Estado:** 🟡 BACKLOG (recordatorio)
-**Resumen:** Las credenciales productivas (`unistore` / `UyMLpZzxwfuS`, etc.) fueron compartidas en chat. Rotarlas con Mauro.
-
-### [SEC-05] HTTPS forzado + headers de seguridad
-**Estado:** ✅ Auto (Railway provee HTTPS por default). Validar headers HSTS / CSP.
+**Migracion futura:** integracion con Microsoft 365 SSO (Sprint 3+).
 
 ---
 
-## EPIC 5 — Smoke tests + Go-live
+### US-03 — Ver KPIs de "Hoy" en las 3 unidades de negocio
+> **Como** analista o gerente
+> **Quiero** ver los KPIs del dia (ventas, ordenes, clientes activos) de Unistore, Unidev y Unidrop
+> **Para** saber el pulso del negocio en tiempo real
 
-### [TEST-01] Smoke test: backend health + login
-**Estado:** ✅ HECHO
-**Pruebas verificadas:**
-- `/api/health` -> `{"status": "ok"}`
-- Login devuelve JWT valido
+**Criterios de aceptacion:**
+- Dashboard "HOY" con tiles segmentadas por unidad
+- Datos en vivo desde RDS (via SSH tunnel + bastions)
+- Refresh manual + auto cada 60s
+- Comparacion vs ayer / vs mismo dia semana anterior
 
-### [TEST-02] Smoke test: endpoints que tocan BBDD via SSH (post-AWS allowlist)
-**Estado:** 🔴 BLOQUEADO por AWS-01
-**Pruebas:**
-- `/api/sources/unistore/schemas` con JWT -> lista real
-- `/api/sources/unidrop/schemas` con JWT -> lista real
-- Dashboard "HOY" del frontend muestra valores no-cero
-- Mapa Argentina renderiza con 24 provincias y datos
-
-### [TEST-03] Smoke test: persistencia post-Supabase
-**Estado:** 🔴 BLOQUEADO por DB-05
-**Pruebas:**
-- Crear usuario nuevo desde Admin
-- Redeploy del backend
-- Usuario sigue existiendo y puede loguearse
-- Audit log muestra registros viejos
-
-### [TEST-04] Remover endpoint diagnostico `/api/_meta/outbound-ip`
-**Estado:** 🔴 PENDIENTE — al final
-**Resumen:** se agrego solo para descubrir la IP. Sacar antes del lanzamiento.
-
-### [TEST-05] Go-live: anuncio interno + onboarding primeros usuarios
-**Estado:** 🔴 PENDIENTE
-**Pruebas:** 2-3 usuarios reales (gerencia / analistas) acceden a paneles segmentados por rol.
+**Tasks asociadas:** AWS-01, INFRA-05, INFRA-06, DB-* (acceso a engines.py)
 
 ---
 
-## EPIC 6 — Documentacion
+### US-04 — Filtrar metricas por rango de fechas
+> **Como** analista
+> **Quiero** elegir periodos custom (hoy / ultimos 7d / mes / custom)
+> **Para** comparar evolucion temporal
 
-### [DOC-01] Guia de deploy actualizada
-**Estado:** ✅ HECHO -> `docs/DEPLOY.md`
+**Criterios de aceptacion:**
+- Selector de rango global que afecta todos los dashboards
+- TZ siempre AR (UTC-3)
+- Persistencia del filtro en sessionStorage
 
-### [DOC-02] Guia para equipo Unifull (proyecto paralelo en Railway)
-**Estado:** ✅ HECHO -> `docs/GUIA_UNIFULL_AWS_RAILWAY.md`
-
-### [DOC-03] Ticket AWS bastion para Mauro
-**Estado:** ✅ HECHO -> `docs/TICKET_AWS_BASTION.md`
-
-### [DOC-04] README operativo
-**Estado:** 🟡 PENDIENTE — refrescar para que indique los pasos post go-live (rotacion creds, agregar usuarios, ver logs).
+**Tasks asociadas:** ya implementado en frontend (verificar)
 
 ---
+
+### US-05 — Hacer drilldown sobre una metrica
+> **Como** analista
+> **Quiero** clickear sobre cualquier numero del dashboard
+> **Para** ver el detalle de las filas que lo componen
+
+**Criterios de aceptacion:**
+- Drilldowns disponibles: ordenes, productos, clientes, provincias, payment accounts
+- Cada drilldown abre un modal con tabla paginada
+- Click en order_id linkea a `unistore8.mitiendanube.com/admin/orders/...`
+
+**Tasks asociadas:** endpoints `/api/drilldowns/*` ya implementados
+
+---
+
+### US-06 — Resumen ejecutivo de ventas
+> **Como** gerente
+> **Quiero** un dashboard "Ventas" con totales / margenes / rentabilidad
+> **Para** tomar decisiones sin pedir reportes ad-hoc
+
+**Criterios de aceptacion:**
+- Dashboard `Ventas` accesible para roles `admin`, `gerencia`, `analista`
+- Lectores no tienen acceso (segmentacion por rol)
+- Mapa Argentina con 24 provincias coloreadas por volumen
+
+**Tasks asociadas:** ya implementado, falta validar post-allowlist
+
+---
+
+### US-07 — Exportar resultados a CSV o PDF
+> **Como** cualquier usuario
+> **Quiero** descargar la tabla actual a CSV / Excel / PDF
+> **Para** compartir con stakeholders externos
+
+**Criterios de aceptacion:**
+- Boton "Exportar" en cada tabla
+- CSV abre bien en Excel con encoding correcto
+- PDF respeta branding de Unistore
+
+**Tasks asociadas:** ya implementado para CSV; PDF parcial
+
+---
+
+### US-08 — Gestionar usuarios y roles (admin)
+> **Como** admin
+> **Quiero** crear, editar, desactivar usuarios y asignar roles
+> **Para** controlar quien accede a que
+
+**Criterios de aceptacion:**
+- Pagina `/admin/usuarios` accesible solo a admins
+- CRUD completo de users
+- Reset de password (manda al user al flujo de set-initial)
+- Ver estado: activo / pendiente de password / desactivado
+
+**Tasks asociadas:** ya implementado (CRUD basico) + AUTH-06 (estado pendiente)
+
+---
+
+### US-09 — Ver analytics de uso de UNIDATA
+> **Como** admin
+> **Quiero** ver como los colaboradores usan UNIDATA
+> **Para** entender adopcion, descubrir features no usadas, planear mejoras
+
+**Criterios de aceptacion:**
+- Pagina `/admin/analytics` accesible solo a admins
+- Top users / top dashboards / funnel login->drilldown->export
+- Lista de descargas con user, fecha, archivo
+- Filtro de rango: 7d / 30d / 90d
+
+**Tasks asociadas:** ANL-01..07 (Sprint 2)
+
+---
+
+### US-10 — Correr SQL ad-hoc (read-only)
+> **Como** analista
+> **Quiero** un editor SQL libre con limite de tiempo y solo `SELECT`
+> **Para** responder preguntas que no estan en los dashboards
+
+**Criterios de aceptacion:**
+- Pagina `/queries` con editor + tabla de resultados
+- Solo permite `SELECT` y `WITH` (DML/DDL bloqueados a nivel parser)
+- Statement timeout 30s
+- Cada query queda en audit log con user + sql + duracion
+
+**Tasks asociadas:** ya implementado (`/api/queries/*`)
+
+---
+
+### US-11 — Saber que mis acciones quedan auditadas
+> **Como** colaborador con permisos sensibles
+> **Quiero** que cada query y descarga quede registrada
+> **Para** auditoria y compliance interna
+
+**Criterios de aceptacion:**
+- Tabla `query_runs` en Supabase con user, sql, ts, rows, duration_ms
+- Admin ve audit log via `/admin/auditoria`
+- Retencion: 1 ano (cron mensual borra mas viejos)
+
+**Tasks asociadas:** ya implementado para queries; ANL-04 agrega downloads
+
+---
+
+## 🛠 TASKS TECNICAS
+
+> Agrupadas por area. Cada task asociada a una o mas US arriba.
+
+### A. Infraestructura cloud (deploy base)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| INFRA-01 | ✅ DONE | Workspace Railway + upgrade a Pro plan |
+| INFRA-02 | ✅ DONE | Crear servicios `backend` (FastAPI) y `frontend` (Next.js) |
+| INFRA-03 | ✅ DONE | Static Outbound IP en backend (`162.220.232.99`, us-west-2) |
+| INFRA-04 | 🟡 TRANSITORIO | Volumen `/app/data` (legacy SQLite, removable post-migracion) |
+| INFRA-05 | ✅ DONE | 27 env vars del backend (JWT, ADMIN_*, BASTION_*, PROD_DB_*) |
+| INFRA-06 | ✅ DONE | `NEXT_PUBLIC_API_URL` del frontend apuntando al backend |
+| INFRA-07 | ✅ DONE | Dockerfile multistage + `railway.json` con healthcheck 300s |
+
+### B. AWS Networking
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| AWS-01 | 🔴 EN MAURO | Allowlistar `162.220.232.99/32` en SG bastions Unistore + Unidrop. Ticket en `docs/TICKET_AWS_BASTION.md` |
+| AWS-02 | 🟡 BACKLOG | Crear users PostgreSQL **read-only** dedicados para UNIDATA (hoy se usan los users de prod) |
+| AWS-03 | 🟡 BACKLOG | (Opcional) Coordinar habilitacion conjunta para Unifull (`docs/GUIA_UNIFULL_AWS_RAILWAY.md`) |
+
+### C. Persistencia propia (Supabase Postgres)
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| DB-01 | ✅ DONE | Crear proyecto Supabase `unidata-pro` (free tier, us-west-1) |
+| DB-02 | ✅ DONE | Refactor `users_db.py` SQLite -> Postgres |
+| DB-03 | ✅ DONE | Refactor `costs_db.py` SQLite -> Postgres |
+| DB-04 | ✅ DONE | Refactor `audit.py` SQLite -> Postgres |
+| DB-05 | 🟠 EN PROGRESO | Setear `DATABASE_URL` en Railway + redeploy (URL pooler IPv4) |
+| DB-06 | 🔴 PENDIENTE | Cleanup volumen Railway + symlinks SQLite del entrypoint |
+
+### D. Autenticacion (MVP V1)
+
+| ID | Estado | Descripcion | US |
+|---|---|---|---|
+| AUTH-01 | ✅ DONE | Login con email/password + JWT 12h | US-01 |
+| AUTH-02 | ✅ DONE | Seed admin desde `ADMIN_EMAIL`/`ADMIN_PASSWORD` | US-01 |
+| AUTH-03 | 🔴 MVP V1 | Endpoint `POST /api/auth/register` con dominio `@unistor.ar` | US-02 |
+| AUTH-04 | 🔴 MVP V1 | Endpoint `POST /api/auth/set-initial-password` | US-02 |
+| AUTH-05 | 🔴 MVP V1 | Frontend `/register` + flujo primer-login | US-02 |
+| AUTH-06 | 🟡 BACKLOG | Admin > Usuarios: badge "Pendiente de password" + boton reset | US-08 |
+
+### E. Analytics interna (Sprint 2)
+
+| ID | Estado | Descripcion | US |
+|---|---|---|---|
+| ANL-01 | 🟡 BACKLOG | Tablas `usage_events` y `user_sessions` en Supabase | US-09 |
+| ANL-02 | 🟡 BACKLOG | Endpoint `POST /api/track` autenticado | US-09 |
+| ANL-03 | 🟡 BACKLOG | Hook `useTracker()` en frontend con `session_id` | US-09 |
+| ANL-04 | 🟡 BACKLOG | Instrumentar 9 eventos clave (page_view, query_run, export_csv, etc) | US-09, US-11 |
+| ANL-05 | 🟡 BACKLOG | Endpoints agregados `/api/admin/analytics/*` | US-09 |
+| ANL-06 | 🟡 BACKLOG | Frontend `/admin/analytics` con charts | US-09 |
+| ANL-07 | 🟡 BACKLOG | Cron rotacion eventos > 1 ano | US-11 |
+
+### F. Hardening produccion
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| SEC-01 | 🟡 BACKLOG | Validar backups automaticos diarios de Supabase |
+| SEC-02 | 🟡 BACKLOG | Rate limiting en `/api/auth/login` (5/5min) con `slowapi` |
+| SEC-03 | 🟡 BACKLOG | 2FA TOTP para roles `admin` |
+| SEC-04 | 🟡 BACKLOG | Rotar `JWT_SECRET` y passwords expuestas en chat |
+| SEC-05 | 🟡 BACKLOG | Headers de seguridad (HSTS, CSP) |
+
+### G. Smoke tests / Go-live
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| TEST-01 | ✅ DONE | `/api/health` + login |
+| TEST-02 | 🔴 BLOQUEADO POR AWS-01 | Endpoints que tocan BBDD via SSH (sources/dashboards) |
+| TEST-03 | 🟠 EN PROGRESO | Persistencia post-Postgres: registrar user, redeploy, sigue existiendo |
+| TEST-04 | 🔴 PENDIENTE | Remover endpoint diagnostico `/api/_meta/outbound-ip` |
+| TEST-05 | 🔴 MVP V1 | Test de registracion + set-initial-password end-to-end |
+| TEST-06 | 🔴 PENDIENTE | Anuncio interno + onboarding 2-3 usuarios reales |
+
+### H. Documentacion
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| DOC-01 | ✅ DONE | Guia deploy `docs/DEPLOY.md` |
+| DOC-02 | ✅ DONE | Guia para Unifull `docs/GUIA_UNIFULL_AWS_RAILWAY.md` |
+| DOC-03 | ✅ DONE | Ticket AWS para Mauro `docs/TICKET_AWS_BASTION.md` |
+| DOC-04 | 🟡 BACKLOG | README operativo para usuarios (como pedir acceso, como reportar bugs) |
+
+---
+
+## 🚀 RUTA CRITICA AL MVP V1 (proximos 60 min)
+
+```
+[ahora]
+  ↓
+DB-05 (Postgres URL pooler) -> ETA 5 min
+  ↓
+AUTH-03 + AUTH-04 (endpoints register/set-password) -> 25 min
+  ↓
+AUTH-05 (frontend /register) -> 20 min
+  ↓
+TEST-04 (cleanup endpoint diagnostico) -> 5 min
+  ↓
+TEST-05 (smoke test E2E) -> 5 min
+  ↓
+🎉 MVP V1 LIVE — colaboradores pueden registrarse y explorar UNIDATA
+
+[paralelo, sin bloquear]
+AWS-01 -> Mauro (cuando responda, los datos de negocio empiezan a fluir)
+```
 
 ## Resumen ejecutivo del estado actual
 
 ```
-INFRA       ████████████████████  100% (6/6)
-AWS         ░░░░░░░░░░░░░░░░░░░░    0% (0/2)  <- bloqueante
-DB / Persistencia ░░░░░░░░░░░░░░░░░░░░    0% (0/6)  <- en curso
-Hardening   ░░░░░░░░░░░░░░░░░░░░    0% (0/5)  <- post go-live
-Tests       ████░░░░░░░░░░░░░░░░   20% (1/5)
-Docs        ███████████████░░░░░   75% (3/4)
-
-Total: ~30% — bloqueado por AWS-01 y DB-01
+A. Infra Cloud      ████████████████████  100%  ✅ (7/7)
+B. AWS Networking   ░░░░░░░░░░░░░░░░░░░░    0%  ⏳ Mauro (1/3 in progress)
+C. Persistencia DB  ████████████████░░░░   83%  🟠 (5/6)
+D. Auth (MVP V1)    ███████░░░░░░░░░░░░░   33%  🔴 (2/6) -- foco hora siguiente
+E. Analytics        ░░░░░░░░░░░░░░░░░░░░    0%  🟡 Sprint 2 (0/7)
+F. Hardening        ░░░░░░░░░░░░░░░░░░░░    0%  🟡 backlog (0/5)
+G. Tests / Go-live  ████░░░░░░░░░░░░░░░░   17%  🟠 (1/6)
+H. Documentacion    ███████████████░░░░░   75%  🟢 (3/4)
 ```
 
-## Ruta critica para go-live
+## Sprint 2 (post MVP V1, proxima semana)
 
-1. **DB-01** (vos) — crear Supabase
-2. **DB-02..05** (yo) — refactor SQLite -> Postgres + deploy
-3. **AWS-01** (Mauro, en paralelo desde ahora) — allowlist
-4. **TEST-02 + TEST-03** (yo) — smoke tests
-5. **TEST-04** (yo) — limpiar endpoint diagnostico
-6. **TEST-05** (vos) — onboarding inicial
+- **Auth completo:** AUTH-06 (admin reset password)
+- **Analytics interna:** ANL-01..07 (tracking + admin panel)
+- **Hardening:** SEC-02 (rate limit), SEC-03 (2FA), SEC-01 (backups)
+- **Mejoras de producto:** segun feedback de los primeros 5 usuarios
 
-Tiempo estimado a go-live: **24-48 hs** (depende de Mauro y Supabase).
+## Sprint 3+ (mes 2)
+
+- **M365 SSO** (reemplaza/coexiste con self-registration)
+- **Read-only DB users** (AWS-02)
+- **PostHog** integration para session replay (opcional)
+- **PDF export** branded

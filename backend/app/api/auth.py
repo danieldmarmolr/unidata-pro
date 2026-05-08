@@ -29,6 +29,20 @@ class ChangePasswordBody(BaseModel):
     new_password: str
 
 
+class RegisterBody(BaseModel):
+    email: str
+    name: str
+
+
+class SetInitialPasswordBody(BaseModel):
+    email: str
+    new_password: str
+
+
+class CheckBody(BaseModel):
+    email: str
+
+
 @router.post("/login", response_model=TokenResponse)
 def login(
     body: LoginBody,
@@ -59,3 +73,64 @@ def change_password(
     if not ok:
         raise HTTPException(400, "Password actual incorrecto")
     return {"ok": True}
+
+
+# ----- Self-registration (Camino A: dominio @unistor.ar) -----
+
+@router.post("/register")
+def register(body: RegisterBody) -> dict:
+    """Self-registration con dominio @unistor.ar.
+    Crea cuenta en estado 'pendiente de password' (rol lector).
+    Despues de esto el frontend debe pedirle al user que setee su password
+    con POST /set-initial-password.
+    """
+    try:
+        user = users_db.register_pending(email=body.email, name=body.name)
+    except ValueError as e:
+        msg = str(e)
+        if "ya existe" in msg.lower():
+            raise HTTPException(status.HTTP_409_CONFLICT, msg) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, msg) from None
+    return {"user": user, "requires_password_setup": True}
+
+
+@router.post("/set-initial-password", response_model=TokenResponse)
+def set_initial_password(
+    body: SetInitialPasswordBody,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> TokenResponse:
+    """Setea la primera password de un user recien creado por self-registration
+    (o de uno cuyo password fue reseteado por un admin).
+    Solo funciona si el user existe activo y password_hash IS NULL.
+    Devuelve un JWT directamente para no obligar al usuario a hacer login despues.
+    """
+    try:
+        user = users_db.set_initial_password(body.email, body.new_password)
+    except ValueError as e:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e)) from None
+    if not user:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "el usuario ya tiene password seteada o no existe - usa /login",
+        )
+    token = issue_token(user["id"], user["email"], user["role"], settings)
+    return TokenResponse(access_token=token, user=user)
+
+
+@router.post("/check")
+def check_email_status(body: CheckBody) -> dict:
+    """Endpoint helper para que el frontend sepa que mostrar:
+    - exists=False, valid_domain=True  -> formulario de registro
+    - exists=True, needs_password=True -> formulario de set-initial-password
+    - exists=True, needs_password=False -> formulario de login
+    """
+    email = body.email.strip().lower()
+    valid_domain = email.endswith(f"@{users_db.ALLOWED_REGISTRATION_DOMAIN}")
+    user = users_db.find_by_email(email)
+    return {
+        "email": email,
+        "valid_domain": valid_domain,
+        "exists": user is not None,
+        "needs_password": users_db.needs_password_setup(email),
+        "is_active": bool(user["is_active"]) if user else False,
+    }

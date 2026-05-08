@@ -44,7 +44,7 @@ def init() -> None:
                     id            BIGSERIAL PRIMARY KEY,
                     email         TEXT NOT NULL,
                     name          TEXT NOT NULL DEFAULT '',
-                    password_hash TEXT NOT NULL,
+                    password_hash TEXT,
                     role          TEXT NOT NULL DEFAULT 'user'
                                   CHECK (role IN ('admin','user','gerencia','analista','lector')),
                     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
@@ -52,6 +52,10 @@ def init() -> None:
                     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     created_by    TEXT
                 )
+            """)
+            # Migracion idempotente: si la columna era NOT NULL, la relajamos
+            cur.execute("""
+                ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL
             """)
             # Unique case-insensitive en email (equivalente a SQLite COLLATE NOCASE)
             cur.execute("""
@@ -196,6 +200,84 @@ def change_password(user_id: int, current_password: str, new_password: str) -> b
         return False
     update(user_id, new_password=new_password)
     return True
+
+
+# ----- Self-registration (Camino A: dominio @unistor.ar) -----
+
+ALLOWED_REGISTRATION_DOMAIN = "unistor.ar"
+
+
+def register_pending(email: str, name: str) -> dict:
+    """Crea un user nuevo SIN password (estado 'pendiente de password').
+    Valida dominio @unistor.ar. Rol default: lector.
+    Si ya existe el email -> ValueError.
+    """
+    init()
+    email_clean = email.strip().lower()
+    if "@" not in email_clean:
+        raise ValueError("email invalido")
+    domain = email_clean.split("@", 1)[1]
+    if domain != ALLOWED_REGISTRATION_DOMAIN:
+        raise ValueError(f"solo se permite registro con dominio @{ALLOWED_REGISTRATION_DOMAIN}")
+    if not name.strip():
+        raise ValueError("name requerido")
+    try:
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO users
+                  (email, name, password_hash, role, is_active, created_by)
+                VALUES (%s, %s, NULL, 'lector', TRUE, 'self-registration')
+                RETURNING *
+                """,
+                (email_clean, name.strip()),
+            )
+            row = cur.fetchone()
+            return _to_dict(row)
+    except psycopg2.errors.UniqueViolation:
+        raise ValueError("ya existe una cuenta con ese email - usa el login") from None
+
+
+def set_initial_password(email: str, new_password: str) -> dict | None:
+    """Setea password solo si el user no tiene password aun (primer login).
+    Devuelve dict del user actualizado, o None si:
+    - el user no existe
+    - el user ya tiene password (debe usar /change-password con la actual)
+    """
+    init()
+    if not new_password or len(new_password) < 6:
+        raise ValueError("password muy corto (min 6 chars)")
+    email_clean = email.strip().lower()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE users
+            SET password_hash = %s, updated_at = NOW()
+            WHERE LOWER(email) = LOWER(%s)
+              AND password_hash IS NULL
+              AND is_active = TRUE
+            RETURNING *
+            """,
+            (_hash(new_password), email_clean),
+        )
+        row = cur.fetchone()
+    return _to_dict(row) if row else None
+
+
+def needs_password_setup(email: str) -> bool:
+    """True si el user existe, esta activo y todavia no tiene password seteada."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM users
+            WHERE LOWER(email) = LOWER(%s)
+              AND password_hash IS NULL
+              AND is_active = TRUE
+            """,
+            (email.strip().lower(),),
+        )
+        return cur.fetchone() is not None
 
 
 # ----- internals -----
