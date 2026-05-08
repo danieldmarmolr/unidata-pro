@@ -288,9 +288,22 @@ export function DrillDownModal({
             <div className="text-base font-bold text-text truncate">{title}</div>
             {subtitle && <div className="text-xs text-text-muted mt-1">{subtitle}</div>}
             {data && (
-              <div className="text-xs text-text-muted mt-1">
-                {formatNumber(data.row_count)} resultados
-                {data.row_count >= 200 && <span className="text-warn ml-1">(top 200)</span>}
+              <div className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
+                <span>{formatNumber(data.row_count)} resultados</span>
+                {data.row_count >= 200 && <span className="text-warn">(top 200)</span>}
+                {(() => {
+                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado)$/i.test(c));
+                  if (totalIdx < 0) return null;
+                  const vips = data.rows.filter((r) => Number(r[totalIdx]) >= 300000);
+                  if (vips.length === 0) return null;
+                  const vipsTotal = vips.reduce((s, r) => s + (Number(r[totalIdx]) || 0), 0);
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-amber-100 to-orange-100 text-amber-800 border border-amber-200 text-[10px] font-bold uppercase tracking-wider">
+                      <span className="text-[9px]">★</span>
+                      {vips.length} VIP · {formatCurrency(vipsTotal)}
+                    </span>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -350,21 +363,50 @@ export function DrillDownModal({
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((r, i) => (
-                  <tr key={i} className="border-t border-border hover:bg-soft transition">
-                    {r.map((v, j) => {
-                      const col = data.columns[j];
-                      // Si la columna es customer_id la ocultamos (la usamos solo para construir links)
-                      const isHiddenIdCol = /^(customer_id|customerId|cliente_id|id_cliente)$/i.test(col);
-                      if (isHiddenIdCol) return null;
-                      return (
-                        <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
-                          <CellRenderer col={col} v={v} row={r} columns={data.columns} />
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
+                {data.rows.map((r, i) => {
+                  // Detectar fila VIP: total > $300.000 (umbral de "Cliente VIP")
+                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado)$/i.test(c));
+                  const totalVal = totalIdx >= 0 ? Number(r[totalIdx]) : NaN;
+                  const isVip = !Number.isNaN(totalVal) && totalVal >= 300000;
+
+                  return (
+                    <tr
+                      key={i}
+                      className={
+                        isVip
+                          ? "border-t border-amber-200 bg-gradient-to-r from-amber-50/80 via-amber-50/40 to-transparent hover:from-amber-100/80 hover:via-amber-50/60 transition relative"
+                          : "border-t border-border hover:bg-soft transition"
+                      }
+                      title={isVip ? `Compra alta: ${formatCurrency(totalVal)} (VIP)` : undefined}
+                    >
+                      {r.map((v, j) => {
+                        const col = data.columns[j];
+                        // Si la columna es customer_id la ocultamos (la usamos solo para construir links)
+                        const isHiddenIdCol = /^(customer_id|customerId|cliente_id|id_cliente)$/i.test(col);
+                        if (isHiddenIdCol) return null;
+                        // En la primera celda visible mostrar un badge VIP
+                        const isFirstVisible = j === 0;
+                        return (
+                          <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
+                            <div className="inline-flex items-center gap-1.5">
+                              {isFirstVisible && isVip && (
+                                <span
+                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-sm shadow-amber-500/30 flex-shrink-0"
+                                  title={`Compra VIP: ${formatCurrency(totalVal)}`}
+                                >
+                                  <span className="text-[8px] font-extrabold">★</span>
+                                </span>
+                              )}
+                              <span className={isFirstVisible && isVip ? "" : ""}>
+                                <CellRenderer col={col} v={v} row={r} columns={data.columns} />
+                              </span>
+                            </div>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
