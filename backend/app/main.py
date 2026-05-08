@@ -57,6 +57,9 @@ app.include_router(dashboards_routers.router)
 app.include_router(reports_api.router)
 app.include_router(costs_api.router)
 
+from app.api import skus as skus_api
+app.include_router(skus_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

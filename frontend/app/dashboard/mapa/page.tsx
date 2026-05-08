@@ -12,6 +12,8 @@ import { formatCurrency, formatNumber } from "@/lib/utils";
 import { ComposableMap, Geographies, Geography, Marker } from "react-simple-maps";
 import { geoCentroid } from "d3-geo";
 import { X } from "lucide-react";
+import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
+import { SkuRow } from "@/components/sku-row";
 
 const TOPO_URL = "/argentina-provinces.json";
 
@@ -123,6 +125,15 @@ export default function MapaPage() {
 
   const fmtMetric = (v: number) =>
     metric === "revenue" ? formatCurrency(v) : formatNumber(v);
+
+  // Enriquecer los top SKUs de la provincia seleccionada con foto + EAN
+  const visibleSkus = useMemo(() => {
+    return (detail?.top_skus ?? [])
+      .slice(0, 8)
+      .map((s) => s.extra?.sku)
+      .filter((s): s is string => !!s);
+  }, [detail]);
+  const skuEnriched = useSkuEnrichment("unistore", visibleSkus);
 
   return (
     <>
@@ -288,22 +299,25 @@ export default function MapaPage() {
                     <div className="text-[11px] uppercase tracking-wider font-bold text-text-muted mb-2">
                       SKUs favoritos
                     </div>
-                    <div className="space-y-1">
-                      {detail.top_skus.slice(0, 8).map((s, i) => (
-                        <button
-                          key={i}
-                          onClick={() => {
-                            const sku = s.extra?.sku;
-                            if (sku) router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
-                          }}
-                          className="w-full flex justify-between items-center text-xs px-2 py-1.5 rounded hover:bg-soft transition text-left"
-                        >
-                          <span className="truncate flex-1 mr-2">
-                            <span className="text-text-muted">{i + 1}.</span> {s.category}
-                          </span>
-                          <span className="font-semibold tabular-nums text-text">{formatCurrency(s.value)}</span>
-                        </button>
-                      ))}
+                    <div className="divide-y divide-border/50">
+                      {detail.top_skus.slice(0, 8).map((s, i) => {
+                        const sku = s.extra?.sku;
+                        return (
+                          <SkuRow
+                            key={i}
+                            index={i + 1}
+                            sku={sku || s.category}
+                            name={s.category}
+                            rightValue={formatCurrency(s.value)}
+                            enrichment={sku ? skuEnriched.data?.[sku] : undefined}
+                            onClick={
+                              sku
+                                ? () => router.push(`/dashboard/productos/${encodeURIComponent(sku)}`)
+                                : undefined
+                            }
+                          />
+                        );
+                      })}
                       {detail.top_skus.length === 0 && (
                         <div className="text-xs text-text-muted text-center py-4">Sin datos</div>
                       )}
