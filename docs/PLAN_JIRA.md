@@ -253,6 +253,20 @@
 | UNIT-06 | 🟡 BACKLOG | Indicador de unidad permanente en topbar (badge visible mientras navegas, asi siempre sabes que estas viendo). |
 | UNIT-07 | 🟡 BACKLOG | Audit log: filtro por unidad para que admins vean queries por unidad. |
 
+### E3. Permisos granulares por usuario (Sprint 2)
+
+> Despues del refactor `is_admin`, el siguiente paso es que el admin pueda
+> asignar/revocar vistas individuales por usuario (no solo el set fijo del role).
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| PERM-01 | 🟡 SPRINT 2 | Tabla `user_view_permissions (user_id, view_key, granted, granted_by, ts)` en Supabase |
+| PERM-02 | 🟡 SPRINT 2 | Endpoint `GET /api/admin/users/{id}/permissions` y `PUT` para gestionar grants/denies |
+| PERM-03 | 🟡 SPRINT 2 | Endpoint `GET /api/auth/me/permissions` para que el frontend sepa que tiles mostrar |
+| PERM-04 | 🟡 SPRINT 2 | UI: en `/admin/usuarios`, expand row -> checklist de tiles (con role base como hint pre-tildado) |
+| PERM-05 | 🟡 SPRINT 2 | Logica de calc: `effective_views = (role.views ∪ admin.views si is_admin ∪ grants) - denies` |
+| PERM-06 | 🟡 SPRINT 2 | Audit: cambios de permisos quedan loggeados con quien y cuando |
+
 ### F. Hardening produccion
 
 | ID | Estado | Descripcion |

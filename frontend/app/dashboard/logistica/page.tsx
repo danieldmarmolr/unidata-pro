@@ -1,9 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { ScanBarcode } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
+import { SkuSearchBox } from "@/components/sku-search-box";
 import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
 import { Funnel } from "@/components/funnel";
@@ -36,6 +39,7 @@ type LogResp = {
 };
 
 export default function LogisticaPage() {
+  const router = useRouter();
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
@@ -80,6 +84,31 @@ export default function LogisticaPage() {
           }
         />
         <TodayPanel compact={period !== "today"} unit={unit} />
+
+        {/* Buscador SKU / EAN — pensado para scaneo en deposito */}
+        {unit === "unistore" && (
+          <div className="mb-6 bg-gradient-to-r from-primary/5 to-accent/5 border border-primary/20 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center flex-shrink-0">
+                <ScanBarcode size={18} />
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-bold text-text mb-0.5">Buscar SKU o escanear EAN</div>
+                <div className="text-[11px] text-text-muted mb-2">
+                  Pega o escanea el codigo de barra del producto fisico — UNIDATA lo
+                  resuelve a SKU y abre el detalle (stock, ventas, ubicacion).
+                </div>
+                <SkuSearchBox
+                  unit="unistore"
+                  placeholder="Ej: 10IVA21 (SKU) o 1000010800002 (EAN)"
+                  onSkuSelected={(sku) =>
+                    router.push(`/dashboard/productos/${encodeURIComponent(sku)}`)
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

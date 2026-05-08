@@ -150,3 +150,45 @@ def clear_cache() -> int:
         n = len(_CACHE)
         _CACHE.clear()
         return n
+
+
+def lookup_by_ean(ean: str) -> dict | None:
+    """Busca un SKU a partir de su EAN (codigo de barra). Inversa de enrich.
+
+    Recorre digip.ArticuloUnidadMedidaCodigo (donde vive el EAN real) -> arma el SKU
+    canonico del Articulo y lo enriquece con la informacion completa.
+
+    Devuelve {sku, image_url, ean, name, is_service, kind} o None si no existe.
+    """
+    ean_clean = (ean or "").strip()
+    if not ean_clean:
+        return None
+    try:
+        eng = get_engine("unistore")
+        with eng.connect() as c:
+            row = c.execute(text("""
+                SELECT a."CodigoArticulo" AS sku, a."Descripcion" AS digip_name
+                FROM digip."ArticuloUnidadMedidaCodigo" cd
+                JOIN digip."ArticuloUnidadMedida" u ON u.id = cd."unidadMedidaId"
+                JOIN digip."Articulo" a ON a."CodigoArticulo" = u."articuloCodigo"
+                WHERE cd."Codigo" = :ean
+                ORDER BY a."Activo" DESC, a."updatedAt" DESC NULLS LAST
+                LIMIT 1
+            """), {"ean": ean_clean}).mappings().first()
+        if not row:
+            return None
+        sku = row["sku"]
+    except Exception as e:
+        logger.warning("lookup_by_ean: digip query failed: %s", e)
+        return None
+
+    # Re-uso enrich_skus_unistore para llenar foto + name + el resto
+    enriched = enrich_skus_unistore([sku]).get(sku, {})
+    return {
+        "sku": sku,
+        "image_url": enriched.get("image_url"),
+        "ean": enriched.get("ean") or ean_clean,
+        "name": enriched.get("name") or row["digip_name"],
+        "is_service": enriched.get("is_service", False),
+        "kind": enriched.get("kind", "product"),
+    }

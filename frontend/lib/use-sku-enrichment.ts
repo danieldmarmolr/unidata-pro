@@ -11,6 +11,27 @@ export type SkuEnrichment = {
   kind?: "product" | "service";
 };
 
+export type SkuLookupResult = SkuEnrichment & {
+  sku: string;
+};
+
+/** Heuristica para detectar si un input es EAN (todo numerico + len 8/12/13/14) */
+export function looksLikeEan(input: string): boolean {
+  const s = (input || "").trim();
+  if (!/^\d+$/.test(s)) return false;
+  return [8, 12, 13, 14].includes(s.length);
+}
+
+/** Reverse lookup: dado un EAN devuelve el SKU + info enriquecida.
+ *  Lanza error si no se encuentra (404 del backend). */
+export async function lookupByEan(unit: string, ean: string): Promise<SkuLookupResult> {
+  return await api(`/api/skus/${unit}/lookup-by-ean`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ean }),
+  });
+}
+
 /**
  * Hook que recibe una lista de SKUs y devuelve un map { sku -> { image_url, ean, name } }.
  * Hace un POST a /api/skus/<unit>/enrich con la lista (cache de 1 hora en backend).
