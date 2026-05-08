@@ -90,65 +90,106 @@ def today_story() -> dict:
         log.warning("story gmv fail: %s", e)
 
     # ============================================================
-    # 2) SKU lider TN hoy vs SKU lider ML hoy (cross-canal narrativa)
+    # 2) SKU lider por canal — uno por canal: TN/MELI Unistore, TN/MELI Unidrop
     # ============================================================
+    # Helper para construir el blurb de un lider por canal
+    def _leader_blurb(label: str, channel: str, sku: str, name: str, units: int, drill_endpoint: str, drill_filename: str) -> dict:
+        clean_name = (name or sku)[:60]
+        return {
+            "type": f"top_sku_{channel}",
+            "icon": "👑",
+            "title": f"Lider {label}",
+            "body": f"En {label} hoy lidera \"{clean_name}\" con {units} unidades vendidas.",
+            "accent": "#a259ff",
+            "link": {
+                "kind": "drill",
+                "endpoint": drill_endpoint,
+                "title": f"Ordenes hoy de {clean_name} ({label})",
+                "filename": drill_filename,
+            },
+        }
+
+    # 2a) Lider TN Unistore
     try:
-        tn_top = q(uni, """
+        rows = q(uni, """
             SELECT oi.sku, MAX(oi.name) AS name, SUM(oi.quantity)::int AS units,
-                   SUM(oi.quantity * oi.price)::float AS revenue
+                   MAX(oi."productId") AS product_id
             FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
             WHERE o."paymentStatus"='paid' AND o."createdAt"::date = CURRENT_DATE
               AND oi.sku IS NOT NULL
-            GROUP BY oi.sku ORDER BY revenue DESC LIMIT 1
+              AND oi.sku NOT ILIKE '%PVA%'
+            GROUP BY oi.sku ORDER BY SUM(oi.quantity * oi.price) DESC LIMIT 1
         """) or []
-        ml_top = q(uni, """
-            SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units,
-                   SUM(mi.unit_price * mi.quantity)::float AS revenue
+        if rows:
+            sku, name, units, pid = rows[0]
+            ep = f"/api/drilldowns/products/{int(pid)}/orders?period=today" if pid else "/api/drilldowns/orders/paid?period=today"
+            blurbs.append(_leader_blurb("TN Unistore", "tn_unistore", sku, name, int(units or 0), ep, f"top_tn_unistore_{today_iso}.csv"))
+    except Exception as e:
+        log.warning("story sku TN unistore fail: %s", e)
+
+    # 2b) Lider MELI Unistore
+    try:
+        rows = q(uni, """
+            SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
             FROM meli.meli_order_items mi
             JOIN meli.meli_orders mo ON mo.id = mi.order_id
             WHERE mo.date_created::date = CURRENT_DATE
               AND mo.status IN ('paid','confirmed','shipped','delivered')
               AND mi.seller_sku IS NOT NULL
-            GROUP BY mi.seller_sku ORDER BY revenue DESC LIMIT 1
+              AND mi.seller_sku NOT ILIKE '%PVA%'
+            GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
         """) or []
-
-        if tn_top and ml_top:
-            tn_sku = tn_top[0][0]
-            ml_sku = ml_top[0][0]
-            tn_n, tn_u = (tn_top[0][1] or tn_sku)[:50], int(tn_top[0][2] or 0)
-            ml_n, ml_u = (ml_top[0][1] or ml_sku)[:50], int(ml_top[0][2] or 0)
-            if tn_sku == ml_sku:
-                body = f"El SKU {tn_sku} ({tn_n}) lidera HOY en ambos canales — {tn_u} ud en Tienda Nube y {ml_u} ud en Mercado Libre."
-            else:
-                body = f"En Tienda Nube manda \"{tn_n}\" ({tn_u} ud), mientras que en Mercado Libre el lider es \"{ml_n}\" ({ml_u} ud)."
-            blurbs.append({
-                "type": "top_sku_split",
-                "icon": "👑",
-                "title": "Lideres por canal",
-                "body": body,
-                "accent": "#a259ff",
-                "link": {
-                    "kind": "navigate",
-                    "href": f"/dashboard/productos/{quote(tn_sku, safe='')}",
-                },
-            })
-        elif tn_top:
-            tn_sku = tn_top[0][0]
-            tn_n = (tn_top[0][1] or tn_sku)[:50]
-            blurbs.append({
-                "type": "top_sku_tn",
-                "icon": "👑",
-                "title": "Lider TN",
-                "body": f"En Tienda Nube hoy lidera \"{tn_n}\" con {int(tn_top[0][2] or 0)} unidades vendidas.",
-                "accent": "#a259ff",
-                "link": {
-                    "kind": "navigate",
-                    "href": f"/dashboard/productos/{quote(tn_sku, safe='')}",
-                },
-            })
+        if rows:
+            sku, name, units = rows[0]
+            blurbs.append(_leader_blurb(
+                "MELI Unistore", "meli_unistore", sku, name, int(units or 0),
+                "/api/drilldowns/orders/paid?period=today&channel=meli",
+                f"top_meli_unistore_{today_iso}.csv",
+            ))
     except Exception as e:
-        log.warning("story sku fail: %s", e)
+        log.warning("story sku MELI unistore fail: %s", e)
+
+    # 2c) Lider TN Unidrop (si existe la tabla — try/except absorbe el error)
+    try:
+        rows = q(drop, """
+            SELECT oi.sku, MAX(oi.name) AS name, SUM(oi.quantity)::int AS units
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            WHERE o."paymentStatus"='paid' AND o."createdAt"::date = CURRENT_DATE
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku ORDER BY SUM(oi.quantity * oi.price) DESC LIMIT 1
+        """) or []
+        if rows:
+            sku, name, units = rows[0]
+            blurbs.append(_leader_blurb(
+                "TN Unidrop", "tn_unidrop", sku, name, int(units or 0),
+                "/api/drilldowns/orders/paid?period=today&unit=unidrop",
+                f"top_tn_unidrop_{today_iso}.csv",
+            ))
+    except Exception as e:
+        log.warning("story sku TN unidrop fail (probable: schema no existe): %s", e)
+
+    # 2d) Lider MELI Unidrop
+    try:
+        rows = q(drop, """
+            SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
+            FROM meli.meli_order_items mi
+            JOIN meli.meli_orders mo ON mo.id = mi.order_id
+            WHERE mo.date_created::date = CURRENT_DATE
+              AND mo.status IN ('paid','confirmed','shipped','delivered')
+              AND mi.seller_sku IS NOT NULL
+            GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
+        """) or []
+        if rows:
+            sku, name, units = rows[0]
+            blurbs.append(_leader_blurb(
+                "MELI Unidrop", "meli_unidrop", sku, name, int(units or 0),
+                "/api/drilldowns/orders/paid?period=today&unit=unidrop&channel=meli",
+                f"top_meli_unidrop_{today_iso}.csv",
+            ))
+    except Exception as e:
+        log.warning("story sku MELI unidrop fail: %s", e)
 
     # ============================================================
     # 3) Provincia con mas actividad hoy
@@ -175,8 +216,10 @@ def today_story() -> dict:
                     "body": f"{p_name} es la provincia mas activa hoy con {p_orders} ordenes y {_fmt_money(p_rev)} en revenue.",
                     "accent": "#06b6d4",
                     "link": {
-                        "kind": "navigate",
-                        "href": "/dashboard/mapa",
+                        "kind": "drill",
+                        "endpoint": f"/api/drilldowns/provinces/{quote(p_name, safe='')}/orders?period=today",
+                        "title": f"Ordenes hoy en {p_name}",
+                        "filename": f"ordenes_{p_name.replace(' ', '_')}_{today_iso}.csv",
                     },
                 })
     except Exception as e:
@@ -208,8 +251,10 @@ def today_story() -> dict:
                 "body": f"{cn} es el ticket mas alto de hoy con {_fmt_money(crev)} en {corders} {'orden' if corders == 1 else 'ordenes'}.",
                 "accent": "#f59e0b",
                 "link": {
-                    "kind": "navigate",
-                    "href": f"/dashboard/customer/{cid}",
+                    "kind": "drill",
+                    "endpoint": f"/api/drilldowns/customers/{cid}/orders?period=today",
+                    "title": f"Ordenes hoy de {cn}",
+                    "filename": f"ordenes_cliente_{cid}_{today_iso}.csv",
                 } if cid else None,
             })
     except Exception as e:
