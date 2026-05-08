@@ -42,23 +42,23 @@ type Tile = {
 type RoleKey = "admin" | "gerencia" | "analista" | "lector" | "user";
 
 const TILES: Record<string, Tile> = {
-  gerencial: { label: "Gerencial", href: "/dashboard", icon: Crown, color: "from-purple-500 to-fuchsia-500", description: "KPIs cross-unidad, salud por negocio, alertas operativas" },
-  ventas: { label: "Ventas", href: "/dashboard/ventas", icon: TrendingUp, color: "from-emerald-500 to-teal-500", description: "GMV, ordenes, top productos, geografia · Unistore + Unidrop" },
-  productos: { label: "Productos", href: "/dashboard/productos", icon: ShoppingBag, color: "from-orange-500 to-red-500", description: "Top SKUs cross-canal, stock, sin movimiento, drill por SKU" },
-  costos: { label: "Costos importacion", href: "/dashboard/costos", icon: DollarSign, color: "from-amber-500 to-yellow-500", description: "Lotes, costos USD/ARS, margen estimado por SKU" },
-  marketing: { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone, color: "from-pink-500 to-rose-500", description: "LTV, repeat purchase, top customers, retention" },
-  cs: { label: "Customer Success", href: "/dashboard/cs", icon: HeartHandshake, color: "from-violet-500 to-purple-500", description: "Cancelaciones, RFM, lifecycle, customers en riesgo" },
-  mapa: { label: "Mapa", href: "/dashboard/mapa", icon: MapIcon, color: "from-cyan-500 to-blue-500", description: "Choropleth Argentina · drill por provincia" },
-  saas: { label: "SaaS Metrics", href: "/dashboard/saas", icon: LayoutDashboard, color: "from-indigo-500 to-purple-500", description: "Usuarios, suscripciones, churn, funnel · Unidrop" },
-  pagos: { label: "Pagos Talo", href: "/dashboard/pagos", icon: CreditCard, color: "from-blue-500 to-cyan-500", description: "Volumen procesado, pendientes, refunds · Unidrop" },
-  subsMeli: { label: "Suscripciones MELI", href: "/dashboard/subscriptions-meli", icon: Sparkles, color: "from-yellow-500 to-amber-500", description: "Planes, MRR, cohorts" },
-  envios: { label: "Envios", href: "/dashboard/envios", icon: Package, color: "from-blue-500 to-indigo-500", description: "OCA, LightData, lead time" },
-  logistica: { label: "Logistica", href: "/dashboard/logistica", icon: Truck, color: "from-slate-500 to-gray-500", description: "Pedidos pendientes, atascados, fulfillment" },
-  finanzas: { label: "Finanzas", href: "/dashboard/finanzas", icon: Wallet, color: "from-green-500 to-emerald-500", description: "Sales orders, facturacion, gap" },
-  devoluciones: { label: "Devoluciones", href: "/dashboard/devoluciones", icon: RotateCcw, color: "from-pink-500 to-red-500", description: "Casos, modelos de negocio, resoluciones" },
-  catalog: { label: "Data Catalog", href: "/dashboard/catalog", icon: Network, color: "from-teal-500 to-cyan-500", description: "ER de las 3 BBDD, cross-DB relations" },
-  sources: { label: "Explorador", href: "/dashboard/sources", icon: Database, color: "from-blue-500 to-indigo-500", description: "Tablas + columnas + preview" },
-  sql: { label: "SQL libre", href: "/dashboard/sql", icon: Terminal, color: "from-zinc-700 to-zinc-900", description: "Workbench SQL read-only sobre las 3 BBDD" },
+  gerencial: { label: "Gerencial", href: "/dashboard", icon: Crown, color: "from-purple-500 to-fuchsia-500", description: "KPIs por unidad de negocio, salud y alertas operativas" },
+  ventas: { label: "Ventas", href: "/dashboard/ventas", icon: TrendingUp, color: "from-emerald-500 to-teal-500", description: "GMV, ordenes, top productos, geografia · vista por unidad" },
+  productos: { label: "Productos", href: "/dashboard/productos", icon: ShoppingBag, color: "from-orange-500 to-red-500", description: "Top SKUs, stock, sin movimiento, drill por SKU · vista por unidad" },
+  costos: { label: "Costos importacion", href: "/dashboard/costos", icon: DollarSign, color: "from-amber-500 to-yellow-500", description: "Lotes, costos USD/ARS, margen estimado por SKU · Unistore" },
+  marketing: { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone, color: "from-pink-500 to-rose-500", description: "LTV, repeat purchase, top customers, retention · vista por unidad" },
+  cs: { label: "Customer Success", href: "/dashboard/cs", icon: HeartHandshake, color: "from-violet-500 to-purple-500", description: "Cancelaciones, RFM, lifecycle, customers en riesgo · vista por unidad" },
+  mapa: { label: "Mapa", href: "/dashboard/mapa", icon: MapIcon, color: "from-cyan-500 to-blue-500", description: "Choropleth Argentina por provincia · vista por unidad" },
+  saas: { label: "SaaS Metrics", href: "/dashboard/saas", icon: LayoutDashboard, color: "from-indigo-500 to-purple-500", description: "Usuarios, suscripciones, churn, funnel · solo Unidrop" },
+  pagos: { label: "Pagos Talo", href: "/dashboard/pagos", icon: CreditCard, color: "from-blue-500 to-cyan-500", description: "Volumen procesado, pendientes, refunds · solo Unidrop" },
+  subsMeli: { label: "Suscripciones MELI", href: "/dashboard/subscriptions-meli", icon: Sparkles, color: "from-yellow-500 to-amber-500", description: "Planes, MRR, cohorts · Unistore" },
+  envios: { label: "Envios", href: "/dashboard/envios", icon: Package, color: "from-blue-500 to-indigo-500", description: "OCA, LightData, lead time · vista por unidad" },
+  logistica: { label: "Logistica", href: "/dashboard/logistica", icon: Truck, color: "from-slate-500 to-gray-500", description: "Pedidos pendientes, atascados, fulfillment · vista por unidad" },
+  finanzas: { label: "Finanzas", href: "/dashboard/finanzas", icon: Wallet, color: "from-green-500 to-emerald-500", description: "Sales orders, facturacion, gap · vista por unidad" },
+  devoluciones: { label: "Devoluciones", href: "/dashboard/devoluciones", icon: RotateCcw, color: "from-pink-500 to-red-500", description: "Casos, modelos de negocio, resoluciones · Unistore (esquema Unidev)" },
+  catalog: { label: "Data Catalog", href: "/dashboard/catalog", icon: Network, color: "from-teal-500 to-cyan-500", description: "ER de cada BBDD, schemas y relaciones (separados por unidad)" },
+  sources: { label: "Explorador", href: "/dashboard/sources", icon: Database, color: "from-blue-500 to-indigo-500", description: "Tablas + columnas + preview por unidad" },
+  sql: { label: "SQL libre", href: "/dashboard/sql", icon: Terminal, color: "from-zinc-700 to-zinc-900", description: "Workbench SQL read-only por unidad (selector arriba)" },
   audit: { label: "Audit log", href: "/dashboard/audit", icon: ScrollText, color: "from-amber-600 to-orange-600", description: "Quien corrio que query (admin)" },
   users: { label: "Usuarios", href: "/dashboard/admin/users", icon: UserCog, color: "from-slate-600 to-slate-800", description: "Alta, baja, roles" },
 };
@@ -280,7 +280,7 @@ export default function HomePage() {
         )}
 
         <div className="mt-10 text-xs text-text-muted text-center">
-          UNIDATA · plataforma de datos del grupo Unistore · Unistore + Unidrop + Unidev
+          UNIDATA · plataforma de datos del grupo Unistore · unidades: Unistore (incluye Devoluciones / Unidev) · Unidrop
         </div>
       </div>
 

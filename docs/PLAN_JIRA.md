@@ -236,6 +236,23 @@
 | ANL-06 | 🟡 BACKLOG | Frontend `/admin/analytics` con charts | US-09 |
 | ANL-07 | 🟡 BACKLOG | Cron rotacion eventos > 1 ano | US-11 |
 
+### E2. Modelo de unidades de negocio (separacion estricta)
+
+> Politica: las unidades **Unistore** y **Unidrop** se mantienen separadas en
+> dashboards, queries y exports. **Unidev** es una DB tecnica (devoluciones)
+> dentro del dominio Unistore, NO una tercera unidad. Toda mezcla cross-unit
+> debe ser explicita y opt-in.
+
+| ID | Estado | Descripcion |
+|---|---|---|
+| UNIT-01 | ✅ DONE | Backend: servicios separados por unidad (`*_unistore`, `*_unidrop`). No hay queries que mezclen datos. |
+| UNIT-02 | ✅ DONE | Frontend: labels de tiles aclaran cual unidad (`solo Unidrop`, `vista por unidad`, `Unistore (esquema Unidev)`). |
+| UNIT-03 | ✅ DONE | Documentar modelo en `ARCHITECTURE.md` seccion "Modelo de unidades de negocio". |
+| UNIT-04 | 🟡 SPRINT 2 | Refactor de `/dashboard/home`: card top-level por unidad, sub-tiles dentro. Devoluciones queda como tab dentro de Unistore. |
+| UNIT-05 | 🟡 SPRINT 2 | Tile "Gerencial" -> renombrar a "Comparativa cross-unidad" y aclarar que muestra ambos lado-a-lado, no agregados sumados. |
+| UNIT-06 | 🟡 BACKLOG | Indicador de unidad permanente en topbar (badge visible mientras navegas, asi siempre sabes que estas viendo). |
+| UNIT-07 | 🟡 BACKLOG | Audit log: filtro por unidad para que admins vean queries por unidad. |
+
 ### F. Hardening produccion
 
 | ID | Estado | Descripcion |

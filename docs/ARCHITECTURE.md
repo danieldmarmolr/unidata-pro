@@ -5,6 +5,65 @@ devs y de checklist cuando algo se rompe.
 
 ---
 
+## Modelo de unidades de negocio
+
+> **Importante:** UNIDATA respeta la separacion de unidades de negocio del
+> grupo Unistore. Las unidades **NO se mezclan** en ningun dashboard ni
+> query — cada vista muestra datos de una sola unidad.
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  GRUPO UNISTORE                                                  │
+│                                                                  │
+│  ┌────────────────────────────────────┐   ┌──────────────────┐  │
+│  │ UNIDAD: UNISTORE                   │   │ UNIDAD: UNIDROP  │  │
+│  │ DB principal: unistore_api         │   │ DB: unidrop      │  │
+│  │ Schema relacionado: unidev (DB)    │   │                  │  │
+│  │   └─ Devoluciones                  │   │ Especifico:      │  │
+│  │ Especifico:                        │   │  · Dropshippers  │  │
+│  │  · Tienda Nube (canal e-commerce)  │   │  · TaloPay       │  │
+│  │  · Suscripciones MELI              │   │  · SaaS metrics  │  │
+│  │  · Costos de importacion           │   │                  │  │
+│  └────────────────────────────────────┘   └──────────────────┘  │
+│                                                                  │
+│  Bastion EC2 separado por unidad. RDS Postgres separadas.       │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Reglas clave
+
+1. **Cada dashboard / query muestra una unidad a la vez.** Si un usuario
+   quiere ver "ventas de Unistore" y "ventas de Unidrop", ve dos pantallas
+   separadas o un selector de unidad — nunca un agregado sumado.
+
+2. **Hay metricas que solo existen en una unidad.** Por ejemplo:
+   - `Pagos Talo` y `SaaS Metrics` -> solo Unidrop (en Unistore no hay TaloPay)
+   - `Suscripciones MELI` y `Costos de importacion` -> solo Unistore
+   - `Devoluciones` -> solo Unistore (gestionadas en la DB `unidev`)
+
+3. **Unidev es una DB separada dentro del mismo Postgres de Unistore**, no
+   una tercera unidad. Tecnicamente el backend la trata como connection
+   independiente (porque es un nombre de DB distinto), pero conceptualmente
+   forma parte del dominio de Unistore — es donde se manejan devoluciones.
+
+4. **Si en el futuro hace falta una vista comparativa cross-unit** (ej.
+   "ventas Unistore vs Unidrop"), se construye explicitamente como dashboard
+   "Cross-Unit Comparison" — nunca se mezclan implicitamente.
+
+### Implicaciones tecnicas
+
+- `app/services/sales_unistore.py` y `app/services/sales_unidrop.py` son
+  funciones separadas, cada una abre su tunel SSH y ejecuta queries solo
+  contra su RDS.
+- Los endpoints `/api/dashboards/<area>/<unidad>` siempre tienen `unidad`
+  como path param obligatorio.
+- El frontend `/dashboard/home` lista los tiles e indica la unidad de cada
+  uno en la descripcion (`solo Unidrop`, `Unistore`, `vista por unidad`).
+- El SQL libre y Explorador piden elegir unidad antes de correr queries —
+  no se puede ejecutar una query "sobre las 3 bases" simultaneamente.
+
+---
+
 ## Vision general
 
 ```
