@@ -62,6 +62,59 @@ devs y de checklist cuando algo se rompe.
 - El SQL libre y Explorador piden elegir unidad antes de correr queries —
   no se puede ejecutar una query "sobre las 3 bases" simultaneamente.
 
+### Regla de oro para devs (REGLA DE NO-MEZCLA)
+
+> Cualquier dev que sume datos de Unistore + Unidrop en una misma metrica
+> esta violando la arquitectura. Esto NO se hace.
+
+#### Patron correcto (lo que ya hace el dashboard "Gerencial")
+
+```python
+# Cada KPI declara su unidad en el label y usa su propio engine.
+# Las cards se muestran lado-a-lado en la UI, nunca sumadas.
+
+blocks = [
+    {"label": "GMV Unistore",           "engine": "unistore"},  # ✅
+    {"label": "GMV Unidrop",            "engine": "unidrop"},   # ✅
+    {"label": "Pagos Talo (Unidrop)",   "engine": "unidrop"},   # ✅
+    {"label": "Devoluciones (Unidev)",  "engine": "unidev"},    # ✅
+]
+```
+
+#### Anti-patron prohibido
+
+```python
+# ❌ PROHIBIDO: sumar datos de unidades diferentes en una sola metrica.
+total_gmv = gmv_unistore + gmv_unidrop  # NUNCA HACER ESTO
+
+# ❌ PROHIBIDO: queries que asuman tablas comunes.
+sql = "SELECT * FROM ventas"  # cada DB tiene sus propias tablas
+```
+
+#### Excepcion controlada — comparativa explicita
+
+Si una vista DELIBERADAMENTE muestra ambas unidades para comparar (no para
+sumar), debe:
+
+1. Llamarse de forma explicita: `Comparativa cross-unidad`, `Vista comparativa`,
+   nunca solo `Total grupo` o similar (sugiere agregacion).
+2. Cada metrica/columna lleva chip visible con la unidad de origen.
+3. NO debe haber un "Total" sumado abajo.
+4. Documentado como `# CROSS-UNIT-VIEW` en el codigo para que devs futuros
+   sepan que es excepcion intencional.
+
+#### Razones de negocio para esta regla
+
+- **Modelos de negocio diferentes:** Unistore vende productos propios via Tienda
+  Nube y MELI. Unidrop opera dropshipping con TaloPay. Sumar GMV de ambos no
+  significa nada — es como sumar ventas de un retailer con ingresos de una
+  fintech.
+- **Comparaciones engañosas:** un mes Unidrop puede tener picos por adquisicion
+  de dropshippers, otro mes Unistore por Black Friday. Si las sumas, no entendes
+  que cambio.
+- **Auditoria:** finanzas y contabilidad ya consolidan cada unidad por separado
+  con sus propias reglas. UNIDATA no debe inventar consolidaciones paralelas.
+
 ---
 
 ## Vision general
