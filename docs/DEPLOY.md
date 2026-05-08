@@ -1,187 +1,235 @@
-# DEPLOY UNIDATA
+# UNIDATA — Guía de Deploy a la nube
 
-Guia paso a paso. ~30 minutos asumiendo que ya tenes cuentas en GitHub, Railway y Vercel.
+Este proyecto tiene **2 servicios** que deployar:
+
+1. **Backend** (FastAPI + SSH tunnels a las 3 BBDD Postgres)
+2. **Frontend** (Next.js 16)
+
+Recomendación de plataforma según presupuesto y simplicidad:
+
+| Plataforma | Pros | Contras | Precio aprox. |
+|---|---|---|---|
+| **Railway** ✅ recomendado | Simple, soporta Dockerfiles, volumen persistente para SQLite, SSH key como env var | Plan gratis limitado | ~$10/mes los 2 servicios |
+| Render | Similar a Railway, deploys desde Git automáticos | Cold starts en plan gratis | ~$7/mes c/u |
+| Fly.io | Muy rápido, regiones AR | Más manual el setup | Pay-as-you-go (~$5-15) |
+| Azure App Service | Si la empresa ya usa Azure | Más caro y complejo | $30+/mes |
+| AWS ECS / Fargate | Robusto, control total | Curva de aprendizaje | $20+/mes |
+
+Esta guía cubre **Railway** como path principal porque es el más rápido para shippear.
 
 ---
 
-## 0 · Crear repo GitHub
+## Pre-requisitos
 
-```bash
-cd unidata-pro
-git init
-git branch -M main
-git add -A
-git commit -m "init unidata pro"
-gh repo create unidata-pro --private --source=. --push
-```
-(o crearlo desde la web y `git remote add origin ...`)
+- [ ] Repo en GitHub (privado idealmente). Si todavía no:
+  ```bash
+  cd unidata-pro
+  git init
+  git add .
+  git commit -m "Initial commit"
+  # Crear repo en github.com (privado) y push
+  git remote add origin git@github.com:UNISTORE/unidata-pro.git
+  git push -u origin main
+  ```
+- [ ] Cuenta en https://railway.com (login con GitHub)
+- [ ] Las llaves SSH `unistore-bastion-key.pem` y `unidrop-bastion-key.pem` accesibles localmente
 
 ---
 
-## 1 · Backend en Railway
+## 1️⃣ Backend en Railway
 
-### 1.1 Generar JWT secret
-```bash
-openssl rand -hex 64
-```
-copialo, lo pegas como `JWT_SECRET` en Railway.
+### a) Crear servicio
 
-### 1.2 Codear las SSH keys a base64
-```bash
-# Windows PowerShell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("$HOME\.ssh\unistore-bastion-key.pem")) | Set-Clipboard
-# Bash
-base64 -w0 ~/.ssh/unistore-bastion-key.pem | clip
-```
-copia los strings — uno por unidad.
+1. Railway → **New Project** → **Deploy from GitHub repo** → seleccionar `unidata-pro`
+2. Cuando pregunte el directorio, elegir `backend/` como **Root Directory**
+3. Railway detecta el `Dockerfile` automáticamente y empieza a buildear
 
-### 1.3 Crear servicio en Railway
-1. https://railway.app/new → **Deploy from GitHub repo** → eleguir `unidata-pro`
-2. Settings → **Root Directory:** `backend`
-3. Settings → **Watch Paths:** `backend/**`
-4. Volumes → **Add Volume:**
-   - Mount path: `/app/data`
-   - Size: 1 GB
+### b) Variables de entorno
 
-### 1.4 Variables de entorno (Settings → Variables)
-Pega todas estas en Railway:
+Configurar en Railway → Variables del servicio backend:
 
-```
-BASTION_HOST_UNISTORE=3.139.209.227
-BASTION_PORT_UNISTORE=22
-BASTION_USER_UNISTORE=ec2-user
-BASTION_KEY_UNISTORE_BASE64=<el base64 de unistore-bastion-key.pem>
-
-PROD_DB_HOST_UNISTORE=unistore-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com
-PROD_DB_PORT_UNISTORE=5432
-PROD_DB_NAME_UNISTORE=unistore_api
-PROD_DB_USER_UNISTORE=<user actual>
-PROD_DB_PASSWORD_UNISTORE=<password actual>
-
-LOCAL_PORT_UNISTORE=5433
-
-BASTION_HOST_UNIDROP=18.191.119.38
-BASTION_PORT_UNIDROP=22
-BASTION_USER_UNIDROP=ec2-user
-BASTION_KEY_UNIDROP_BASE64=<el base64 de unidrop-bastion-key.pem>
-
-PROD_DB_HOST_UNIDROP=unidrop-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com
-PROD_DB_PORT_UNIDROP=5432
-PROD_DB_NAME_UNIDROP=unidrop_api
-PROD_DB_USER_UNIDROP=<user actual>
-PROD_DB_PASSWORD_UNIDROP=<password actual>
-
-LOCAL_PORT_UNIDROP=5434
-
+```env
+# Auth
+JWT_SECRET=<generá con: openssl rand -hex 32>
 ADMIN_EMAIL=daniel.marmol@unistore.ar
-ADMIN_PASSWORD=unidata2026.
+ADMIN_PASSWORD=<password seguro inicial>
 ADMIN_NAME=Daniel Marmol
 
-JWT_SECRET=<el openssl rand -hex 64>
-JWT_ALGORITHM=HS256
-JWT_EXPIRES_HOURS=12
+# CORS — el dominio del frontend que vas a usar
+ALLOWED_ORIGINS=https://unidata-frontend.up.railway.app
 
-# Lo seteamos al final, despues de tener el dominio Vercel
-ALLOWED_ORIGINS=https://unidata.vercel.app
+# Bastion Unistore
+BASTION_HOST_UNISTORE=3.139.209.227
+BASTION_USER_UNISTORE=ec2-user
+PROD_DB_HOST_UNISTORE=<host RDS>
+PROD_DB_PORT_UNISTORE=5432
+PROD_DB_NAME_UNISTORE=<db name>
+PROD_DB_USER_UNISTORE=<user>
+PROD_DB_PASSWORD_UNISTORE=<password>
+LOCAL_PORT_UNISTORE=5433
+
+# Bastion Unidrop
+BASTION_HOST_UNIDROP=18.191.119.38
+BASTION_USER_UNIDROP=ec2-user
+PROD_DB_HOST_UNIDROP=<host RDS>
+PROD_DB_PORT_UNIDROP=5432
+PROD_DB_NAME_UNIDROP=<db name>
+PROD_DB_USER_UNIDROP=<user>
+PROD_DB_PASSWORD_UNIDROP=<password>
+LOCAL_PORT_UNIDROP=5434
+
+# Bastion Unidev (mismo bastion que Unistore, distinta DB)
+PROD_DB_HOST_UNIDEV=<host RDS>
+PROD_DB_NAME_UNIDEV=<db name>
+PROD_DB_USER_UNIDEV=<user>
+PROD_DB_PASSWORD_UNIDEV=<password>
+LOCAL_PORT_UNIDEV=5435
 ```
 
-### 1.5 Generar dominio publico
-Settings → Networking → **Generate Domain** → te da algo como
-`unidata-api-production.up.railway.app`
+### c) Llaves SSH como base64
 
-### 1.6 Deploy + smoke test
-- Esperar el primer build (3-5 min)
-- `curl https://<tu-dominio>.up.railway.app/api/health`
-- `curl -X POST https://<tu-dominio>.up.railway.app/api/auth/login -H "Content-Type: application/json" -d '{"email":"daniel.marmol@unistore.ar","password":"unidata2026."}'`
+Las llaves no pueden estar en variables de texto comunes (multilínea). Convertilas a base64:
 
-### 1.7 Si las queries devuelven 0
-Mirar logs: probablemente la AWS Security Group del bastion bloquea la IP saliente
-de Railway. Soluciones:
-- Agregar la IP de salida de Railway al SG (permanente: poner `0.0.0.0/0` solo
-  para puerto 22 si es aceptable, o el rango especifico de Railway).
-- Alternativa: poner el bastion en una IP eleastica fija y meter solo esa al SG.
+```bash
+# Desde tu máquina local
+base64 -w 0 ~/.ssh/unistore-bastion-key.pem
+# Copiar el output ENTERO (sin saltos de línea) y pegarlo en Railway:
+#   BASTION_KEY_UNISTORE_BASE64 = <pega aquí>
 
----
-
-## 2 · Frontend en Vercel
-
-### 2.1 Importar proyecto
-1. https://vercel.com/new → **Import Git Repository** → eleguir `unidata-pro`
-2. **Root Directory:** `frontend`
-3. Framework: Next.js (autodetected)
-
-### 2.2 Variables de entorno
-- `NEXT_PUBLIC_API_URL` = `https://<tu-dominio-railway>.up.railway.app`
-
-### 2.3 Deploy
-Apretar **Deploy**. ~2 min. Te da la URL `https://unidata-XXX.vercel.app`.
-
-### 2.4 Volver a Railway y actualizar CORS
-Variable `ALLOWED_ORIGINS` en Railway:
-```
-ALLOWED_ORIGINS=https://unidata-XXX.vercel.app,https://unidata.vercel.app
-```
-Railway redeploya automaticamente.
-
-### 2.5 (Opcional) Dominio custom
-Vercel → Settings → Domains → Add Domain.
-
----
-
-## 3 · Smoke test produccion
-
-1. Abrir `https://unidata-XXX.vercel.app`
-2. Login con `daniel.marmol@unistore.ar` / `unidata2026.`
-3. Ir a Dashboard Gerencial → tienen que aparecer los KPIs reales.
-4. Ir a Admin → Usuarios → agregar un usuario de prueba.
-5. Loguear con ese usuario nuevo en otra pestaña → tiene que entrar pero sin ver
-   "Usuarios" ni "Audit log" en el sidebar.
-
----
-
-## 4 · Auto-deploy
-
-A partir de aca, **cada push a `main`** dispara:
-- Railway: rebuild backend
-- Vercel: rebuild frontend
-
-PRs en GitHub generan **preview URLs** automaticas en Vercel.
-
----
-
-## 5 · Rotacion de credenciales DB (cuando puedas)
-
-Conectarse a las RDS como super-user (ej: `psql` desde el bastion) y:
-
-```sql
--- En Unistore RDS
-ALTER USER unistore WITH PASSWORD '<nuevo>';
-
--- Crear user dedicado read-only
-CREATE USER unidata_ro WITH PASSWORD '<nuevo-ro>';
-GRANT CONNECT ON DATABASE unistore_api TO unidata_ro;
-GRANT USAGE ON SCHEMA tienda_nube, meli, digip, contabilium, public TO unidata_ro;
-GRANT SELECT ON ALL TABLES IN SCHEMA tienda_nube, meli, digip, contabilium, public TO unidata_ro;
-ALTER DEFAULT PRIVILEGES IN SCHEMA tienda_nube, meli, digip, contabilium, public
-  GRANT SELECT ON TABLES TO unidata_ro;
+base64 -w 0 ~/.ssh/unidrop-bastion-key.pem
+#   BASTION_KEY_UNIDROP_BASE64 = <pega aquí>
 ```
 
-Idem para Unidrop. Despues actualizar `PROD_DB_USER_*` / `PROD_DB_PASSWORD_*` en
-Railway con `unidata_ro` y los nuevos passwords. Railway redeploya solo.
+> El `entrypoint.sh` del Dockerfile las decodifica al iniciar y las escribe en `/app/keys/*.pem` con permisos 600.
+
+### d) Volumen persistente
+
+Para que `users.db`, `audit.db` y `costs.db` no se pierdan en cada deploy:
+
+1. Railway → backend service → **Volumes**
+2. Crear volumen mounted en `/app/data` (1GB es de sobra)
+
+### e) Configurar IP del bastion
+
+Las security groups de los bastions Unistore/Unidrop solo permiten conexiones SSH desde IPs allowlistadas. Railway tiene IPs estáticas por servicio:
+
+1. Railway → backend service → **Settings** → ver **Static Outbound IP** (feature paga, ~$5/mes adicional)
+2. Si no querés pagar la static IP, podés usar **Tailscale** o pedirle al admin de AWS que abra el SG a la IP de salida actual de Railway (que cambia cada tanto)
+
+**Alternativa más barata:** poner el backend en **Fly.io** que sí da IPs estáticas gratis, y dejar el frontend en Railway.
+
+### f) Deploy
+
+Railway autodeployea en cada push a `main`. Verificá:
+- Logs muestran `INFO: Uvicorn running on http://0.0.0.0:8000`
+- `https://<tu-backend>.up.railway.app/api/health` responde `{"status": "ok"}`
 
 ---
 
-## Troubleshooting
+## 2️⃣ Frontend en Railway
 
-### Backend no arranca: `ssh error: SSH session not active`
-- Ya tiene auto-recovery: el primer request despues del fallo dispara reconexion.
-- Si persiste >1 min: los SG de los bastiones probablemente bloquean Railway.
-  Verificar IP saliente con `curl ifconfig.me` desde el container Railway.
+### a) Crear servicio
 
-### Frontend muestra 0 en todos los KPIs
-- F12 → Network → ver si las queries a `/api/dashboards/...` dan 200 con data
-  vacia, o si dan 401/CORS.
-- Si CORS: verificar `ALLOWED_ORIGINS` en Railway.
+1. En el mismo proyecto Railway → **+ New** → **GitHub repo** → mismo `unidata-pro`
+2. Root Directory: `frontend/`
+3. Detecta el Dockerfile y buildea (toma ~5-8 min la primera vez)
 
-### "Token invalido" despues de cambiar `JWT_SECRET`
-- Hacer logout y volver a loguear (el token viejo se firmaba con el secret anterior).
+### b) Variable de entorno
+
+```env
+NEXT_PUBLIC_API_URL=https://<tu-backend>.up.railway.app
+```
+
+> Esa URL la sacás del servicio backend de Railway una vez deployado (Settings → Domains).
+
+### c) Custom domain (opcional)
+
+Railway → frontend → **Settings** → **Domains** → **Custom Domain**: `data.unistore.ar` (o el que prefieras). Apuntar el CNAME desde tu DNS.
+
+---
+
+## 3️⃣ Post-deploy checklist
+
+- [ ] Login funciona con `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+- [ ] `/dashboard/home` carga las tiles segmentadas por rol
+- [ ] `/api/health` responde 200 en backend
+- [ ] El comparador HOY muestra valores reales (no 0)
+- [ ] El mapa Argentina renderiza con las 24 provincias
+- [ ] Click en un order id linkea a `unistore8.mitiendanube.com/admin/orders/...`
+- [ ] Las llaves SSH se materializaron (logs deben decir `key materialized: /app/keys/...`)
+- [ ] Crear usuarios desde **Admin > Usuarios** con sus roles correspondientes (gerencia / analista / lector)
+- [ ] Cambiar `ADMIN_PASSWORD` después del primer login (Mi cuenta)
+- [ ] Verificar TZ: las fechas en cualquier modal deben mostrar AR (UTC-3), no UTC
+
+---
+
+## 4️⃣ Mantenimiento
+
+### Logs
+- Railway: tab **Logs** del servicio (stream en vivo)
+- Filtrar por `ERROR` o `WARNING` con el buscador
+
+### Roll-back rápido
+- Railway → **Deployments** → seleccionar deploy anterior → **Redeploy**
+
+### Restart de servicio
+- Railway → **Settings** → **Restart**
+
+### Backup SQLite
+Los archivos en `/app/data` (users.db, costs.db) deberían respaldarse periódicamente:
+
+```bash
+# Desde Railway CLI (instalá: npm i -g @railway/cli)
+railway login
+railway link --project <project-id> --service backend
+railway run sh -c 'cp /app/data/users.db /app/data/users.backup.db'
+railway run sh -c 'cat /app/data/users.db' > local-backup.db
+```
+
+### Reload del cache
+El backend cachea endpoints por 60s. Si necesitás invalidar inmediatamente:
+- Restart del servicio (Settings → Restart)
+- O esperar 60s
+
+---
+
+## 5️⃣ Producción endurecida (siguiente fase)
+
+Cuando esté en producción y el equipo lo use:
+
+- [ ] **HTTPS forzado** (Railway lo da automático con su dominio)
+- [ ] **Rate limiting** en endpoints sensibles (login, import)
+- [ ] **Audit log persistente** (ya está en `audit.db`)
+- [ ] **Backup automático** de las SQLite a S3 cada 24h (cron job)
+- [ ] **Monitoreo**: Sentry para errores, Better Stack o similar para uptime
+- [ ] **Rotar `JWT_SECRET`** si alguna vez se filtra (invalida todos los tokens)
+- [ ] **2FA** para roles admin (TOTP)
+- [ ] Migrar SSH bastion a **read-only Postgres replica** o connection pooler (PgBouncer) en RDS para no depender del túnel
+
+---
+
+## 🚨 Troubleshooting
+
+**Backend logs muestran `BadHostKeyException`:**
+- La llave SSH no está bien base64-encoded. Re-correr `base64 -w 0` (sin wrap)
+
+**`could not connect to server: Connection timed out`:**
+- IP de Railway no está allowlistada en el SG del bastion. Comprar Static IP en Railway o cambiar a Fly.io
+
+**Frontend muestra `Network Error` al loguear:**
+- `NEXT_PUBLIC_API_URL` mal configurado, o `ALLOWED_ORIGINS` del backend no incluye el dominio del frontend
+- Verificar con `curl https://<backend>/api/health` desde tu máquina
+
+**`401 Unauthorized` en endpoints:**
+- JWT expirado: re-login. El default es 8h
+- `JWT_SECRET` cambió entre deploys: invalida todos los tokens
+
+**Datos en cero (HOY, ventas, etc.):**
+- SSH tunnel caído. Backend tiene auto-recovery — esperar 30s y reintentar
+- Si persiste: revisar logs por `paramiko.SSHException`
+
+---
+
+## 📞 Soporte
+
+Daniel Marmol · daniel.marmol@unistore.ar
