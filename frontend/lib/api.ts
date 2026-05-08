@@ -8,7 +8,8 @@ export type AuthUser = {
   id: number;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "admin" | "user" | "gerencia" | "analista" | "lector";
+  is_admin: boolean;
 };
 
 export function getToken(): string | null {

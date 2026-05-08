@@ -14,13 +14,14 @@ from app.db import users_db
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
-def issue_token(user_id: int, email: str, role: str, settings: Settings | None = None) -> str:
+def issue_token(user_id: int, email: str, role: str, settings: Settings | None = None, is_admin: bool = False) -> str:
     s = settings or get_settings()
     now = dt.datetime.now(dt.timezone.utc)
     payload = {
         "sub": str(user_id),
         "email": email,
         "role": role,
+        "is_admin": bool(is_admin) or role == "admin",
         "iat": int(now.timestamp()),
         "exp": int((now + dt.timedelta(hours=s.jwt_expires_hours)).timestamp()),
     }
@@ -57,10 +58,16 @@ async def current_user(
         "email": row["email"],
         "name": row["name"],
         "role": row["role"],
+        "is_admin": bool(row.get("is_admin")) or row["role"] == "admin",
     }
 
 
 async def require_admin(user: Annotated[dict, Depends(current_user)]) -> dict:
-    if user.get("role") != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Requiere rol admin")
+    """Permite acceso si role='admin' (legacy) o is_admin=TRUE (nuevo modelo).
+
+    Asi 'gerencia' u otros roles pueden tambien tener permisos de admin si el
+    superadmin se los otorga via el flag is_admin.
+    """
+    if not user.get("is_admin") and user.get("role") != "admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Requiere permisos de admin")
     return user

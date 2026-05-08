@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<title>UNIDATA — Lanzamiento</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --primary: #7a3eae;
+    --primary-dark: #4e1e7a;
+    --darkest: #21093a;
+    --accent: #a259ff;
+    --bg: #f8f9fc;
+    --surface: #ffffff;
+    --soft: #f5f0fb;
+    --border: #e0cff3;
+    --text: #21093a;
+    --muted: #6b7280;
+    --success: #25d366;
+    --warn: #f59e0b;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { font-family: 'Inter', -apple-system, sans-serif; -webkit-font-smoothing: antialiased; background: #1a1a1a; }
+  body { display: flex; justify-content: center; padding: 0; }
+
+  .post {
+    width: 1080px;
+    height: 1350px;
+    background: var(--bg);
+    color: var(--text);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── HEADER (gradiente sidebar style) ─── */
+  .header {
+    background: linear-gradient(135deg, var(--darkest) 0%, var(--primary-dark) 100%);
+    padding: 32px 60px 36px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -150px; right: -150px;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+    opacity: 0.18;
+    border-radius: 50%;
+  }
+  .brand-row {
+    display: flex; align-items: center; gap: 16px;
+    position: relative; z-index: 2;
+  }
+  .logo-box {
+    width: 56px; height: 56px;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    font-weight: 900;
+    font-size: 30px;
+    box-shadow: 0 8px 24px rgba(162, 89, 255, 0.4);
+  }
+  .brand-text .name { color: white; font-weight: 800; font-size: 28px; letter-spacing: -0.5px; }
+  .brand-text .sub { color: rgba(255,255,255,0.65); font-size: 13px; font-weight: 500; letter-spacing: 0.5px; }
+
+  .badge {
+    position: absolute;
+    top: 50px; right: 60px;
+    background: rgba(37, 211, 102, 0.18);
+    border: 1px solid rgba(37, 211, 102, 0.4);
+    color: #6ee7b7;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    z-index: 3;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .badge::before {
+    content: ''; width: 8px; height: 8px; border-radius: 50%;
+    background: #25d366; box-shadow: 0 0 12px #25d366;
+  }
+
+  .hero {
+    position: relative; z-index: 2;
+    margin-top: 28px;
+  }
+  .hero h1 {
+    color: white;
+    font-size: 56px;
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1;
+  }
+  .hero h1 .accent {
+    background: linear-gradient(135deg, var(--accent) 0%, #c084fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    color: rgba(255,255,255,0.78);
+    font-size: 20px;
+    margin-top: 16px;
+    font-weight: 400;
+    line-height: 1.4;
+    max-width: 880px;
+  }
+
+  /* ─── BODY ─── */
+  .body {
+    padding: 36px 60px 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 26px;
+  }
+
+  /* ─── SECCIÓN: PARA QUIÉN ES ─── */
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: var(--primary);
+    margin-bottom: 12px;
+  }
+  .section-title {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    color: var(--text);
+    margin-bottom: 20px;
+  }
+
+  .roles-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+  .role-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .role-card .icon {
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, rgba(122, 62, 174, 0.12), rgba(162, 89, 255, 0.12));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    margin-bottom: 6px;
+  }
+  .role-card .role { font-size: 14px; font-weight: 700; color: var(--text); }
+  .role-card .desc { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+
+  /* ─── SECCIÓN KPIs / DASHBOARDS ─── */
+  .kpi-strip {
+    background: linear-gradient(135deg, rgba(122, 62, 174, 0.08), rgba(162, 89, 255, 0.08));
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 26px 28px;
+  }
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 4px;
+  }
+  .kpi {
+    background: var(--surface);
+    border-radius: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+  }
+  .kpi .num {
+    font-size: 30px; font-weight: 800; color: var(--primary);
+    letter-spacing: -1px; line-height: 1;
+  }
+  .kpi .lbl {
+    font-size: 11px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.8px;
+    margin-top: 6px;
+  }
+
+  /* ─── DIFERENCIALES ─── */
+  .diff-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  .diff {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .diff .check {
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    display: flex; align-items: center; justify-content: center;
+    color: white; font-weight: 800; font-size: 16px;
+  }
+  .diff .t { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+  .diff .d { font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+
+  /* ─── CTA ─── */
+  .cta {
+    margin: 26px 60px 22px;
+    background: linear-gradient(135deg, var(--darkest), var(--primary));
+    border-radius: 20px;
+    padding: 24px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: white;
+    overflow: hidden;
+    position: relative;
+  }
+  .cta::before {
+    content: '';
+    position: absolute;
+    top: -100px; right: -100px;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+    opacity: 0.25;
+    border-radius: 50%;
+  }
+  .cta-text { position: relative; z-index: 2; }
+  .cta-text .l1 { font-size: 13px; text-transform: uppercase; letter-spacing: 2px; opacity: 0.7; font-weight: 600; }
+  .cta-text .l2 { font-size: 28px; font-weight: 800; margin-top: 4px; letter-spacing: -0.5px; }
+  .cta-btn {
+    background: white;
+    color: var(--darkest);
+    padding: 16px 28px;
+    border-radius: 12px;
+    font-weight: 800;
+    font-size: 16px;
+    letter-spacing: -0.2px;
+    position: relative;
+    z-index: 2;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+  }
+
+  .footer-tag {
+    text-align: center;
+    font-size: 12px;
+    color: var(--muted);
+    padding-bottom: 18px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="post">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="brand-row">
+      <div class="logo-box">U</div>
+      <div class="brand-text">
+        <div class="name">UNIDATA</div>
+        <div class="sub">Unistore Group · Plataforma de datos</div>
+      </div>
+    </div>
+    <div class="badge">En producción</div>
+
+    <div class="hero">
+      <h1>Tus datos.<br>Tu equipo.<br><span class="accent">Una sola web.</span></h1>
+      <p>Adiós al "te lo paso el lunes". UNIDATA centraliza todos los KPIs del grupo en una sola plataforma. Datos en vivo, accesibles desde cualquier dispositivo.</p>
+    </div>
+  </div>
+
+  <!-- BODY -->
+  <div class="body">
+
+    <!-- KPI strip -->
+    <div class="kpi-strip">
+      <div class="section-label">Lo que ya está funcionando</div>
+      <div class="kpi-grid">
+        <div class="kpi"><div class="num">15+</div><div class="lbl">Dashboards</div></div>
+        <div class="kpi"><div class="num">2</div><div class="lbl">Unidades de negocio</div></div>
+        <div class="kpi"><div class="num">100%</div><div class="lbl">En la nube</div></div>
+        <div class="kpi"><div class="num">0</div><div class="lbl">Instalación</div></div>
+      </div>
+    </div>
+
+    <!-- Roles -->
+    <div>
+      <div class="section-label">Para qué te sirve</div>
+      <div class="section-title">Cada área, su tablero</div>
+      <div class="roles-grid">
+        <div class="role-card">
+          <div class="icon">💰</div>
+          <div class="role">Finanzas</div>
+          <div class="desc">Márgenes, costos y MRR sin esperar al cierre</div>
+        </div>
+        <div class="role-card">
+          <div class="icon">📈</div>
+          <div class="role">Marketing</div>
+          <div class="desc">CAC, LTV y ROAS por fuente, en vivo</div>
+        </div>
+        <div class="role-card">
+          <div class="icon">🚚</div>
+          <div class="role">Operaciones</div>
+          <div class="desc">Logística, pagos y devoluciones al toque</div>
+        </div>
+        <div class="role-card">
+          <div class="icon">🛒</div>
+          <div class="role">Comercial</div>
+          <div class="desc">Ventas por canal, productos top, AOV</div>
+        </div>
+        <div class="role-card">
+          <div class="icon">🤝</div>
+          <div class="role">Customer Success</div>
+          <div class="desc">Salud de cuentas, NPS, dropshippers</div>
+        </div>
+        <div class="role-card">
+          <div class="icon">🧠</div>
+          <div class="role">Liderazgo</div>
+          <div class="desc">HOY vs 7d / 30d / 1 año en una pantalla</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diferenciales -->
+    <div>
+      <div class="section-label">Por qué te va a gustar</div>
+      <div class="diff-row">
+        <div class="diff">
+          <div class="check">✓</div>
+          <div>
+            <div class="t">Datos en tiempo real</div>
+            <div class="d">Conexión directa a producción vía túnel seguro</div>
+          </div>
+        </div>
+        <div class="diff">
+          <div class="check">✓</div>
+          <div>
+            <div class="t">SQL libre, solo lectura</div>
+            <div class="d">Tirate a probar — no podés romper nada</div>
+          </div>
+        </div>
+        <div class="diff">
+          <div class="check">✓</div>
+          <div>
+            <div class="t">Cada uno ve lo suyo</div>
+            <div class="d">Roles y unidades de negocio separados</div>
+          </div>
+        </div>
+        <div class="diff">
+          <div class="check">✓</div>
+          <div>
+            <div class="t">Funciona en el celu</div>
+            <div class="d">Mobile-first, sin VPN, sin instalación</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- CTA -->
+  <div class="cta">
+    <div class="cta-text">
+      <div class="l1">Disponible ahora</div>
+      <div class="l2">Pedí tu acceso al canal interno</div>
+    </div>
+    <div class="cta-btn">UNIDATA →</div>
+  </div>
+
+  <div class="footer-tag">Unistore · Unidrop · Unidev · Unifull</div>
+
+</div>
+</body>
+</html>

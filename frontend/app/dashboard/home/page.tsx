@@ -149,7 +149,12 @@ export default function HomePage() {
   }
 
   const role = ((user?.role as RoleKey) ?? "user") as RoleKey;
-  const tileKeys = ROLE_VIEWS[role] ?? ROLE_VIEWS.user;
+  // Vista efectiva = views del role + (si is_admin) las del role admin
+  // Asi alguien con role=gerencia + is_admin=true ve gerencia + admin sin perder ninguno.
+  const baseTiles = ROLE_VIEWS[role] ?? ROLE_VIEWS.user;
+  const adminTiles = (user?.is_admin || role === "admin") ? ROLE_VIEWS.admin : [];
+  // Union manteniendo orden del role base, sumando los admin que no esten ya
+  const tileKeys = [...baseTiles, ...adminTiles.filter((k) => !baseTiles.includes(k))];
   const tiles = tileKeys.map((k) => TILES[k]).filter(Boolean);
 
   // Featured = primeros 3 (los más usados para el rol)

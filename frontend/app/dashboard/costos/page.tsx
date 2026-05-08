@@ -56,7 +56,7 @@ export default function CostosPage() {
   const [search, setSearch] = useState("");
   const qc = useQueryClient();
   const user = getUser();
-  const isAdmin = user?.role === "admin";
+  const isAdmin = user?.is_admin || user?.role === "admin";
 
   const { data: rate, refetch: refetchRate } = useQuery<UsdRate>({
     queryKey: ["costs", "usd-rate"],

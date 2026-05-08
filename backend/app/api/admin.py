@@ -17,12 +17,14 @@ class UserCreate(BaseModel):
     name: str = ""
     password: str
     role: str = "user"
+    is_admin: bool = False
 
 
 class UserUpdate(BaseModel):
     name: str | None = None
     role: str | None = None
     is_active: bool | None = None
+    is_admin: bool | None = None
     new_password: str | None = None
 
 
@@ -42,6 +44,7 @@ def create_user(
             name=body.name,
             password=body.password,
             role=body.role,
+            is_admin=body.is_admin,
             created_by=admin["email"],
         )
     except ValueError as e:
@@ -54,8 +57,13 @@ def update_user(
     body: UserUpdate,
     admin: Annotated[dict, Depends(require_admin)],
 ) -> dict:
-    if user_id == admin["id"] and body.role and body.role != "admin":
-        raise HTTPException(400, "No podes degradarte a vos mismo (perderias acceso al panel)")
+    # Auto-proteccion: el admin no puede quitarse a si mismo el flag admin
+    if user_id == admin["id"] and body.is_admin is False:
+        raise HTTPException(400, "No podes quitarte a vos mismo el flag admin (perderias acceso al panel)")
+    if user_id == admin["id"] and body.role and body.role == "lector":
+        # Permitir gerencia/analista, solo bloquear bajadas a lector si tampoco mantiene is_admin
+        if not body.is_admin:
+            raise HTTPException(400, "No podes pasarte a lector sin mantener is_admin")
     if user_id == admin["id"] and body.is_active is False:
         raise HTTPException(400, "No podes desactivarte a vos mismo")
     try:
@@ -64,6 +72,7 @@ def update_user(
             name=body.name,
             role=body.role,
             is_active=body.is_active,
+            is_admin=body.is_admin,
             new_password=body.new_password,
         )
     except ValueError as e:

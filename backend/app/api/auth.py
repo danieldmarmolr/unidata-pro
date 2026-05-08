@@ -53,7 +53,7 @@ def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciales invalidas")
     if not user.get("is_active"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inactivo")
-    token = issue_token(user["id"], user["email"], user["role"], settings)
+    token = issue_token(user["id"], user["email"], user["role"], settings, is_admin=user.get("is_admin", False))
     return TokenResponse(access_token=token, user=user)
 
 
@@ -113,7 +113,7 @@ def set_initial_password(
             status.HTTP_409_CONFLICT,
             "el usuario ya tiene password seteada o no existe - usa /login",
         )
-    token = issue_token(user["id"], user["email"], user["role"], settings)
+    token = issue_token(user["id"], user["email"], user["role"], settings, is_admin=user.get("is_admin", False))
     return TokenResponse(access_token=token, user=user)
 
 

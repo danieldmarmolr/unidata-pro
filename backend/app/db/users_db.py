@@ -48,15 +48,18 @@ def init() -> None:
                     role          TEXT NOT NULL DEFAULT 'user'
                                   CHECK (role IN ('admin','user','gerencia','analista','lector')),
                     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                    is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     created_by    TEXT
                 )
             """)
-            # Migracion idempotente: si la columna era NOT NULL, la relajamos
-            cur.execute("""
-                ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL
-            """)
+            # Migraciones idempotentes
+            cur.execute("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            # Backfill: usuarios con role='admin' obtienen is_admin=TRUE automaticamente.
+            # Esto es idempotente (si ya estaba TRUE no cambia nada).
+            cur.execute("UPDATE users SET is_admin = TRUE WHERE role = 'admin' AND is_admin = FALSE")
             # Unique case-insensitive en email (equivalente a SQLite COLLATE NOCASE)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower
@@ -74,8 +77,8 @@ def init() -> None:
                     cur.execute(
                         """
                         INSERT INTO users
-                          (email, name, password_hash, role, is_active, created_by)
-                        VALUES (%s, %s, %s, 'admin', TRUE, 'seed')
+                          (email, name, password_hash, role, is_active, is_admin, created_by)
+                        VALUES (%s, %s, %s, 'admin', TRUE, TRUE, 'seed')
                         """,
                         (seed_email, seed_name, _hash(seed_password)),
                     )
@@ -130,7 +133,7 @@ def list_all() -> list[dict]:
     return [_to_dict(r) for r in rows]
 
 
-def create(email: str, name: str, password: str, role: str, created_by: str) -> dict:
+def create(email: str, name: str, password: str, role: str, created_by: str, is_admin: bool = False) -> dict:
     init()
     if role not in ("admin", "user", "gerencia", "analista", "lector"):
         raise ValueError("role debe ser admin/user/gerencia/analista/lector")
@@ -138,16 +141,19 @@ def create(email: str, name: str, password: str, role: str, created_by: str) -> 
         raise ValueError("email invalido")
     if not password or len(password) < 6:
         raise ValueError("password muy corto (min 6 chars)")
+    # Si role es 'admin', forzar is_admin=true por consistencia (legacy compat)
+    if role == "admin":
+        is_admin = True
     try:
         with get_conn() as c, c.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO users
-                  (email, name, password_hash, role, is_active, created_by)
-                VALUES (%s, %s, %s, %s, TRUE, %s)
+                  (email, name, password_hash, role, is_active, is_admin, created_by)
+                VALUES (%s, %s, %s, %s, TRUE, %s, %s)
                 RETURNING *
                 """,
-                (email.strip().lower(), name.strip(), _hash(password), role, created_by),
+                (email.strip().lower(), name.strip(), _hash(password), role, is_admin, created_by),
             )
             row = cur.fetchone()
             return _to_dict(row)
@@ -161,6 +167,7 @@ def update(
     name: str | None = None,
     role: str | None = None,
     is_active: bool | None = None,
+    is_admin: bool | None = None,
     new_password: str | None = None,
 ) -> dict | None:
     init()
@@ -172,8 +179,13 @@ def update(
         if role not in ("admin", "user", "gerencia", "analista", "lector"):
             raise ValueError("role invalido")
         sets.append("role = %s"); params.append(role)
+        # Si el role pasa a 'admin', forzar is_admin=TRUE por consistencia
+        if role == "admin":
+            sets.append("is_admin = TRUE")
     if is_active is not None:
         sets.append("is_active = %s"); params.append(bool(is_active))
+    if is_admin is not None:
+        sets.append("is_admin = %s"); params.append(bool(is_admin))
     if new_password is not None:
         if len(new_password) < 6:
             raise ValueError("password muy corto (min 6 chars)")
@@ -288,6 +300,7 @@ def _to_dict(row: dict | None) -> dict:
     d = dict(row)
     d.pop("password_hash", None)
     d["is_active"] = bool(d.get("is_active"))
+    d["is_admin"] = bool(d.get("is_admin"))
     # ISO format para timestamps
     for k in ("created_at", "updated_at"):
         if k in d and d[k] is not None and not isinstance(d[k], str):

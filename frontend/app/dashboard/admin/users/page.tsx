@@ -12,6 +12,7 @@ type User = {
   name: string;
   role: "admin" | "user" | "gerencia" | "analista" | "lector";
   is_active: boolean;
+  is_admin: boolean;
   created_at: string;
   updated_at: string;
   created_by: string | null;
@@ -30,7 +31,7 @@ export default function AdminUsersPage() {
   const [editPwd, setEditPwd] = useState<{ id: number; email: string } | null>(null);
 
   const createMut = useMutation({
-    mutationFn: (b: { email: string; name: string; password: string; role: string }) =>
+    mutationFn: (b: { email: string; name: string; password: string; role: string; is_admin: boolean }) =>
       api("/api/admin/users", { method: "POST", body: JSON.stringify(b) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -44,7 +45,8 @@ export default function AdminUsersPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
 
-  if (me?.role !== "admin") {
+  // Acceso si es role=admin (legacy) O is_admin=true (modelo nuevo)
+  if (!(me?.is_admin || me?.role === "admin")) {
     return (
       <>
         <Topbar title="Acceso restringido" />
@@ -79,6 +81,7 @@ export default function AdminUsersPage() {
                 <th className="text-left px-3 py-2">Email</th>
                 <th className="text-left px-3 py-2">Nombre</th>
                 <th className="text-center px-3 py-2">Rol</th>
+                <th className="text-center px-3 py-2" title="Permisos de admin (puede gestionar usuarios)">Admin</th>
                 <th className="text-center px-3 py-2">Activo</th>
                 <th className="text-left px-3 py-2">Creado</th>
                 <th className="text-right px-3 py-2 pr-4">Acciones</th>
@@ -105,12 +108,28 @@ export default function AdminUsersPage() {
                       }
                       className="px-2 py-1 text-xs rounded border border-border bg-bg outline-none focus:border-primary disabled:opacity-50"
                     >
-                      <option value="admin">admin</option>
                       <option value="gerencia">gerencia</option>
                       <option value="analista">analista</option>
                       <option value="lector">lector</option>
                       <option value="user">user</option>
+                      <option value="admin">admin (legacy)</option>
                     </select>
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      disabled={u.id === me.id || u.role === "admin"}
+                      checked={u.is_admin || u.role === "admin"}
+                      onChange={(e) =>
+                        updateMut.mutate({ id: u.id, body: { is_admin: e.target.checked } })
+                      }
+                      className="cursor-pointer disabled:cursor-not-allowed"
+                      title={
+                        u.role === "admin"
+                          ? "Es role admin → siempre tiene permisos de admin"
+                          : "Marcar para que tambien pueda gestionar la plataforma"
+                      }
+                    />
                   </td>
                   <td className="px-3 py-2 text-center">
                     <button
@@ -143,7 +162,7 @@ export default function AdminUsersPage() {
               ))}
               {!isLoading && (!data || data.length === 0) && (
                 <tr>
-                  <td colSpan={6} className="py-10 text-center text-text-muted">
+                  <td colSpan={7} className="py-10 text-center text-text-muted">
                     No hay usuarios.
                   </td>
                 </tr>
@@ -196,7 +215,7 @@ function NewUserModal({
   error,
 }: {
   onClose: () => void;
-  onCreate: (b: { email: string; name: string; password: string; role: string }) => void;
+  onCreate: (b: { email: string; name: string; password: string; role: string; is_admin: boolean }) => void;
   loading: boolean;
   error: string | null;
 }) {
@@ -204,12 +223,13 @@ function NewUserModal({
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
+  const [isAdmin, setIsAdmin] = useState(false);
   return (
     <ModalShell title="Agregar usuario" onClose={onClose}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onCreate({ email, name, password, role });
+          onCreate({ email, name, password, role, is_admin: isAdmin });
         }}
         className="space-y-3"
       >
@@ -217,19 +237,36 @@ function NewUserModal({
         <Field label="Nombre" value={name} onChange={setName} />
         <Field label="Password inicial" value={password} onChange={setPassword} type="password" required hint="Min 6 caracteres. Pasaselo por chat al user." />
         <div>
-          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Rol</label>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Rol (que tipo de info ve)</label>
           <select
             value={role}
             onChange={(e) => setRole(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
           >
-            <option value="admin">admin · todo (gestiona usuarios + audit)</option>
             <option value="gerencia">gerencia · KPIs cross-unidad estrategicos</option>
             <option value="analista">analista · drill profundo + SQL libre</option>
             <option value="lector">lector · vistas read-only basicas</option>
             <option value="user">user · todos los dashboards (sin SQL/admin)</option>
+            <option value="admin">admin (legacy) · ya implica permisos de admin</option>
           </select>
         </div>
+        <label className="flex items-start gap-2 cursor-pointer p-3 border border-border rounded-lg hover:border-primary/40 transition">
+          <input
+            type="checkbox"
+            checked={isAdmin || role === "admin"}
+            disabled={role === "admin"}
+            onChange={(e) => setIsAdmin(e.target.checked)}
+            className="mt-0.5 cursor-pointer"
+          />
+          <div className="flex-1 text-xs">
+            <div className="font-semibold text-text">Permisos de admin</div>
+            <div className="text-text-muted mt-0.5">
+              Marcar si tambien debe gestionar usuarios y plataforma. Util para
+              gerentes que quieren ver vistas estrategicas Y administrar
+              (ej: role=gerencia + admin).
+            </div>
+          </div>
+        </label>
         {error && <div className="bg-red-50 border border-red-200 text-error rounded-lg px-3 py-2 text-xs">{error}</div>}
         <button
           type="submit"
