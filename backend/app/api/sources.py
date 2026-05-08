@@ -19,7 +19,7 @@ _tables_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
 
 def _check_unit(unit: str) -> str:
     unit = unit.lower()
-    if unit not in ("unistore", "unidrop"):
+    if unit not in ("unistore", "unidrop", "unidev"):
         raise HTTPException(404, f"Unidad desconocida: {unit}")
     return unit
 

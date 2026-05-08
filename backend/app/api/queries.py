@@ -51,7 +51,7 @@ def run_query(
     if user.get("role") not in ("admin", "user"):
         raise HTTPException(403, "Sin permisos para SQL libre")
     unit = unit.lower()
-    if unit not in ("unistore", "unidrop"):
+    if unit not in ("unistore", "unidrop", "unidev"):
         raise HTTPException(404, "Unidad desconocida")
     ok, err = is_safe_select(body.sql)
     user_label = user.get("email") or str(user.get("id"))
