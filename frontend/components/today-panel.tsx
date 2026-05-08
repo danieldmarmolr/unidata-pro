@@ -28,13 +28,17 @@ function fmtDateAR(today_date: string): string {
 export function TodayPanel({
   compact = false,
   title = "Comparador HOY",
+  unit,
 }: {
   compact?: boolean;
   title?: string;
+  /** Si se pasa "unistore" o "unidrop" filtra a esa unidad. Sin valor = vista cross (Gerencial). */
+  unit?: "unistore" | "unidrop";
 }) {
+  const scope = unit ?? "all";
   const { data, isLoading } = useQuery<TodaySnapshot>({
-    queryKey: ["dashboards", "today"],
-    queryFn: () => api<TodaySnapshot>("/api/dashboards/today"),
+    queryKey: ["dashboards", "today", scope],
+    queryFn: () => api<TodaySnapshot>(`/api/dashboards/today?unit=${scope}`),
     staleTime: 60_000,
   });
 

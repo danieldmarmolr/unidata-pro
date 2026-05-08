@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/drilldowns", tags=["drilldowns"])
 def product_orders(
     product_id: str,
     _: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
 ) -> dict:
     return svc.orders_by_product("unistore", product_id, period)
 
@@ -24,7 +24,7 @@ def product_orders(
 def province_orders(
     province: str,
     _: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
 ) -> dict:
     return svc.orders_by_province("unistore", province, period)
 
@@ -84,7 +84,7 @@ def drill_users_active(
 @router.get("/saas/users-new")
 def drill_users_new(
     _: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     segment: Annotated[_SEG_LITERAL, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -95,7 +95,7 @@ def drill_users_new(
 @router.get("/saas/users-churned")
 def drill_users_churned(
     _: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     segment: Annotated[_SEG_LITERAL, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -118,7 +118,7 @@ def drill_tn_credentials(_: Annotated[dict, Depends(current_user)]) -> dict:
 
 
 # ===== Generic period drills =====
-_PERIOD_LITERAL = Literal["today", "7d", "30d", "90d", "12m", "custom"]
+_PERIOD_LITERAL = Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"]
 
 
 @router.get("/orders/paid")

@@ -69,7 +69,7 @@ export default function ProductosPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} />
+        <TodayPanel compact={period !== "today"} unit="unistore" />
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

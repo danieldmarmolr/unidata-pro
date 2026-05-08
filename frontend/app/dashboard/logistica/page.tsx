@@ -79,7 +79,7 @@ export default function LogisticaPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} />
+        <TodayPanel compact={period !== "today"} unit={unit} />
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

@@ -33,7 +33,7 @@ _cache: TTLCache = TTLCache(maxsize=64, ttl=60)
 @router.get("/saas/unidrop")
 def get_saas_unidrop(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     segment: Annotated[Literal["all", "b2b", "b2c"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -48,7 +48,7 @@ def get_saas_unidrop(
 @router.get("/logistica/unistore")
 def get_logistica_unistore(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     area: Annotated[str, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -63,7 +63,7 @@ def get_logistica_unistore(
 @router.get("/finanzas/unistore")
 def get_finanzas_unistore(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -77,7 +77,7 @@ def get_finanzas_unistore(
 @router.get("/marketing/unistore")
 def get_marketing_unistore(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -91,7 +91,7 @@ def get_marketing_unistore(
 @router.get("/marketing/unidrop")
 def get_marketing_unidrop(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -105,7 +105,7 @@ def get_marketing_unidrop(
 @router.get("/pagos/unidrop")
 def get_pagos(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -120,7 +120,7 @@ def get_pagos(
 @router.get("/sales/unidrop")
 def get_sales_unidrop(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -135,7 +135,7 @@ def get_sales_unidrop(
 @router.get("/logistica/unidrop")
 def get_logistica_unidrop(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -149,7 +149,7 @@ def get_logistica_unidrop(
 @router.get("/finanzas/unidrop")
 def get_finanzas_unidrop(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -163,7 +163,7 @@ def get_finanzas_unidrop(
 @router.get("/devoluciones")
 def get_devoluciones(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     modelo: Annotated[Literal["all", "unistore", "unidrop", "unifull"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -178,7 +178,7 @@ def get_devoluciones(
 @router.get("/subscriptions-meli")
 def get_subs_meli(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     plan: Annotated[str, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -194,7 +194,7 @@ def get_subs_meli(
 def get_cs(
     unit: str,
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -214,7 +214,7 @@ def get_cs(
 @router.get("/geo")
 def get_geo(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -229,7 +229,7 @@ def get_geo(
 def get_geo_province(
     province: str,
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
@@ -267,18 +267,24 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
 
 
 @router.get("/today")
-def get_today(_: Annotated[str, Depends(current_user)]) -> dict:
-    key = "today-snap"
-    @cached(_cache, key=lambda: key)
+def get_today(
+    _: Annotated[str, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop", "all"], Query()] = "all",
+) -> dict:
+    """Comparador HOY. Si unit=unistore o unidrop, muestra solo bloques de esa unidad.
+    Default 'all' = vista cross-unidad (Gerencial)."""
+    cache_key = f"today-snap-{unit}"
+    @cached(_cache, key=lambda: cache_key)
     def _b() -> dict:
-        return today_svc.today_snapshot()
+        scope = None if unit == "all" else unit
+        return today_svc.today_snapshot(unit=scope)
     return _b()
 
 
 @router.get("/products")
 def get_products(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -317,7 +323,7 @@ def get_customer_detail(
 @router.get("/envios/unidrop")
 def get_envios(
     _: Annotated[str, Depends(current_user)],
-    period: Annotated[Literal["today", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     courier: Annotated[Literal["all", "oca", "lightdata"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,

@@ -64,7 +64,20 @@ export async function api<T = unknown>(
     let detail = "";
     try {
       const data = await res.json();
-      detail = data?.detail ?? data?.message ?? JSON.stringify(data);
+      // FastAPI devuelve `detail` como string o como array de errores ({type,loc,msg,...}).
+      // Manejamos ambos casos para no mostrar [object Object].
+      if (typeof data?.detail === "string") {
+        detail = data.detail;
+      } else if (Array.isArray(data?.detail)) {
+        detail = data.detail
+          .map((e: any) => {
+            const loc = Array.isArray(e?.loc) ? e.loc.join(".") : "";
+            return loc ? `${loc}: ${e?.msg ?? "error"}` : e?.msg ?? JSON.stringify(e);
+          })
+          .join("; ");
+      } else {
+        detail = data?.message ?? JSON.stringify(data);
+      }
     } catch {
       detail = await res.text();
     }

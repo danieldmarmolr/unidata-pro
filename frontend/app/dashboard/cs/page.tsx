@@ -81,7 +81,7 @@ export default function CustomerSuccessPage() {
  { value: "unidrop", label: "Unidrop" },
  ]}
  />
-        <TodayPanel compact={period !== "today"} />
+        <TodayPanel compact={period !== "today"} unit={unit} />
  <Segmented<Channel>
  value={channel}
  onChange={setChannel}
