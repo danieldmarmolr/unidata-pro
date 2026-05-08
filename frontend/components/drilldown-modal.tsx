@@ -7,6 +7,7 @@ import { X, Download, ExternalLink, User, MapPin } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
+import { OrderStatusPipeline, OrderStatusBadge } from "@/components/order-status-pipeline";
 
 type Result = {
   columns: string[];
@@ -21,6 +22,9 @@ const EMAIL_HINT = /^(email|mail|correo)$/i;
 const CUSTOMER_NAME_HINT = /^(cliente|customer|customer_name|nombre_cliente|client|client_name)$/i;
 const PROVINCE_HINT = /^(provincia|province|region|departamento)$/i;
 const SKU_HINT = /^(sku|sku2|producto_sku|seller_sku|codigo|articulo)$/i;
+const PAYMENT_HINT = /^(payment|paymentstatus|pago|payment_status|estado_pago)$/i;
+const SHIPPING_HINT = /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i;
+const STATUS_HINT = /^(status|estado|order_status)$/i;
 
 /** Busca en la fila el valor de una columna (case-insensitive, devuelve null si no esta). */
 function findColValue(columns: string[], row: unknown[], colNames: string[]): unknown {
@@ -99,6 +103,34 @@ export function CellRenderer({
     );
   }
   const s = String(v);
+
+  // Pipeline de estados de orden: si la fila tiene payment + shipping, mostrar pipeline
+  // (solo en la celda de payment; la celda de shipping queda con badge individual)
+  if (PAYMENT_HINT.test(col) && row && columns) {
+    const shippingVal = findColValue(columns, row, ["shipping", "shippingStatus", "envio", "shipping_status"]);
+    const orderStatusVal = findColValue(columns, row, ["status", "estado", "order_status"]);
+    if (shippingVal !== null) {
+      return <OrderStatusPipeline payment={v} shipping={shippingVal} orderStatus={orderStatusVal} compact />;
+    }
+    return <OrderStatusBadge kind="payment" value={v} />;
+  }
+  if (SHIPPING_HINT.test(col) && row && columns) {
+    // Si la fila tambien tiene payment, ocultamos esta celda (la pipeline ya lo muestra)
+    const paymentVal = findColValue(columns, row, ["payment", "paymentStatus", "pago", "payment_status"]);
+    if (paymentVal !== null) {
+      // Pequenio caption del estado de envio para no perder info
+      return <span className="text-text-muted text-[9px] uppercase tracking-wider">{s}</span>;
+    }
+    return <OrderStatusBadge kind="shipping" value={v} />;
+  }
+  if (STATUS_HINT.test(col) && row && columns) {
+    const paymentVal = findColValue(columns, row, ["payment", "paymentStatus", "pago", "payment_status"]);
+    if (paymentVal !== null) {
+      // Status ya esta cubierto por la pipeline
+      return <span className="text-text-muted/60 text-[9px] uppercase">{s}</span>;
+    }
+    return <OrderStatusBadge kind="status" value={v} />;
+  }
 
   // Cliente: linkear al perfil si tenemos customer_id en la fila, sino busqueda por nombre
   if (CUSTOMER_NAME_HINT.test(col)) {
