@@ -29,6 +29,7 @@ import {
   LayoutDashboard,
   UserCog,
   Activity,
+  Boxes,
 } from "lucide-react";
 
 type Tile = {
@@ -46,6 +47,8 @@ const TILES: Record<string, Tile> = {
   ventas: { label: "Ventas", href: "/dashboard/ventas", icon: TrendingUp, color: "from-emerald-500 to-teal-500", description: "GMV, ordenes, top productos, geografia · vista por unidad" },
   productos: { label: "Productos", href: "/dashboard/productos", icon: ShoppingBag, color: "from-orange-500 to-red-500", description: "Top SKUs, stock, sin movimiento, drill por SKU · vista por unidad" },
   costos: { label: "Costos importacion", href: "/dashboard/costos", icon: DollarSign, color: "from-amber-500 to-yellow-500", description: "Lotes, costos USD/ARS, margen estimado por SKU · Unistore" },
+  lotes: { label: "Gestion de Lotes", href: "/dashboard/lotes", icon: Boxes, color: "from-purple-600 to-indigo-600", description: "Consumo, markup y cobertura por lote · drilldown SKU con foto y EAN" },
+  lotes: { label: "Gestion de Lotes", href: "/dashboard/lotes", icon: Boxes, color: "from-fuchsia-500 to-purple-600", description: "Consumo del lote · markup · cobertura de pago · drill por SKU · replica del PowerBI" },
   marketing: { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone, color: "from-pink-500 to-rose-500", description: "LTV, repeat purchase, top customers, retention · vista por unidad" },
   cs: { label: "Customer Success", href: "/dashboard/cs", icon: HeartHandshake, color: "from-violet-500 to-purple-500", description: "Cancelaciones, RFM, lifecycle, customers en riesgo · vista por unidad" },
   mapa: { label: "Mapa", href: "/dashboard/mapa", icon: MapIcon, color: "from-cyan-500 to-blue-500", description: "Choropleth Argentina por provincia · vista por unidad" },
@@ -68,17 +71,17 @@ const ROLE_VIEWS: Record<RoleKey, string[]> = {
   admin: [
     "gerencial", "ventas", "productos", "marketing", "cs", "mapa",
     "saas", "pagos", "subsMeli", "envios", "logistica", "finanzas",
-    "devoluciones", "costos", "catalog", "sources", "sql", "audit", "users",
+    "devoluciones", "costos", "lotes", "catalog", "sources", "sql", "audit", "users",
   ],
   gerencia: [
     "gerencial", "ventas", "productos", "mapa", "marketing", "cs",
-    "saas", "pagos", "devoluciones", "finanzas",
+    "saas", "pagos", "devoluciones", "finanzas", "lotes",
     "catalog", "sources",
   ],
   analista: [
     "gerencial", "ventas", "productos", "mapa", "cs", "marketing",
     "pagos", "saas", "envios", "logistica", "finanzas", "devoluciones",
-    "catalog", "sources", "sql",
+    "lotes", "catalog", "sources", "sql",
   ],
   lector: [
     "gerencial", "ventas", "productos", "mapa", "cs", "catalog", "sources",
