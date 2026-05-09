@@ -118,7 +118,7 @@ export default function DropshippersPage() {
     <>
       <Topbar
         title="Dropshippers Unidrop"
-        subtitle="Vista 360 por operador · suscripcion · publicaciones · ventas · deuda · referidos"
+        subtitle="Operadores por canal · solo MELI (con suscripcion) · solo TN (sin sub) · ambos · alertas y deuda"
         hidePeriod
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
@@ -183,10 +183,26 @@ export default function DropshippersPage() {
         )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <RiskChip label="Sin publicar" value={data?.stats.sin_publicar ?? 0} active={riesgo === "sin_publicar"} onClick={() => setRiesgo(riesgo === "sin_publicar" ? "all" : "sin_publicar")} color="bg-amber-50 border-amber-200" />
-          <RiskChip label="Sin vender" value={data?.stats.sin_vender ?? 0} active={riesgo === "sin_vender"} onClick={() => setRiesgo(riesgo === "sin_vender" ? "all" : "sin_vender")} color="bg-orange-50 border-orange-200" />
-          <RiskChip label="Con deuda" value={data?.stats.con_deuda ?? 0} active={riesgo === "con_deuda"} onClick={() => setRiesgo(riesgo === "con_deuda" ? "all" : "con_deuda")} color="bg-red-50 border-red-200" />
-          <RiskChip label="Token MELI vencido" value={data?.stats.token_expira ?? 0} active={riesgo === "token_expira"} onClick={() => setRiesgo(riesgo === "token_expira" ? "all" : "token_expira")} color="bg-violet-50 border-violet-200" />
+          <RiskChip label="Sin publicar" value={data?.stats.sin_publicar ?? 0}
+                    hint="MELI - 0 publicaciones activas"
+                    active={riesgo === "sin_publicar"}
+                    onClick={() => setRiesgo(riesgo === "sin_publicar" ? "all" : "sin_publicar")}
+                    color="bg-amber-50 border-amber-200" />
+          <RiskChip label="Sin vender" value={data?.stats.sin_vender ?? 0}
+                    hint="No vendio en MELI ni en TN"
+                    active={riesgo === "sin_vender"}
+                    onClick={() => setRiesgo(riesgo === "sin_vender" ? "all" : "sin_vender")}
+                    color="bg-orange-50 border-orange-200" />
+          <RiskChip label="Con deuda" value={data?.stats.con_deuda ?? 0}
+                    hint="PaymentIntent != PROCESSED"
+                    active={riesgo === "con_deuda"}
+                    onClick={() => setRiesgo(riesgo === "con_deuda" ? "all" : "con_deuda")}
+                    color="bg-red-50 border-red-200" />
+          <RiskChip label="Token MELI vencido" value={data?.stats.token_expira ?? 0}
+                    hint="requiresReauth = true"
+                    active={riesgo === "token_expira"}
+                    onClick={() => setRiesgo(riesgo === "token_expira" ? "all" : "token_expira")}
+                    color="bg-violet-50 border-violet-200" />
         </div>
 
         {/* Toolbar */}
@@ -266,13 +282,13 @@ export default function DropshippersPage() {
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                   <tr>
                     <th className="text-left px-3 py-2">Dropshipper</th>
-                    <th className="text-left px-3 py-2">Plan</th>
-                    <th className="text-left px-3 py-2">MELI</th>
-                    <th className="text-right px-3 py-2">Pub.</th>
+                    {canal !== "tn" && <th className="text-left px-3 py-2" title="Plan de suscripcion MELI">Plan</th>}
+                    {canal !== "tn" && <th className="text-left px-3 py-2" title="Cuenta de Mercado Libre vinculada">Cuenta MELI</th>}
+                    {canal !== "tn" && <th className="text-right px-3 py-2" title="Publicaciones activas / totales">Pub.</th>}
                     <th className="text-right px-3 py-2">Ventas / GMV</th>
-                    <th className="text-right px-3 py-2">Profit</th>
+                    {canal !== "tn" && <th className="text-right px-3 py-2" title="Comision Unidrop por suscripcion MELI">Profit Unidrop</th>}
                     <th className="text-right px-3 py-2">Pagos / Deuda</th>
-                    <th className="text-right px-3 py-2">Refer.</th>
+                    <th className="text-right px-3 py-2" title="Cantidad de dropshippers referidos por este operador">Refer.</th>
                     <th className="text-center px-3 py-2">Acciones</th>
                   </tr>
                 </thead>
@@ -297,33 +313,39 @@ export default function DropshippersPage() {
                             <ChannelBadge canal={d.canal} />
                           </div>
                         </td>
-                        <td className="px-3 py-2 align-top text-xs">
-                          <div className="font-medium text-text">{d.plan ?? "—"}</div>
-                          <div className="text-[10px] text-text-muted">
-                            {d.plan_precio ? formatCurrency(d.plan_precio) : "—"}/mes
-                          </div>
-                          {d.dias_al_vencimiento !== null && (
-                            <div className={"text-[10px] " + (d.dias_al_vencimiento < 0 ? "text-error font-bold" : d.dias_al_vencimiento < 7 ? "text-error" : d.dias_al_vencimiento < 15 ? "text-amber-700" : "text-text-muted")}>
-                              {d.dias_al_vencimiento < 0 ? `vencido ${Math.abs(d.dias_al_vencimiento)}d` : `vence ${d.dias_al_vencimiento}d`}
+                        {canal !== "tn" && (
+                          <td className="px-3 py-2 align-top text-xs">
+                            <div className="font-medium text-text">{d.plan ?? "—"}</div>
+                            <div className="text-[10px] text-text-muted">
+                              {d.plan_precio ? formatCurrency(d.plan_precio) : "—"}/mes
                             </div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 align-top text-xs">
-                          {d.nickname_meli ? (
-                            <>
-                              <div className="font-medium">{d.nickname_meli}</div>
-                              {d.requiere_reauth && (
-                                <span className="inline-flex items-center gap-1 text-[10px] text-error mt-0.5">
-                                  <AlertTriangle size={9} /> reauth
-                                </span>
-                              )}
-                            </>
-                          ) : <span className="text-text-muted">sin cuenta</span>}
-                        </td>
-                        <td className="px-3 py-2 align-top text-right tabular-nums">
-                          <div className="font-semibold">{formatNumber(d.pub_activas)}<span className="text-text-muted text-[11px]"> / {formatNumber(d.pub_totales)}</span></div>
-                          <div className="text-[10px] text-text-muted">activas / total</div>
-                        </td>
+                            {d.dias_al_vencimiento !== null && (
+                              <div className={"text-[10px] " + (d.dias_al_vencimiento < 0 ? "text-error font-bold" : d.dias_al_vencimiento < 7 ? "text-error" : d.dias_al_vencimiento < 15 ? "text-amber-700" : "text-text-muted")}>
+                                {d.dias_al_vencimiento < 0 ? `vencido ${Math.abs(d.dias_al_vencimiento)}d` : `vence ${d.dias_al_vencimiento}d`}
+                              </div>
+                            )}
+                          </td>
+                        )}
+                        {canal !== "tn" && (
+                          <td className="px-3 py-2 align-top text-xs">
+                            {d.nickname_meli ? (
+                              <>
+                                <div className="font-medium">{d.nickname_meli}</div>
+                                {d.requiere_reauth && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] text-error mt-0.5">
+                                    <AlertTriangle size={9} /> reauth
+                                  </span>
+                                )}
+                              </>
+                            ) : <span className="text-text-muted">sin cuenta</span>}
+                          </td>
+                        )}
+                        {canal !== "tn" && (
+                          <td className="px-3 py-2 align-top text-right tabular-nums">
+                            <div className="font-semibold">{formatNumber(d.pub_activas)}<span className="text-text-muted text-[11px]"> / {formatNumber(d.pub_totales)}</span></div>
+                            <div className="text-[10px] text-text-muted">activas / total</div>
+                          </td>
+                        )}
                         <td className="px-3 py-2 align-top text-right tabular-nums">
                           {(d.ventas_pagadas > 0 || d.gmv > 0) && (
                             <div title="Ventas en Mercado Libre">
@@ -350,10 +372,12 @@ export default function DropshippersPage() {
                             <div className="text-[10px] text-error mt-0.5">{d.canceladas} canc</div>
                           )}
                         </td>
-                        <td className="px-3 py-2 align-top text-right tabular-nums">
-                          <div className="font-semibold text-primary">{formatCurrency(d.profit_unidrop)}</div>
-                          <div className="text-[10px] text-text-muted">profit_for_sub</div>
-                        </td>
+                        {canal !== "tn" && (
+                          <td className="px-3 py-2 align-top text-right tabular-nums">
+                            <div className="font-semibold text-primary">{formatCurrency(d.profit_unidrop)}</div>
+                            <div className="text-[10px] text-text-muted">comision MELI</div>
+                          </td>
+                        )}
                         <td className="px-3 py-2 align-top text-right tabular-nums">
                           <div className="font-semibold">{formatCurrency(d.pago_unidrop_total)}</div>
                           {d.deuda_pendiente > 0 ? (
@@ -409,7 +433,10 @@ function Stat({ label, value, hint, color }: { label: string; value: string; hin
   );
 }
 
-function RiskChip({ label, value, active, onClick, color }: { label: string; value: number; active: boolean; onClick: () => void; color: string }) {
+function RiskChip({ label, value, active, onClick, color, hint }: {
+  label: string; value: number; active: boolean; onClick: () => void;
+  color: string; hint?: string;
+}) {
   return (
     <button
       onClick={onClick}
@@ -419,9 +446,11 @@ function RiskChip({ label, value, active, onClick, color }: { label: string; val
         " " +
         (active ? "ring-2 ring-primary border-primary" : "hover:border-primary/40")
       }
+      title={hint}
     >
       <div className="text-[10px] uppercase tracking-wider font-semibold text-text-muted">{label}</div>
       <div className="text-2xl font-extrabold text-text tabular-nums mt-0.5">{formatNumber(value)}</div>
+      {hint && <div className="text-[10px] text-text-muted mt-0.5">{hint}</div>}
     </button>
   );
 }
