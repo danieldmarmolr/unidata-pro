@@ -53,6 +53,16 @@ type DropshipperDetail = {
     requiere_reauth: boolean;
     token_expira: string | null;
     cant_referidos: number;
+    canal?: "meli" | "tn" | "ambos" | "sin_canal";
+  };
+  ventas_tn?: {
+    ventas_pagadas: number;
+    ordenes_totales: number;
+    gmv: number;
+    ultima_venta: string | null;
+    primera_venta: string | null;
+    ticket_promedio: number;
+    tiendas_conectadas: number;
   };
   ventas: {
     ventas_pagadas: number;
@@ -235,8 +245,28 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             </div>
           </div>
 
-          {/* Cuenta MELI + alertas */}
+          {/* Canal de operacion */}
           <div className="mt-4 flex flex-wrap gap-2">
+            {u.canal === "ambos" && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-50 border border-violet-200 text-violet-800 text-xs font-bold uppercase tracking-wider">
+                Canal: MELI + Tienda Nube
+              </span>
+            )}
+            {u.canal === "meli" && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs font-bold uppercase tracking-wider">
+                Canal: solo Mercado Libre
+              </span>
+            )}
+            {u.canal === "tn" && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-800 text-xs font-bold uppercase tracking-wider">
+                Canal: solo Tienda Nube · sin suscripcion MELI
+              </span>
+            )}
+            {u.canal === "sin_canal" && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-600 text-xs font-bold uppercase tracking-wider">
+                Sin canal de operacion · alta sin actividad
+              </span>
+            )}
             {u.nickname_meli ? (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs font-semibold">
                 <Award size={12} /> MELI: {u.nickname_meli}
@@ -244,6 +274,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             ) : (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-600 text-xs font-semibold">
                 <Award size={12} /> Sin cuenta MELI vinculada
+              </span>
+            )}
+            {data.ventas_tn && data.ventas_tn.tiendas_conectadas > 0 && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-800 text-xs font-semibold">
+                {data.ventas_tn.tiendas_conectadas} {data.ventas_tn.tiendas_conectadas === 1 ? "tienda TN conectada" : "tiendas TN conectadas"}
               </span>
             )}
             {u.requiere_reauth && (
@@ -267,9 +302,9 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
         {/* KPIs principales */}
         <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
           <KpiBox icon={DollarSign} label="GMV MELI" value={formatCurrency(v.gmv)} accent="emerald"
-                  hint={`${formatNumber(v.ventas_pagadas)} ventas pagadas`} />
+                  hint={`${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`} />
           <KpiBox icon={Wallet} label="Profit Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="Comisión que gana Unidrop por sus ventas" />
+                  hint="Comisión Unidrop por las ventas MELI (suscripcion)" />
           <KpiBox icon={TrendingUp} label="Ticket promedio" value={formatCurrency(v.ticket_promedio)} accent="amber"
                   hint="GMV / ventas pagadas" />
           <KpiBox
@@ -306,6 +341,57 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
                   hint="Suma costos de envío MELI" />
         </div>
+
+        {/* KPIs TIENDA NUBE - solo si vende por TN */}
+        {data.ventas_tn && (data.ventas_tn.ventas_pagadas > 0 || data.ventas_tn.tiendas_conectadas > 0) && (
+          <div className="bg-cyan-50/50 border-2 border-cyan-200 rounded-xl p-4 sm:p-5 mb-5">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-cyan-900">
+                  <span className="inline-block px-2 py-0.5 rounded bg-cyan-200 text-cyan-900 text-[10px] font-extrabold uppercase tracking-wider mr-2">TN</span>
+                  Ventas en Tienda Nube
+                </h3>
+                <p className="text-[11px] text-cyan-700/80">
+                  Cliente final del dropshipper · sin suscripcion ni profit Unidrop
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiBox
+                icon={DollarSign}
+                label="GMV TN"
+                value={formatCurrency(data.ventas_tn.gmv)}
+                accent="emerald"
+                hint={`${formatNumber(data.ventas_tn.ventas_pagadas)} ventas pagadas`}
+              />
+              <KpiBox
+                icon={ShoppingBag}
+                label="Ordenes pagadas TN"
+                value={formatNumber(data.ventas_tn.ventas_pagadas)}
+                accent="primary"
+                hint={`${formatNumber(data.ventas_tn.ordenes_totales)} totales`}
+              />
+              <KpiBox
+                icon={TrendingUp}
+                label="Ticket promedio TN"
+                value={formatCurrency(data.ventas_tn.ticket_promedio)}
+                accent="amber"
+                hint="GMV TN / ventas pagadas"
+              />
+              <KpiBox
+                icon={Calendar}
+                label="Ultima venta TN"
+                value={
+                  data.ventas_tn.ultima_venta
+                    ? `${recencyDays(data.ventas_tn.ultima_venta)}d atras`
+                    : "Sin ventas"
+                }
+                accent={data.ventas_tn.ultima_venta ? "emerald" : "rose"}
+                hint={data.ventas_tn.ultima_venta?.slice(0, 16) || "—"}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Mensual GMV */}
         {data.monthly.length > 0 && (

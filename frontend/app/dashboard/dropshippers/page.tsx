@@ -11,6 +11,7 @@ import { Mail, Search, ExternalLink, AlertTriangle, Sparkles } from "lucide-reac
 type Plan = "all" | "1" | "2" | "3" | "4";
 type Riesgo = "all" | "sin_publicar" | "sin_vender" | "con_deuda" | "token_expira";
 type Actividad = "all" | "activo" | "inactivo";
+type Canal = "all" | "meli" | "tn" | "ambos" | "sin_canal";
 
 type DS = {
   user_id: number;
@@ -47,6 +48,16 @@ type DS = {
   pago_unidrop_total: number;
   ultimo_pago: string | null;
   deuda_pendiente: number;
+  // Canal
+  tiene_meli?: boolean;
+  tiene_tn?: boolean;
+  canal?: "meli" | "tn" | "ambos" | "sin_canal";
+  tn_ordenes_totales?: number;
+  tn_ventas_pagadas?: number;
+  tn_gmv?: number;
+  tn_ultima_venta?: string | null;
+  tn_tiendas?: number;
+  gmv_total?: number;
 };
 
 type Resp = {
@@ -54,13 +65,20 @@ type Resp = {
   total: number;
   stats: {
     total: number; gmv: number; profit_unidrop: number; pago_unidrop: number; deuda_pendiente: number;
+    tn_gmv?: number; gmv_total?: number;
     sin_publicar: number; sin_vender: number; con_deuda: number; token_expira: number;
     activos_30d?: number; inactivos?: number;
+    by_channel?: {
+      meli: { count: number; gmv: number };
+      tn: { count: number; gmv: number };
+      ambos: { count: number; gmv: number };
+      sin_canal: { count: number; gmv: number };
+    };
   };
   filtered_stats?: {
     total: number; gmv: number; profit_unidrop: number; pago_unidrop: number; deuda_pendiente: number;
   };
-  filters_applied?: { plan: string; riesgo: string; actividad: string; search: string };
+  filters_applied?: { plan: string; riesgo: string; actividad: string; canal?: string; search: string };
   generated_at: string;
 };
 
@@ -79,15 +97,17 @@ export default function DropshippersPage() {
   const [plan, setPlan] = useState<Plan>("all");
   const [riesgo, setRiesgo] = useState<Riesgo>("all");
   const [actividad, setActividad] = useState<Actividad>("all");
+  const [canal, setCanal] = useState<Canal>("all");
   const [search, setSearch] = useState("");
 
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ["dropshippers", plan, riesgo, actividad, search],
+    queryKey: ["dropshippers", plan, riesgo, actividad, canal, search],
     queryFn: () => {
       const qs = new URLSearchParams();
       qs.set("plan", plan);
       qs.set("riesgo", riesgo);
       qs.set("actividad", actividad);
+      qs.set("canal", canal);
       if (search) qs.set("search", search);
       return api(`/api/dashboards/dropshippers?${qs.toString()}`);
     },
@@ -104,12 +124,63 @@ export default function DropshippersPage() {
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
-          <Stat label="Dropshippers" value={formatNumber(data?.stats.total ?? 0)} hint="con suscripcion" />
-          <Stat label="GMV total" value={formatCurrency(data?.stats.gmv ?? 0)} hint="ventas pagas MELI" color="text-emerald-700" />
-          <Stat label="Profit Unidrop" value={formatCurrency(data?.stats.profit_unidrop ?? 0)} hint="profit_for_subscription" color="text-primary" />
+          <Stat label="Dropshippers" value={formatNumber(data?.stats.total ?? 0)} hint="todos los que operan en MELI o TN" />
+          <Stat
+            label="GMV total"
+            value={formatCurrency(data?.stats.gmv_total ?? data?.stats.gmv ?? 0)}
+            hint={data?.stats.tn_gmv !== undefined ? `MELI ${formatCurrency(data.stats.gmv)} + TN ${formatCurrency(data.stats.tn_gmv)}` : "ventas pagas MELI"}
+            color="text-emerald-700"
+          />
+          <Stat label="Profit Unidrop" value={formatCurrency(data?.stats.profit_unidrop ?? 0)} hint="comision MELI - solo por sub" color="text-primary" />
           <Stat label="Pagado a Unidrop" value={formatCurrency(data?.stats.pago_unidrop ?? 0)} hint="payment intents PROCESSED" />
           <Stat label="Deuda pendiente" value={formatCurrency(data?.stats.deuda_pendiente ?? 0)} hint="intents != PROCESSED" color="text-error" />
         </div>
+
+        {/* Canales: clickeable para filtrar */}
+        {data?.stats.by_channel && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <ChannelCard
+              label="Solo MELI"
+              count={data.stats.by_channel.meli.count}
+              gmv={data.stats.by_channel.meli.gmv}
+              hint="con suscripcion"
+              active={canal === "meli"}
+              color="from-yellow-100 to-yellow-50 border-yellow-300"
+              activeColor="from-yellow-200 to-yellow-100 border-yellow-500"
+              onClick={() => setCanal(canal === "meli" ? "all" : "meli")}
+            />
+            <ChannelCard
+              label="Solo TN"
+              count={data.stats.by_channel.tn.count}
+              gmv={data.stats.by_channel.tn.gmv}
+              hint="sin suscripcion"
+              active={canal === "tn"}
+              color="from-cyan-100 to-cyan-50 border-cyan-300"
+              activeColor="from-cyan-200 to-cyan-100 border-cyan-500"
+              onClick={() => setCanal(canal === "tn" ? "all" : "tn")}
+            />
+            <ChannelCard
+              label="Ambos canales"
+              count={data.stats.by_channel.ambos.count}
+              gmv={data.stats.by_channel.ambos.gmv}
+              hint="MELI + TN - top tier"
+              active={canal === "ambos"}
+              color="from-violet-100 to-violet-50 border-violet-300"
+              activeColor="from-violet-200 to-violet-100 border-violet-500"
+              onClick={() => setCanal(canal === "ambos" ? "all" : "ambos")}
+            />
+            <ChannelCard
+              label="Sin operar"
+              count={data.stats.by_channel.sin_canal.count}
+              gmv={null}
+              hint="alta sin canal"
+              active={canal === "sin_canal"}
+              color="from-zinc-100 to-zinc-50 border-zinc-300"
+              activeColor="from-zinc-200 to-zinc-100 border-zinc-500"
+              onClick={() => setCanal(canal === "sin_canal" ? "all" : "sin_canal")}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <RiskChip label="Sin publicar" value={data?.stats.sin_publicar ?? 0} active={riesgo === "sin_publicar"} onClick={() => setRiesgo(riesgo === "sin_publicar" ? "all" : "sin_publicar")} color="bg-amber-50 border-amber-200" />
@@ -211,15 +282,20 @@ export default function DropshippersPage() {
                     return (
                       <tr key={d.user_id} className="border-t border-border hover:bg-soft transition">
                         <td className="px-3 py-2 align-top">
-                          <a
-                            href={`/dashboard/dropshipper/${d.user_id}`}
-                            className="font-medium text-text hover:text-primary hover:underline"
-                            title="Abrir vista 360 dropshipper Unidrop"
-                          >
-                            {d.fantasy_name || d.nombre}
-                          </a>
-                          <div className="text-[11px] text-text-muted">{d.email}</div>
-                          {d.dni && <div className="text-[10px] text-text-muted font-mono">DNI {d.dni}</div>}
+                          <div className="flex items-start gap-2">
+                            <div className="min-w-0 flex-1">
+                              <a
+                                href={`/dashboard/dropshipper/${d.user_id}`}
+                                className="font-medium text-text hover:text-primary hover:underline"
+                                title="Abrir vista 360 dropshipper Unidrop"
+                              >
+                                {d.fantasy_name || d.nombre}
+                              </a>
+                              <div className="text-[11px] text-text-muted">{d.email}</div>
+                              {d.dni && <div className="text-[10px] text-text-muted font-mono">DNI {d.dni}</div>}
+                            </div>
+                            <ChannelBadge canal={d.canal} />
+                          </div>
                         </td>
                         <td className="px-3 py-2 align-top text-xs">
                           <div className="font-medium text-text">{d.plan ?? "—"}</div>
@@ -249,10 +325,29 @@ export default function DropshippersPage() {
                           <div className="text-[10px] text-text-muted">activas / total</div>
                         </td>
                         <td className="px-3 py-2 align-top text-right tabular-nums">
-                          <div className="font-bold text-emerald-700">{formatCurrency(d.gmv)}</div>
-                          <div className="text-[10px] text-text-muted">{formatNumber(d.ventas_pagadas)} ventas</div>
+                          {(d.ventas_pagadas > 0 || d.gmv > 0) && (
+                            <div title="Ventas en Mercado Libre">
+                              <div className="font-bold text-emerald-700">{formatCurrency(d.gmv)}</div>
+                              <div className="text-[10px] text-text-muted">
+                                <span className="inline-block px-1 rounded bg-yellow-100 text-yellow-800 text-[8px] font-bold mr-1">MELI</span>
+                                {formatNumber(d.ventas_pagadas)} ventas
+                              </div>
+                            </div>
+                          )}
+                          {(d.tn_ventas_pagadas ?? 0) > 0 && (
+                            <div className="mt-1 pt-1 border-t border-border" title="Ventas en Tienda Nube">
+                              <div className="font-bold text-cyan-700">{formatCurrency(d.tn_gmv ?? 0)}</div>
+                              <div className="text-[10px] text-text-muted">
+                                <span className="inline-block px-1 rounded bg-cyan-100 text-cyan-800 text-[8px] font-bold mr-1">TN</span>
+                                {formatNumber(d.tn_ventas_pagadas ?? 0)} ventas
+                              </div>
+                            </div>
+                          )}
+                          {d.ventas_pagadas === 0 && (d.tn_ventas_pagadas ?? 0) === 0 && (
+                            <div className="text-[10px] text-text-muted">Sin ventas</div>
+                          )}
                           {d.canceladas > 0 && (
-                            <div className="text-[10px] text-error">{d.canceladas} canc</div>
+                            <div className="text-[10px] text-error mt-0.5">{d.canceladas} canc</div>
                           )}
                         </td>
                         <td className="px-3 py-2 align-top text-right tabular-nums">
@@ -328,5 +423,47 @@ function RiskChip({ label, value, active, onClick, color }: { label: string; val
       <div className="text-[10px] uppercase tracking-wider font-semibold text-text-muted">{label}</div>
       <div className="text-2xl font-extrabold text-text tabular-nums mt-0.5">{formatNumber(value)}</div>
     </button>
+  );
+}
+
+function ChannelCard({
+  label, count, gmv, hint, active, onClick, color, activeColor,
+}: {
+  label: string; count: number; gmv: number | null; hint: string;
+  active: boolean; onClick: () => void; color: string; activeColor: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        "rounded-xl border-2 p-3 text-left transition bg-gradient-to-br " +
+        (active ? activeColor + " ring-2 ring-primary shadow-md" : color + " hover:shadow-md")
+      }
+    >
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted">{label}</div>
+      <div className="flex items-baseline gap-2 mt-1">
+        <div className="text-2xl font-extrabold text-text tabular-nums">{formatNumber(count)}</div>
+        {gmv !== null && gmv > 0 && (
+          <div className="text-[10px] font-semibold text-emerald-700 tabular-nums">{formatCurrency(gmv)}</div>
+        )}
+      </div>
+      <div className="text-[10px] text-text-muted mt-0.5">{hint}</div>
+    </button>
+  );
+}
+
+function ChannelBadge({ canal }: { canal?: string }) {
+  if (!canal) return null;
+  const cfg: Record<string, { label: string; cls: string }> = {
+    meli: { label: "MELI", cls: "bg-yellow-50 text-yellow-800 border-yellow-300" },
+    tn: { label: "TN", cls: "bg-cyan-50 text-cyan-800 border-cyan-300" },
+    ambos: { label: "MELI + TN", cls: "bg-violet-50 text-violet-800 border-violet-300" },
+    sin_canal: { label: "Sin canal", cls: "bg-zinc-50 text-zinc-500 border-zinc-300" },
+  };
+  const c = cfg[canal] ?? { label: canal, cls: "bg-zinc-50 text-zinc-600 border-zinc-300" };
+  return (
+    <span className={"inline-block px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase tracking-wider " + c.cls}>
+      {c.label}
+    </span>
   );
 }

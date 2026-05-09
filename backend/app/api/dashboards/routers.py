@@ -255,10 +255,17 @@ def get_dropshippers(
     plan: Annotated[str, Query()] = "all",
     riesgo: Annotated[str, Query()] = "all",
     actividad: Annotated[str, Query()] = "all",
+    canal: Annotated[Literal["all", "meli", "tn", "ambos", "sin_canal"], Query()] = "all",
     search: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(le=20000)] = 10000,
 ) -> dict:
-    return dropshippers_svc.dropshippers_master(plan, riesgo, actividad, search, limit)
+    """Listado de dropshippers Unidrop. canal:
+    - all: todos los que tienen alguna senal de operacion (MELI o TN)
+    - meli: solo MELI (todos los con suscripcion estan aqui)
+    - tn: solo TN (sin suscripcion - no requieren plan MELI)
+    - ambos: vende en MELI y TN
+    - sin_canal: alta sin operar"""
+    return dropshippers_svc.dropshippers_master(plan, riesgo, actividad, search, limit, canal=canal)
 
 
 @router.get("/dropshippers/cohorts")

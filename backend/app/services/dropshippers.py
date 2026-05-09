@@ -28,6 +28,7 @@ def dropshippers_master(
     actividad: str = "all",
     search: str | None = None,
     limit: int = 10000,
+    canal: str = "all",
 ) -> dict:
     """
     Master view: 1 row por dropshipper con todas las metricas agregadas.
@@ -35,10 +36,26 @@ def dropshippers_master(
       plan: 'all'|'1'|'2'|'3'|'4'
       riesgo: 'all' (alguna), 'sin_publicar', 'sin_vender', 'con_deuda', 'token_expira'
       actividad: 'all', 'activo' (vendio en 30d), 'inactivo'
+      canal: 'all' | 'meli' (solo MELI con suscripcion) | 'tn' (solo TN, sin sub)
+             | 'ambos' (vende en MELI y TN) | 'sin_canal' (alta sin operar)
+
+    Reglas de negocio Unidrop:
+      - Los que pagan suscripcion son SOLO los que integran MELI
+      - Hay dropshippers que solo venden por TN (sin suscripcion)
+      - Hay dropshippers que venden en ambos canales
+      - El universo del listado incluye todos los que tienen alguna senal de
+        operacion (MELI o TN), no solo los con subscriptionId.
     """
     eng = get_engine("unidrop")
     p: dict = {}
-    wh: list[str] = ["u.\"subscriptionId\" IS NOT NULL"]
+    # El universo ahora incluye: usuarios con suscripcion MELI O con cuenta MELI
+    # vinculada O con credencial TN O con orders TN. NO requiere subscriptionId.
+    wh: list[str] = [
+        "(u.\"subscriptionId\" IS NOT NULL "
+        " OR u.\"mercadoLibreAccountId\" IS NOT NULL "
+        " OR EXISTS (SELECT 1 FROM public.\"TiendaNubeCredential\" tnc WHERE tnc.\"userId\" = u.id) "
+        " OR EXISTS (SELECT 1 FROM public.tienda_nube_orders tno WHERE tno.user_id = u.id))"
+    ]
 
     if plan != "all":
         wh.append('u."subscriptionId" = :pid')
@@ -106,6 +123,25 @@ def dropshippers_master(
         FROM public."PaymentIntent" pi
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa."id" = pi."customerAccountId"
         GROUP BY cpa."userId"
+    ),
+    -- TN: agregados de orders TN del cliente final del dropshipper.
+    -- user_id apunta al dropshipper Unidrop, NO al cliente final.
+    tn AS (
+        SELECT user_id,
+               COUNT(*)::int AS tn_ordenes_totales,
+               COUNT(*) FILTER (WHERE payment_status::text = 'paid')::int AS tn_ventas_pagadas,
+               COALESCE(SUM(total) FILTER (WHERE payment_status::text = 'paid'),0)::float AS tn_gmv,
+               MAX(created_at) FILTER (WHERE payment_status::text = 'paid')::text AS tn_ultima_venta
+        FROM public.tienda_nube_orders
+        WHERE user_id IS NOT NULL
+        GROUP BY user_id
+    ),
+    -- Credenciales TN: si el dropshipper tiene tienda TN conectada
+    tnc AS (
+        SELECT "userId" AS user_id, COUNT(*)::int AS tn_tiendas
+        FROM public."TiendaNubeCredential"
+        WHERE "userId" IS NOT NULL
+        GROUP BY "userId"
     )
     SELECT
         u.id AS user_id,
@@ -148,7 +184,15 @@ def dropshippers_master(
         COALESCE(pg.costo_unidrop_meli, 0)::float AS pago_unidrop_meli,
         pg.ultimo_pago::text,
         COALESCE(d.deuda_pendiente, 0)::float AS deuda_pendiente,
-        COALESCE(d.pagos_con_deuda, 0) AS pagos_con_deuda
+        COALESCE(d.pagos_con_deuda, 0) AS pagos_con_deuda,
+        -- Senales de canal
+        (u."subscriptionId" IS NOT NULL OR u."mercadoLibreAccountId" IS NOT NULL OR COALESCE(v.ventas_pagadas,0) > 0) AS tiene_meli,
+        (COALESCE(tnc.tn_tiendas,0) > 0 OR COALESCE(tn.tn_ventas_pagadas,0) > 0 OR COALESCE(tn.tn_ordenes_totales,0) > 0) AS tiene_tn,
+        COALESCE(tn.tn_ordenes_totales, 0)::int AS tn_ordenes_totales,
+        COALESCE(tn.tn_ventas_pagadas, 0)::int AS tn_ventas_pagadas,
+        COALESCE(tn.tn_gmv, 0)::float AS tn_gmv,
+        tn.tn_ultima_venta::text,
+        COALESCE(tnc.tn_tiendas, 0)::int AS tn_tiendas
     FROM public."User" u
     LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
     LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
@@ -157,9 +201,11 @@ def dropshippers_master(
     LEFT JOIN ventas v ON v.cuenta_meli_id = mla.id
     LEFT JOIN pagos pg ON pg.user_id = u.id
     LEFT JOIN deuda d ON d.user_id = u.id
+    LEFT JOIN tn ON tn.user_id = u.id
+    LEFT JOIN tnc ON tnc.user_id = u.id
     WHERE {where_sql}
       AND COALESCE(u."isActive", TRUE) = TRUE
-    ORDER BY COALESCE(v.gmv, 0) DESC NULLS LAST, u."createdAt" DESC
+    ORDER BY (COALESCE(v.gmv, 0) + COALESCE(tn.tn_gmv, 0)) DESC NULLS LAST, u."createdAt" DESC
     LIMIT :lim
     """
     p["lim"] = int(limit)
@@ -178,9 +224,31 @@ def dropshippers_master(
         "canceladas", "canceladas_staff", "sku_faltante",
         "pagos_procesados", "pago_unidrop_total", "pago_unidrop_meli", "ultimo_pago",
         "deuda_pendiente", "pagos_con_deuda",
+        "tiene_meli", "tiene_tn",
+        "tn_ordenes_totales", "tn_ventas_pagadas", "tn_gmv", "tn_ultima_venta",
+        "tn_tiendas",
     ]
 
     universe = [dict(zip(keys, r)) for r in rows]
+
+    # Derivar canal por dropshipper:
+    #   ambos     - vende en MELI y TN
+    #   meli      - solo MELI (todos los con suscripcion estan aqui)
+    #   tn        - solo TN (sin suscripcion)
+    #   sin_canal - alta sin operar en ningun canal
+    for it in universe:
+        m = bool(it.get("tiene_meli"))
+        t = bool(it.get("tiene_tn"))
+        if m and t:
+            it["canal"] = "ambos"
+        elif m:
+            it["canal"] = "meli"
+        elif t:
+            it["canal"] = "tn"
+        else:
+            it["canal"] = "sin_canal"
+        # GMV combinado para ranking en frontend
+        it["gmv_total"] = float(it.get("gmv") or 0) + float(it.get("tn_gmv") or 0)
 
     # ============================================================
     # STATS GLOBALES sobre el UNIVERSO (plan + search ya aplicados)
@@ -192,27 +260,51 @@ def dropshippers_master(
     cutoff_30d = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
 
     def _last_sale_dt(it):
-        uv = it.get("ultima_venta")
-        if not uv:
-            return None
-        try:
-            d = dt.datetime.fromisoformat(uv.replace(" ", "T"))
-            if d.tzinfo is None:
-                d = d.replace(tzinfo=dt.timezone.utc)
-            return d
-        except Exception:
-            return None
+        """Considera la mas reciente entre ultima venta MELI y ultima venta TN."""
+        candidates = []
+        for k in ("ultima_venta", "tn_ultima_venta"):
+            v = it.get(k)
+            if not v:
+                continue
+            try:
+                d = dt.datetime.fromisoformat(v.replace(" ", "T"))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=dt.timezone.utc)
+                candidates.append(d)
+            except Exception:
+                pass
+        return max(candidates) if candidates else None
+
+    # Si se filtra por canal, lo aplicamos sobre el universo ANTES de calcular
+    # stats (es una segmentacion, no un filtro de tabla como riesgo/actividad).
+    if canal in ("meli", "tn", "ambos", "sin_canal"):
+        universe = [it for it in universe if it.get("canal") == canal]
 
     universe_total = len(universe)
-    sum_gmv = sum(float(it.get("gmv") or 0) for it in universe)
+    sum_gmv = sum(float(it.get("gmv") or 0) for it in universe)  # GMV MELI
+    sum_tn_gmv = sum(float(it.get("tn_gmv") or 0) for it in universe)  # GMV TN
+    sum_gmv_total = sum_gmv + sum_tn_gmv
     sum_profit = sum(float(it.get("profit_unidrop") or 0) for it in universe)
     sum_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in universe)
     sum_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in universe)
 
     sin_publicar_u = sum(1 for it in universe if (it.get("pub_activas") or 0) == 0)
-    sin_vender_u = sum(1 for it in universe if (it.get("ventas_pagadas") or 0) == 0)
+    # "sin vender" considera TODOS los canales: ni MELI ni TN
+    sin_vender_u = sum(
+        1 for it in universe
+        if (it.get("ventas_pagadas") or 0) == 0 and (it.get("tn_ventas_pagadas") or 0) == 0
+    )
     con_deuda_u = sum(1 for it in universe if (it.get("deuda_pendiente") or 0) > 0)
     token_expira_u = sum(1 for it in universe if it.get("requiere_reauth") is True)
+
+    # Split por canal sobre el universo COMPLETO (sin importar el filtro canal,
+    # asi el frontend siempre puede mostrar el segmentador con totales).
+    by_channel = {"meli": 0, "tn": 0, "ambos": 0, "sin_canal": 0}
+    by_channel_gmv = {"meli": 0.0, "tn": 0.0, "ambos": 0.0, "sin_canal": 0.0}
+    for it in universe:
+        c = it.get("canal", "sin_canal")
+        by_channel[c] = by_channel.get(c, 0) + 1
+        by_channel_gmv[c] = by_channel_gmv.get(c, 0.0) + float(it.get("gmv") or 0) + float(it.get("tn_gmv") or 0)
 
     activos_30d = sum(
         1 for it in universe
@@ -228,7 +320,11 @@ def dropshippers_master(
     if riesgo == "sin_publicar":
         items = [it for it in items if (it.get("pub_activas") or 0) == 0]
     elif riesgo == "sin_vender":
-        items = [it for it in items if (it.get("ventas_pagadas") or 0) == 0]
+        # "sin vender" considera ambos canales
+        items = [
+            it for it in items
+            if (it.get("ventas_pagadas") or 0) == 0 and (it.get("tn_ventas_pagadas") or 0) == 0
+        ]
     elif riesgo == "con_deuda":
         items = [it for it in items if (it.get("deuda_pendiente") or 0) > 0]
     elif riesgo == "token_expira":
@@ -250,10 +346,12 @@ def dropshippers_master(
     return {
         "items": items,
         "total": filtered_total,  # cantidad de la lista visible
-        # Stats globales del universo (plan + search aplicados, NO riesgo/actividad)
+        # Stats globales del universo (plan + search + canal aplicados, NO riesgo/actividad)
         "stats": {
             "total": universe_total,
-            "gmv": round(sum_gmv, 0),
+            "gmv": round(sum_gmv, 0),  # GMV MELI
+            "tn_gmv": round(sum_tn_gmv, 0),  # GMV TN
+            "gmv_total": round(sum_gmv_total, 0),  # MELI + TN
             "profit_unidrop": round(sum_profit, 0),
             "pago_unidrop": round(sum_pago, 0),
             "deuda_pendiente": round(sum_deuda, 0),
@@ -263,6 +361,13 @@ def dropshippers_master(
             "token_expira": token_expira_u,
             "activos_30d": activos_30d,
             "inactivos": inactivos,
+            # Distribucion por canal (cantidad y GMV combinado)
+            "by_channel": {
+                "meli": {"count": by_channel.get("meli", 0), "gmv": round(by_channel_gmv.get("meli", 0.0), 0)},
+                "tn": {"count": by_channel.get("tn", 0), "gmv": round(by_channel_gmv.get("tn", 0.0), 0)},
+                "ambos": {"count": by_channel.get("ambos", 0), "gmv": round(by_channel_gmv.get("ambos", 0.0), 0)},
+                "sin_canal": {"count": by_channel.get("sin_canal", 0), "gmv": 0},
+            },
         },
         # Stats del subset filtrado por riesgo/actividad — NO afectan los KPIs
         # principales pero permiten al frontend mostrar "viendo 3 de 1087"
@@ -277,6 +382,7 @@ def dropshippers_master(
             "plan": plan,
             "riesgo": riesgo,
             "actividad": actividad,
+            "canal": canal,
             "search": search or "",
         },
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -380,6 +486,46 @@ def dropshipper_detail(user_id: int) -> dict:
         "ticket_promedio": float(v[9] or 0),
         "tasa_cancelacion_pct": round(int(v[2] or 0) / max(int(v[1] or 1), 1) * 100, 1),
     }
+
+    # KPIs de ventas TN (cliente final del dropshipper)
+    tn_v = q(eng, """
+        SELECT
+            COUNT(*) FILTER (WHERE payment_status::text='paid')::int AS ventas_pagadas,
+            COUNT(*)::int AS ordenes_totales,
+            COALESCE(SUM(total) FILTER (WHERE payment_status::text='paid'),0)::float AS gmv,
+            MAX(created_at) FILTER (WHERE payment_status::text='paid')::text AS ultima_venta,
+            MIN(created_at) FILTER (WHERE payment_status::text='paid')::text AS primera_venta,
+            COALESCE(AVG(total) FILTER (WHERE payment_status::text='paid'),0)::float AS ticket_promedio
+        FROM public.tienda_nube_orders
+        WHERE user_id = :uid
+    """, {"uid": int(user_id)}) or [(0, 0, 0, None, None, 0)]
+    tnv = tn_v[0]
+    tn_kpi = {
+        "ventas_pagadas": int(tnv[0] or 0),
+        "ordenes_totales": int(tnv[1] or 0),
+        "gmv": float(tnv[2] or 0),
+        "ultima_venta": tnv[3],
+        "primera_venta": tnv[4],
+        "ticket_promedio": float(tnv[5] or 0),
+    }
+
+    # Tiendas TN conectadas
+    tn_stores = q(eng, """
+        SELECT COUNT(*)::int FROM public."TiendaNubeCredential" WHERE "userId" = :uid
+    """, {"uid": int(user_id)}) or [(0,)]
+    tn_kpi["tiendas_conectadas"] = int(tn_stores[0][0] or 0)
+
+    # Derivar canal del dropshipper
+    has_meli = bool(user.get("cuenta_meli_id")) or ventas_kpi["ventas_pagadas"] > 0
+    has_tn = tn_kpi["tiendas_conectadas"] > 0 or tn_kpi["ventas_pagadas"] > 0
+    if has_meli and has_tn:
+        user["canal"] = "ambos"
+    elif has_meli:
+        user["canal"] = "meli"
+    elif has_tn:
+        user["canal"] = "tn"
+    else:
+        user["canal"] = "sin_canal"
 
     # KPIs de pagos Talo (PaymentIntent / CustomerPaymentAccount)
     pagos = q(eng, """
@@ -498,7 +644,8 @@ def dropshipper_detail(user_id: int) -> dict:
 
     return {
         "user": user,
-        "ventas": ventas_kpi,
+        "ventas": ventas_kpi,  # MELI
+        "ventas_tn": tn_kpi,   # Tienda Nube (cliente final)
         "pagos": pagos_kpi,
         "publicaciones": pubs,
         "monthly": monthly_series,
