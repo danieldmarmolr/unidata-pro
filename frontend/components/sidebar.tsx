@@ -34,6 +34,7 @@ import {
   Boxes,
   Shapes,
   Settings,
+  X,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -99,12 +100,35 @@ const GROUP_ICONS: Record<string, React.ComponentType<{ size?: number; className
 
 const STORAGE_KEY = "unidata.sidebar.collapsed";
 
-export function Sidebar() {
+export function Sidebar({
+  mobileOpen = false,
+  onMobileClose,
+}: {
+  /** Control de visibilidad en mobile (drawer pattern). En desktop siempre se muestra. */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
+}) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUserState] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [hydrated, setHydrated] = useState(false);
+
+  // Cerrar drawer en mobile al cambiar de ruta
+  useEffect(() => {
+    if (mobileOpen && onMobileClose) onMobileClose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+
+  // ESC cierra el drawer
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && onMobileClose) onMobileClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen, onMobileClose]);
 
   useEffect(() => {
     setUserState(getUser());
@@ -147,18 +171,47 @@ export function Sidebar() {
     setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }));
 
   return (
-    <aside className="w-64 shrink-0 bg-gradient-to-b from-[#21093a] to-[#4e1e7a] text-white flex flex-col">
-      <div className="px-5 py-6 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-primary shadow-lg shadow-primary/40 flex items-center justify-center font-extrabold text-lg">
-            U
+    <>
+      {/* Backdrop overlay (mobile only) */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 lg:hidden"
+          onClick={onMobileClose}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        className={cn(
+          "bg-gradient-to-b from-[#21093a] to-[#4e1e7a] text-white flex flex-col",
+          // Desktop: estatico ancho 64
+          "lg:static lg:w-64 lg:translate-x-0 lg:shrink-0",
+          // Mobile: drawer fijo desde izquierda
+          "fixed top-0 left-0 h-screen w-[280px] z-50 transform transition-transform duration-300 ease-out shadow-2xl",
+          mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+        )}
+      >
+        <div className="px-5 py-5 border-b border-white/10 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-accent to-primary shadow-lg shadow-primary/40 flex items-center justify-center font-extrabold text-lg flex-shrink-0">
+              U
+            </div>
+            <div className="min-w-0">
+              <div className="text-lg font-extrabold tracking-tight leading-none">UNIDATA</div>
+              <div className="text-[11px] text-white/60 mt-0.5 truncate">Unistore Group</div>
+            </div>
           </div>
-          <div>
-            <div className="text-lg font-extrabold tracking-tight leading-none">UNIDATA</div>
-            <div className="text-[11px] text-white/60 mt-0.5">Unistore Group</div>
-          </div>
+          {/* Boton cerrar (solo mobile) */}
+          {onMobileClose && (
+            <button
+              onClick={onMobileClose}
+              className="lg:hidden text-white/70 hover:text-white p-1"
+              aria-label="Cerrar menu"
+            >
+              <X size={20} />
+            </button>
+          )}
         </div>
-      </div>
 
       <nav className="flex-1 overflow-y-auto px-2 pb-4 pt-2">
         {Object.entries(grouped).map(([group, items]) => {
@@ -290,5 +343,6 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
+    </>
   );
 }
