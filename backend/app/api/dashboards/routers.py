@@ -341,11 +341,29 @@ def get_cohorts(
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
-    """Cohortes de clientes - replica del PowerBI ERP Analytics.
-    Clasifica en: Nuevo, Segunda compra, Conv. a Recurrente, Recurrente, Recuperado.
+    """Cohortes - clasifica clientes (Unistore) o dropshippers (Unidrop) por
+    estado de actividad: Nuevo / Segunda / Conv. a Recurrente / Recurrente /
+    Recuperado / Posible churn / Perdidos.
+
+    'Posible churn' (clientes recurrentes que excedieron 1.5x su gap promedio
+    o 60d) y 'Perdidos' (>365d sin compras) son alertas accionables.
     """
-    return cohorts_svc.cohorts_overview(period, from_iso, to_iso)
+    return cohorts_svc.cohorts_overview(period, from_iso, to_iso, unit=unit)
+
+
+@router.get("/cohorts/customers")
+def get_cohort_customers(
+    _: Annotated[str, Depends(current_user)],
+    state: Annotated[str, Query()],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+) -> dict:
+    """Drill: lista de clientes/dropshippers en el estado dado para abrir en modal."""
+    return cohorts_svc.cohort_customers(state, period, from_iso, to_iso, unit=unit)
 
 
 @router.get("/lotes")

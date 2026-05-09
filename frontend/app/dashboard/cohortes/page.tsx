@@ -2,48 +2,42 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 import {
-  Sparkles,
-  Repeat,
-  Users,
-  TrendingUp,
-  RotateCcw,
-  ShoppingBag,
-  DollarSign,
-  ChevronRight,
-  Receipt,
-  Star,
+  Sparkles, Repeat, Users, TrendingUp, RotateCcw, ShoppingBag, DollarSign,
+  ChevronRight, Receipt, Star, AlertTriangle, Skull,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { Segmented } from "@/components/segmented";
+import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-type StateKey = "nuevo" | "segunda_compra" | "conv_recurrente" | "recurrente" | "recuperado";
+type Unit = "unistore" | "unidrop";
+
+type StateKey =
+  | "nuevo"
+  | "segunda_compra"
+  | "conv_recurrente"
+  | "recurrente"
+  | "recuperado"
+  | "posible_churn"
+  | "perdidos";
 
 type StateBlock = {
   key: StateKey;
   label: string;
   color: string;
+  description?: string;
   customers: number;
   ordenes: number;
   facturacion: number;
   ticket_promedio: number;
 };
 
-type Customer = {
-  customer_id: number;
-  nombre: string;
-  ordenes_total: number;
-  ordenes_periodo: number;
-  facturacion_periodo: number;
-  primera_compra: string | null;
-  ultima_compra: string | null;
-};
-
 type CohortsResponse = {
+  unit: string;
   totals: {
     customers: number;
     ordenes: number;
@@ -51,7 +45,6 @@ type CohortsResponse = {
     ticket_promedio: number;
   };
   states: StateBlock[];
-  top_by_state: Record<StateKey, Customer[]>;
   generated_at: string;
 };
 
@@ -61,14 +54,8 @@ const STATE_ICON: Record<StateKey, any> = {
   conv_recurrente: TrendingUp,
   recurrente: Star,
   recuperado: RotateCcw,
-};
-
-const STATE_DESC: Record<StateKey, string> = {
-  nuevo: "Primera compra del cliente",
-  segunda_compra: "2da orden del historial",
-  conv_recurrente: "3ra orden = transición a recurrente",
-  recurrente: "4+ ordenes activas",
-  recuperado: "Cliente con compra >180d que volvió",
+  posible_churn: AlertTriangle,
+  perdidos: Skull,
 };
 
 export default function CohortesPage() {
@@ -76,55 +63,119 @@ export default function CohortesPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
-  const [selectedState, setSelectedState] = useState<StateKey | null>(null);
+  const [unit, setUnit] = useState<Unit>("unistore");
+  const [drillState, setDrillState] = useState<{ state: StateKey; label: string; color: string } | null>(null);
 
   const { data, isLoading, isFetching } = useQuery<CohortsResponse>({
-    queryKey: ["cohorts", period, customFrom, customTo],
-    queryFn: () => api(`/api/dashboards/cohorts?${_qs}`),
+    queryKey: ["cohorts", period, customFrom, customTo, unit],
+    queryFn: () => api(`/api/dashboards/cohorts?${_qs}&unit=${unit}`),
     staleTime: 60_000,
   });
+
+  // Separar los estados de actividad de los de alerta
+  const activeStates = (data?.states ?? []).filter((s) =>
+    !["posible_churn", "perdidos"].includes(s.key)
+  );
+  const alertStates = (data?.states ?? []).filter((s) =>
+    ["posible_churn", "perdidos"].includes(s.key)
+  );
+
+  const labelClientes = unit === "unidrop" ? "dropshippers" : "clientes";
 
   return (
     <>
       <Topbar
         title="Análisis de Cohortes"
-        subtitle="Distribución de clientes por estado · Nuevo → 2da → Recurrente → Recuperado · Unistore"
+        subtitle={
+          unit === "unistore"
+            ? "Distribución de clientes finales · Nuevo → 2da → Recurrente → Recuperado · alertas Posible churn / Perdidos"
+            : "Distribución de dropshippers Unidrop por actividad de ventas · alertas Posible churn / Perdidos"
+        }
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
-        <DashboardHeader generatedAt={data?.generated_at} isFetching={isFetching} filters={null} />
+        <DashboardHeader
+          generatedAt={data?.generated_at}
+          isFetching={isFetching}
+          filters={
+            <Segmented<Unit>
+              value={unit}
+              onChange={setUnit}
+              options={[
+                { value: "unistore", label: "Unistore (clientes finales)" },
+                { value: "unidrop", label: "Unidrop (dropshippers)" },
+              ]}
+            />
+          }
+        />
 
         {/* KPIs cabecera */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
           {isLoading || !data ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="h-24 bg-surface border border-border rounded-xl animate-pulse" />
             ))
           ) : (
             <>
-              <KpiBox icon={Users} label="Clientes en periodo" value={formatNumber(data.totals.customers)} accent="primary" />
-              <KpiBox icon={ShoppingBag} label="Ordenes" value={formatNumber(data.totals.ordenes)} accent="emerald" />
-              <KpiBox icon={DollarSign} label="Facturación" value={formatCurrency(data.totals.facturacion)} accent="amber" />
-              <KpiBox icon={Receipt} label="Ticket promedio" value={formatCurrency(data.totals.ticket_promedio)} accent="rose" />
+              <KpiBox icon={Users} label={`${labelClientes} en periodo`} value={formatNumber(data.totals.customers)} accent="primary" />
+              <KpiBox icon={ShoppingBag} label={unit === "unidrop" ? "Ventas totales" : "Ordenes"} value={formatNumber(data.totals.ordenes)} accent="emerald" />
+              {unit === "unistore" ? (
+                <>
+                  <KpiBox icon={DollarSign} label="Facturación" value={formatCurrency(data.totals.facturacion)} accent="amber" />
+                  <KpiBox icon={Receipt} label="Ticket promedio" value={formatCurrency(data.totals.ticket_promedio)} accent="rose" />
+                </>
+              ) : (
+                <>
+                  <KpiBox icon={AlertTriangle} label="Posible churn" value={formatNumber(alertStates.find((s) => s.key === "posible_churn")?.customers ?? 0)} accent="rose" />
+                  <KpiBox icon={Skull} label="Perdidos" value={formatNumber(alertStates.find((s) => s.key === "perdidos")?.customers ?? 0)} accent="rose" />
+                </>
+              )}
             </>
           )}
         </div>
 
-        {/* Cards de estados (cohortes) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
+        {/* Banner alertas (Posible churn + Perdidos) */}
+        {data && alertStates.length > 0 && (alertStates.some((s) => s.customers > 0)) && (
+          <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-rose-50 border border-rose-200 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
+            <AlertTriangle size={18} className="text-rose-600 shrink-0" />
+            <div className="flex-1 text-xs">
+              <div className="font-bold text-rose-900">Alertas de retención</div>
+              <div className="text-rose-700/80">
+                Hay {labelClientes} que se pasaron de su valor esperado entre días — accionalos para evitar churn.
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {alertStates.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => setDrillState({ state: s.key, label: s.label, color: s.color })}
+                  className="bg-white/80 border border-rose-300 rounded-lg px-3 py-1.5 hover:bg-white hover:shadow-sm transition text-left"
+                  style={{ borderColor: s.color + "60" }}
+                >
+                  <div className="text-[10px] font-bold uppercase tracking-wider" style={{ color: s.color }}>{s.label}</div>
+                  <div className="text-base font-extrabold tabular-nums">{formatNumber(s.customers)}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Cards de estados activos (cohortes) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
           {isLoading || !data ? (
             Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="h-48 bg-surface border border-border rounded-xl animate-pulse" />
             ))
           ) : (
-            data.states.map((s) => {
+            activeStates.map((s) => {
               const Icon = STATE_ICON[s.key];
               const pct = data.totals.customers ? (s.customers / data.totals.customers) * 100 : 0;
               return (
                 <button
                   key={s.key}
-                  onClick={() => setSelectedState(s.key)}
-                  className="bg-surface border border-border rounded-xl p-4 hover:border-primary/40 hover:shadow-lg transition text-left group"
+                  onClick={() => setDrillState({ state: s.key, label: s.label, color: s.color })}
+                  className="bg-surface border-2 border-border rounded-xl p-4 hover:shadow-lg transition text-left group"
+                  style={{ borderColor: `${s.color}30` }}
                 >
                   <div className="flex items-center gap-2 mb-3">
                     <div
@@ -135,103 +186,63 @@ export default function CohortesPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-bold text-text">{s.label}</div>
-                      <div className="text-[10px] text-text-muted truncate">{STATE_DESC[s.key]}</div>
+                      <div className="text-[10px] text-text-muted truncate">{s.description}</div>
                     </div>
                   </div>
 
-                  <div className="text-3xl font-extrabold text-text tabular-nums mb-1">
-                    {formatNumber(s.customers)}
+                  <div className="flex items-baseline justify-between mb-1">
+                    <div className="text-3xl font-extrabold text-text tabular-nums">
+                      {formatNumber(s.customers)}
+                    </div>
+                    <div className="text-xs font-semibold" style={{ color: s.color }}>
+                      {pct.toFixed(1)}%
+                    </div>
                   </div>
-                  <div className="text-[11px] text-text-muted mb-3">
-                    clientes ({pct.toFixed(1)}%)
-                  </div>
+                  <div className="text-[11px] text-text-muted mb-3">{labelClientes}</div>
 
-                  <div className="space-y-1.5 text-xs pt-3 border-t border-border">
+                  <div className="space-y-1.5 text-xs pt-2 border-t border-border">
                     <div className="flex justify-between">
-                      <span className="text-text-muted">Ordenes</span>
+                      <span className="text-text-muted">{unit === "unidrop" ? "Ventas" : "Ordenes"}</span>
                       <span className="font-semibold tabular-nums">{formatNumber(s.ordenes)}</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-muted">Facturación</span>
-                      <span className="font-semibold tabular-nums">{formatCurrency(s.facturacion)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-text-muted">Ticket prom.</span>
-                      <span className="font-semibold tabular-nums">{formatCurrency(s.ticket_promedio)}</span>
-                    </div>
+                    {unit === "unistore" && (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Facturación</span>
+                          <span className="font-semibold tabular-nums">{formatCurrency(s.facturacion)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Ticket prom.</span>
+                          <span className="font-semibold tabular-nums">{formatCurrency(s.ticket_promedio)}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
 
-                  <div className="mt-3 flex items-center justify-end gap-1 text-[10px] text-primary font-semibold opacity-0 group-hover:opacity-100 transition">
-                    Ver clientes <ChevronRight size={11} />
+                  <div className="mt-3 flex items-center justify-end gap-1 text-[10px] font-semibold opacity-0 group-hover:opacity-100 transition" style={{ color: s.color }}>
+                    Ver {labelClientes} <ChevronRight size={11} />
                   </div>
                 </button>
               );
             })
           )}
         </div>
-
-        {/* Drilldown lista clientes (cuando se selecciona un estado) */}
-        {selectedState && data && (
-          <div className="bg-surface border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
-              <div className="min-w-0">
-                <h3 className="text-sm font-bold text-text">
-                  Top 10 clientes — {data.states.find((s) => s.key === selectedState)?.label}
-                </h3>
-                <p className="text-[11px] text-text-muted">
-                  Ordenados por facturación en el periodo
-                </p>
-              </div>
-              <button
-                onClick={() => setSelectedState(null)}
-                className="text-xs text-text-muted hover:text-text px-2 py-1 rounded border border-border"
-              >
-                Cerrar
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
-                  <tr>
-                    <th className="text-left px-3 py-2.5">Cliente</th>
-                    <th className="text-right px-2 py-2.5">Ordenes (todas)</th>
-                    <th className="text-right px-2 py-2.5">Ordenes periodo</th>
-                    <th className="text-right px-2 py-2.5">Facturación periodo</th>
-                    <th className="text-left px-2 py-2.5">Primera compra</th>
-                    <th className="text-left px-2 py-2.5">Última compra</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(data.top_by_state[selectedState] ?? []).map((c) => (
-                    <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40 transition">
-                      <td className="px-3 py-2.5">
-                        <Link
-                          href={`/dashboard/customer/${c.customer_id}`}
-                          className="text-primary hover:underline font-medium"
-                        >
-                          {c.nombre}
-                        </Link>
-                      </td>
-                      <td className="px-2 py-2.5 text-right tabular-nums text-text-muted">{c.ordenes_total}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums">{c.ordenes_periodo}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-bold">{formatCurrency(c.facturacion_periodo)}</td>
-                      <td className="px-2 py-2.5 text-xs text-text-muted">{c.primera_compra ?? "—"}</td>
-                      <td className="px-2 py-2.5 text-xs text-text-muted">{c.ultima_compra ?? "—"}</td>
-                    </tr>
-                  ))}
-                  {(!data.top_by_state[selectedState] || data.top_by_state[selectedState].length === 0) && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-text-muted text-sm">
-                        Sin clientes en este estado para el periodo seleccionado.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Drilldown modal: lista de customers/dropshippers del estado */}
+      {drillState && (
+        <DrillDownModal
+          title={`${drillState.label} · ${labelClientes}`}
+          subtitle={
+            unit === "unistore"
+              ? "Click en un cliente para abrir su perfil 360 Unistore"
+              : "Click en un dropshipper para abrir su vista 360 Unidrop"
+          }
+          endpoint={`/api/dashboards/cohorts/customers?state=${encodeURIComponent(drillState.state)}&unit=${unit}&${_qs}`}
+          filename={`cohort_${drillState.state}_${unit}.csv`}
+          onClose={() => setDrillState(null)}
+        />
+      )}
     </>
   );
 }

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
+import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
@@ -53,14 +54,18 @@ type RfmResponse = {
   generated_at: string;
 };
 
+type Unit = "unistore" | "unidrop";
+
 export default function RfmPage() {
   const [period, setPeriod] = useState(365);
+  const [unit, setUnit] = useState<Unit>("unistore");
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
 
   const { data, isLoading, isFetching } = useQuery<RfmResponse>({
-    queryKey: ["rfm", period],
+    queryKey: ["rfm", period, unit],
     queryFn: () => api(`/api/dashboards/rfm?period_days=${period}`),
     staleTime: 60_000,
+    enabled: unit === "unistore",
   });
 
   return (
@@ -75,18 +80,43 @@ export default function RfmPage() {
           generatedAt={data?.generated_at}
           isFetching={isFetching}
           filters={
-            <select
-              value={period}
-              onChange={(e) => setPeriod(Number(e.target.value))}
-              className="px-3 py-1.5 text-xs rounded-lg border border-border bg-bg outline-none focus:border-primary"
-            >
-              <option value={90}>Últimos 90 días</option>
-              <option value={180}>Últimos 180 días</option>
-              <option value={365}>Último año</option>
-              <option value={730}>Últimos 2 años</option>
-            </select>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Segmented<Unit>
+                value={unit}
+                onChange={setUnit}
+                options={[
+                  { value: "unistore", label: "Unistore (clientes finales)" },
+                  { value: "unidrop", label: "Unidrop (dropshippers)" },
+                ]}
+              />
+              <select
+                value={period}
+                onChange={(e) => setPeriod(Number(e.target.value))}
+                className="px-3 py-1.5 text-xs rounded-lg border border-border bg-bg outline-none focus:border-primary"
+              >
+                <option value={90}>Últimos 90 días</option>
+                <option value={180}>Últimos 180 días</option>
+                <option value={365}>Último año</option>
+                <option value={730}>Últimos 2 años</option>
+              </select>
+            </div>
           }
         />
+
+        {unit === "unidrop" && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm">
+            <div className="font-bold text-amber-900 mb-1">RFM de dropshippers Unidrop</div>
+            <div className="text-amber-800 text-xs">
+              Para análisis de actividad/recurrencia de operadores Unidrop usa{" "}
+              <a href="/dashboard/cohortes?unit=unidrop" className="font-semibold underline">
+                Cohortes (modo Unidrop)
+              </a>
+              . Allí se clasifican por Nuevo/Recurrente/Posible churn/Perdidos en base a sus ventas MELI + TN.
+              <br />
+              El scoring RFM clásico (Recency × Frequency × Monetary con quintiles) está disponible solo para clientes finales Unistore por ahora.
+            </div>
+          </div>
+        )}
 
         {/* KPIs cabecera */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">

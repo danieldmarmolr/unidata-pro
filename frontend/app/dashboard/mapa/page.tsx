@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+// (useMemo se usa tambien en ArgentinaMap mas abajo)
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/topbar";
@@ -9,9 +10,8 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { ComposableMap, Geographies, Geography, Marker, ZoomableGroup } from "react-simple-maps";
-import { geoCentroid } from "d3-geo";
-import { X, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
+import { geoMercator, geoPath } from "d3-geo";
+import { X } from "lucide-react";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 import { SkuRow } from "@/components/sku-row";
 
@@ -71,8 +71,6 @@ export default function MapaPage() {
   const [metric, setMetric] = useState<Metric>("revenue");
   const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
   const [hoverProvince, setHoverProvince] = useState<{ name: string; value: number; x: number; y: number } | null>(null);
-  const [zoom, setZoom] = useState(1);
-  const [mapCenter, setMapCenter] = useState<[number, number]>([-65, -38]);
 
   // FIX: fetch manual del geojson en lugar de pasar la URL a Geographies.
   // En Next.js 16 + Turbopack, react-simple-maps no resuelve la URL por si solo.
@@ -176,190 +174,17 @@ export default function MapaPage() {
                 Error cargando mapa: {geoError}
               </div>
             ) : (
-              <div
-                className="relative rounded-lg overflow-hidden border border-border"
-                style={{
-                  // Fondo estilo gubernamental: celeste muy suave con vignette
-                  background: "radial-gradient(ellipse at center, #f0f7ff 0%, #e0ecf7 100%)",
-                  minHeight: 500,
-                }}
-                onMouseLeave={() => setHoverProvince(null)}
-              >
-                <ComposableMap
-                  projection="geoMercator"
-                  // Argentina: lat -22 a -55 (33° de span), lon -73 a -53 (20°).
-                  // Centro [-65, -38]. Mercator a -38° lat: scale ~1500 llena 900px alto.
-                  projectionConfig={{ center: mapCenter, scale: 1500 }}
-                  width={550}
-                  height={900}
-                  style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 220px)", display: "block" }}
-                >
-                  <ZoomableGroup
-                    zoom={zoom}
-                    center={mapCenter}
-                    onMoveEnd={({ coordinates, zoom: z }: any) => {
-                      setMapCenter(coordinates as [number, number]);
-                      setZoom(z);
-                    }}
-                    minZoom={1}
-                    maxZoom={6}
-                  >
-                    <Geographies geography={geoData!}>
-                      {({ geographies }: { geographies: any[] }) => (
-                        <>
-                          {/* Halo del país: outline general en azul oscuro */}
-                          {geographies.map((geo) => (
-                            <Geography
-                              key={`halo-${geo.rsmKey}`}
-                              geography={geo}
-                              style={{
-                                default: { fill: "transparent", stroke: "#1e3a5f", strokeWidth: 1.4, outline: "none" },
-                                hover: { fill: "transparent", stroke: "#1e3a5f", strokeWidth: 1.4, outline: "none" },
-                                pressed: { fill: "transparent", outline: "none" },
-                              }}
-                            />
-                          ))}
-                          {/* Provincias coloreadas */}
-                          {geographies.map((geo) => {
-                            const name = geo.properties?.NAME_1 ?? "";
-                            const value = valueByProvince.get(name) ?? 0;
-                            const isSelected = selectedProvince === name;
-                            return (
-                              <Geography
-                                key={geo.rsmKey}
-                                geography={geo}
-                                onClick={() => setSelectedProvince(name)}
-                                onMouseEnter={(e: any) => {
-                                  setHoverProvince({
-                                    name,
-                                    value,
-                                    x: e.clientX,
-                                    y: e.clientY,
-                                  });
-                                }}
-                                onMouseMove={(e: any) => {
-                                  setHoverProvince((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
-                                }}
-                                onMouseLeave={() => setHoverProvince(null)}
-                                style={{
-                                  default: {
-                                    fill: colorScale(value, maxValue),
-                                    stroke: isSelected ? "#5d2d8e" : "#7a8aa1",
-                                    strokeWidth: isSelected ? 2 : 0.5,
-                                    outline: "none",
-                                    cursor: "pointer",
-                                    transition: "fill 150ms ease",
-                                  },
-                                  hover: {
-                                    fill: "#a259ff",
-                                    stroke: "#5d2d8e",
-                                    strokeWidth: 1.5,
-                                    outline: "none",
-                                    cursor: "pointer",
-                                    filter: "drop-shadow(0 0 4px rgba(122, 62, 174, 0.5))",
-                                  },
-                                  pressed: {
-                                    fill: "#5d2d8e",
-                                    outline: "none",
-                                  },
-                                }}
-                              />
-                            );
-                          })}
-                          {/* Labels solo cuando zoom > 1 o si la provincia es grande */}
-                          {zoom >= 1.2 && geographies.map((geo) => {
-                            const name = geo.properties?.NAME_1 ?? "";
-                            const value = valueByProvince.get(name) ?? 0;
-                            let centroid: [number, number];
-                            try { centroid = geoCentroid(geo) as [number, number]; } catch { return null; }
-                            if (!Number.isFinite(centroid[0]) || !Number.isFinite(centroid[1])) return null;
-                            const isDark = value > 0 && (value / Math.max(maxValue, 1)) > 0.4;
-                            const fontSize = (name.length > 14 ? 7 : name.length > 10 ? 8 : 9) / Math.max(zoom * 0.7, 1);
-                            return (
-                              <Marker key={`label-${geo.rsmKey}`} coordinates={centroid}>
-                                <text
-                                  textAnchor="middle"
-                                  style={{
-                                    fontFamily: "Inter, system-ui, sans-serif",
-                                    fontSize,
-                                    fontWeight: 700,
-                                    fill: isDark ? "#fff" : "#1f1235",
-                                    pointerEvents: "none",
-                                    textShadow: isDark ? "none" : "0 0 3px rgba(255,255,255,0.9)",
-                                  }}
-                                >
-                                  {name}
-                                </text>
-                              </Marker>
-                            );
-                          })}
-                        </>
-                      )}
-                    </Geographies>
-                  </ZoomableGroup>
-                </ComposableMap>
-
-                {/* Tooltip flotante */}
-                {hoverProvince && (
-                  <div
-                    className="fixed z-50 pointer-events-none bg-zinc-900/95 text-white px-3 py-2 rounded-lg shadow-xl text-xs"
-                    style={{
-                      left: hoverProvince.x + 12,
-                      top: hoverProvince.y + 12,
-                      maxWidth: 240,
-                    }}
-                  >
-                    <div className="font-bold text-sm">{hoverProvince.name}</div>
-                    <div className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5">{metric}</div>
-                    <div className="font-bold text-emerald-400">{fmtMetric(hoverProvince.value)}</div>
-                    <div className="text-[10px] opacity-60 mt-1">Click para abrir detalle</div>
-                  </div>
-                )}
-
-                {/* Controles de zoom */}
-                <div className="absolute top-3 right-3 flex flex-col gap-1 bg-white/90 backdrop-blur-sm border border-border rounded-lg shadow-md overflow-hidden">
-                  <button
-                    onClick={() => setZoom((z) => Math.min(z * 1.5, 6))}
-                    className="p-2 hover:bg-soft transition"
-                    title="Acercar"
-                  >
-                    <ZoomIn size={14} />
-                  </button>
-                  <button
-                    onClick={() => setZoom((z) => Math.max(z / 1.5, 1))}
-                    className="p-2 hover:bg-soft transition border-t border-border"
-                    title="Alejar"
-                  >
-                    <ZoomOut size={14} />
-                  </button>
-                  <button
-                    onClick={() => { setZoom(1); setMapCenter([-65, -38]); }}
-                    className="p-2 hover:bg-soft transition border-t border-border"
-                    title="Restablecer vista"
-                  >
-                    <Maximize2 size={14} />
-                  </button>
-                </div>
-
-                {/* Legend */}
-                <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] shadow-sm">
-                  <div className="font-semibold mb-1 text-text-muted uppercase tracking-wider">{metric}</div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-text-muted">0</span>
-                    <div className="w-32 h-2 rounded-full" style={{
-                      background: `linear-gradient(to right, ${SCALE_COLORS[0]}, ${SCALE_COLORS[2]}, ${SCALE_COLORS[4]})`,
-                    }} />
-                    <span className="text-text font-semibold">{maxValue ? fmtMetric(maxValue) : "—"}</span>
-                  </div>
-                </div>
-
-                {/* Hint inicial - solo si no hay seleccion */}
-                {!selectedProvince && (
-                  <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] text-text-muted shadow-sm">
-                    Click en una provincia · arrastrar y zoom con scroll
-                  </div>
-                )}
-              </div>
+              <ArgentinaMap
+                geoData={geoData!}
+                valueByProvince={valueByProvince}
+                maxValue={maxValue}
+                selectedProvince={selectedProvince}
+                onSelect={setSelectedProvince}
+                hoverProvince={hoverProvince}
+                onHover={(h) => setHoverProvince(h)}
+                metric={metric}
+                fmtMetric={fmtMetric}
+              />
             )}
           </div>
 
@@ -497,5 +322,183 @@ export default function MapaPage() {
         )}
       </div>
     </>
+  );
+}
+
+// ============================================================
+// ArgentinaMap: SVG renderizado manualmente con d3-geo + fitSize.
+// Garantiza que el contorno completo del pais llene el canvas, sin
+// depender de scale/center magicos de react-simple-maps que estaban
+// dando problemas en Next 16 / Turbopack.
+// ============================================================
+type Hover = { name: string; value: number; x: number; y: number } | null;
+
+function ArgentinaMap({
+  geoData,
+  valueByProvince,
+  maxValue,
+  selectedProvince,
+  onSelect,
+  hoverProvince,
+  onHover,
+  metric,
+  fmtMetric,
+}: {
+  geoData: GeoCollection;
+  valueByProvince: Map<string, number>;
+  maxValue: number;
+  selectedProvince: string | null;
+  onSelect: (n: string) => void;
+  hoverProvince: Hover;
+  onHover: (h: Hover) => void;
+  metric: Metric;
+  fmtMetric: (v: number) => string;
+}) {
+  // Tamano de canvas SVG. La proyeccion fitSize() ajusta automaticamente
+  // para que las geometrias completas del geojson llenen exactamente
+  // este viewBox - no hace falta calcular scale ni center manualmente.
+  const W = 600;
+  const H = 900;
+
+  const { projection, pathGen } = useMemo(() => {
+    const proj = geoMercator().fitSize([W, H], geoData as any);
+    const path = geoPath(proj);
+    return { projection: proj, pathGen: path };
+  }, [geoData]);
+
+  return (
+    <div
+      className="relative rounded-lg overflow-hidden border border-border"
+      style={{
+        // Fondo celeste suave estilo gubernamental argentino.
+        background: "linear-gradient(180deg, #f0f7ff 0%, #d8e8f5 100%)",
+      }}
+      onMouseLeave={() => onHover(null)}
+    >
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 220px)", display: "block" }}
+      >
+        {/* Halo del pais: outline general grueso azul oscuro */}
+        <g>
+          {geoData.features.map((f, i) => {
+            const d = pathGen(f as any) ?? "";
+            return (
+              <path
+                key={`halo-${i}`}
+                d={d}
+                fill="transparent"
+                stroke="#1e3a5f"
+                strokeWidth={1.6}
+                strokeLinejoin="round"
+                pointerEvents="none"
+              />
+            );
+          })}
+        </g>
+
+        {/* Provincias coloreadas */}
+        <g>
+          {geoData.features.map((f, i) => {
+            const name = f.properties?.NAME_1 ?? "";
+            const value = valueByProvince.get(name) ?? 0;
+            const isSelected = selectedProvince === name;
+            const isHover = hoverProvince?.name === name;
+            const d = pathGen(f as any) ?? "";
+            const fill = isHover ? "#a259ff" : isSelected ? "#5d2d8e" : colorScale(value, maxValue);
+            const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
+            return (
+              <path
+                key={`prov-${i}`}
+                d={d}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={isSelected ? 1.8 : 0.6}
+                strokeLinejoin="round"
+                style={{ cursor: "pointer", transition: "fill 150ms ease" }}
+                onClick={() => onSelect(name)}
+                onMouseEnter={(e) => onHover({ name, value, x: e.clientX, y: e.clientY })}
+                onMouseMove={(e) => onHover({ name, value, x: e.clientX, y: e.clientY })}
+              />
+            );
+          })}
+        </g>
+
+        {/* Labels de las provincias mas grandes */}
+        <g pointerEvents="none">
+          {geoData.features.map((f, i) => {
+            const name = f.properties?.NAME_1 ?? "";
+            const value = valueByProvince.get(name) ?? 0;
+            // Solo provincias grandes (area visual > umbral) para no saturar
+            const bounds = pathGen.bounds(f as any);
+            const w = bounds[1][0] - bounds[0][0];
+            const h = bounds[1][1] - bounds[0][1];
+            if (w < 30 || h < 30) return null;
+            const centroid = pathGen.centroid(f as any);
+            if (!Number.isFinite(centroid[0]) || !Number.isFinite(centroid[1])) return null;
+            const isDark = value > 0 && (value / Math.max(maxValue, 1)) > 0.4;
+            const fontSize = Math.min(11, Math.max(7, Math.min(w, h) / 6));
+            return (
+              <text
+                key={`lbl-${i}`}
+                x={centroid[0]}
+                y={centroid[1]}
+                textAnchor="middle"
+                style={{
+                  fontFamily: "Inter, system-ui, sans-serif",
+                  fontSize,
+                  fontWeight: 700,
+                  fill: isDark ? "#fff" : "#1f1235",
+                  paintOrder: "stroke",
+                  stroke: isDark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.85)",
+                  strokeWidth: 2.4,
+                  strokeLinejoin: "round",
+                }}
+              >
+                {name}
+              </text>
+            );
+          })}
+        </g>
+      </svg>
+
+      {/* Tooltip flotante */}
+      {hoverProvince && (
+        <div
+          className="fixed z-50 pointer-events-none bg-zinc-900/95 text-white px-3 py-2 rounded-lg shadow-xl text-xs"
+          style={{
+            left: hoverProvince.x + 12,
+            top: hoverProvince.y + 12,
+            maxWidth: 240,
+          }}
+        >
+          <div className="font-bold text-sm">{hoverProvince.name}</div>
+          <div className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5">{metric}</div>
+          <div className="font-bold text-emerald-400">{fmtMetric(hoverProvince.value)}</div>
+          <div className="text-[10px] opacity-60 mt-1">Click para abrir detalle</div>
+        </div>
+      )}
+
+      {/* Legend */}
+      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] shadow-sm">
+        <div className="font-semibold mb-1 text-text-muted uppercase tracking-wider">{metric}</div>
+        <div className="flex items-center gap-2">
+          <span className="text-text-muted">0</span>
+          <div
+            className="w-32 h-2 rounded-full"
+            style={{ background: `linear-gradient(to right, ${SCALE_COLORS[0]}, ${SCALE_COLORS[2]}, ${SCALE_COLORS[4]})` }}
+          />
+          <span className="text-text font-semibold">{maxValue ? fmtMetric(maxValue) : "—"}</span>
+        </div>
+      </div>
+
+      {/* Hint inicial - solo si no hay seleccion */}
+      {!selectedProvince && (
+        <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] text-text-muted shadow-sm">
+          Click en una provincia para ver el detalle
+        </div>
+      )}
+    </div>
   );
 }
