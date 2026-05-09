@@ -301,6 +301,19 @@ from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc
 from app.services import stock_heatmap as stock_svc
 from app.services import envios_unistore as envios_uni_svc
+from app.services import envios_meli_unidrop as envios_meli_svc
+
+
+@router.get("/envios-meli-unidrop")
+def get_envios_meli_unidrop(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Distribucion de ordenes MELI de Unidrop por modo de envio:
+    Mercado Envios FULL / ME2 / Cross Docking / Drop Off / Flex / Pickup / Personalizado."""
+    return envios_meli_svc.envios_meli_unidrop(period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/envios-unistore")
