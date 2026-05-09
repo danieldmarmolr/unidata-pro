@@ -35,6 +35,7 @@ import {
   Shapes,
   Settings,
   Target,
+  Warehouse,
   X,
 } from "lucide-react";
 
@@ -76,6 +77,7 @@ const ITEMS: NavItem[] = [
   },
   { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL },
   { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore", roles: ALL },
+  { label: "Heatmap stock",    href: "/dashboard/stock-heatmap",  icon: Warehouse,       group: "Unistore", roles: ["admin", "gerencia", "analista"] },
   { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore", roles: ALL },
   { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop", roles: ALL },
   { label: "Dropshippers",     href: "/dashboard/dropshippers",   icon: Users,           group: "Unidrop", roles: ALL },

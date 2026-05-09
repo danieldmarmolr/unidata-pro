@@ -32,6 +32,7 @@ import {
   Boxes,
   Repeat,
   Target,
+  Warehouse,
 } from "lucide-react";
 
 type Tile = {
@@ -52,6 +53,7 @@ const TILES: Record<string, Tile> = {
   lotes: { label: "Gestion de Lotes", href: "/dashboard/lotes", icon: Boxes, color: "from-fuchsia-500 to-purple-600", description: "Consumo del lote · markup · cobertura de pago · drill por SKU · replica del PowerBI" },
   cohortes: { label: "Cohortes de clientes", href: "/dashboard/cohortes", icon: Repeat, color: "from-cyan-500 to-blue-600", description: "Nuevo · 2da compra · Recurrente · Recuperado · drill por estado" },
   rfm: { label: "Segmentacion RFM", href: "/dashboard/rfm", icon: Target, color: "from-rose-500 to-pink-600", description: "Champions · Leales · En riesgo · Perdidos · scoring 1-5 por dimension" },
+  stockHeatmap: { label: "Heatmap de Stock", href: "/dashboard/stock-heatmap", icon: Warehouse, color: "from-violet-500 to-purple-700", description: "SKU × area de deposito · concentracion logistica · cross-area" },
   marketing: { label: "Marketing", href: "/dashboard/marketing", icon: Megaphone, color: "from-pink-500 to-rose-500", description: "LTV, repeat purchase, top customers, retention · vista por unidad" },
   cs: { label: "Customer Success", href: "/dashboard/cs", icon: HeartHandshake, color: "from-violet-500 to-purple-500", description: "Cancelaciones, RFM, lifecycle, customers en riesgo · vista por unidad" },
   mapa: { label: "Mapa", href: "/dashboard/mapa", icon: MapIcon, color: "from-cyan-500 to-blue-500", description: "Choropleth Argentina por provincia · vista por unidad" },
@@ -74,17 +76,17 @@ const ROLE_VIEWS: Record<RoleKey, string[]> = {
   admin: [
     "gerencial", "ventas", "productos", "marketing", "cs", "mapa", "cohortes", "rfm",
     "saas", "pagos", "subsMeli", "envios", "logistica", "finanzas",
-    "devoluciones", "costos", "lotes", "catalog", "sources", "sql", "audit", "users",
+    "devoluciones", "costos", "lotes", "stockHeatmap", "catalog", "sources", "sql", "audit", "users",
   ],
   gerencia: [
     "gerencial", "ventas", "productos", "mapa", "marketing", "cs", "cohortes", "rfm",
-    "saas", "pagos", "devoluciones", "finanzas", "lotes",
+    "saas", "pagos", "devoluciones", "finanzas", "lotes", "stockHeatmap",
     "catalog", "sources",
   ],
   analista: [
     "gerencial", "ventas", "productos", "mapa", "cs", "marketing", "cohortes", "rfm",
     "pagos", "saas", "envios", "logistica", "finanzas", "devoluciones",
-    "lotes", "catalog", "sources", "sql",
+    "lotes", "stockHeatmap", "catalog", "sources", "sql",
   ],
   lector: [
     "gerencial", "ventas", "productos", "mapa", "cs", "catalog", "sources",

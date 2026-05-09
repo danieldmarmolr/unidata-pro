@@ -269,6 +269,17 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
 from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc
+from app.services import stock_heatmap as stock_svc
+
+
+@router.get("/stock-heatmap")
+def get_stock_heatmap(
+    _: Annotated[str, Depends(current_user)],
+    top_skus: Annotated[int, Query(ge=10, le=100)] = 30,
+) -> dict:
+    """Heatmap de stock SKU x area de deposito (Digip).
+    Identifica concentracion logistica y zonas con bajo surtido."""
+    return stock_svc.stock_heatmap(top_skus=top_skus)
 
 
 @router.get("/rfm")
