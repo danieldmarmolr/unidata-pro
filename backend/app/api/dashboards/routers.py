@@ -270,6 +270,19 @@ from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc
 from app.services import stock_heatmap as stock_svc
+from app.services import envios_unistore as envios_uni_svc
+
+
+@router.get("/envios-unistore")
+def get_envios_unistore(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Distribucion de ordenes Unistore por canal de envio:
+    OCA / Correo Argentino / Unifast / Retiro / Moto / Andreani / Personalizado."""
+    return envios_uni_svc.envios_unistore_overview(period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/stock-heatmap")

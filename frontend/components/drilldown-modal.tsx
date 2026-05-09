@@ -7,7 +7,7 @@ import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Bu
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
-import { OrderStatusPipeline, OrderStatusBadge } from "@/components/order-status-pipeline";
+import { OrderStatusPipeline, OrderStatusBadge, ShippingMethodBadge } from "@/components/order-status-pipeline";
 
 type Result = {
   columns: string[];
@@ -24,6 +24,8 @@ const PROVINCE_HINT = /^(provincia|province|region|departamento)$/i;
 const SKU_HINT = /^(sku|sku2|producto_sku|seller_sku|codigo|articulo)$/i;
 const PAYMENT_HINT = /^(payment|paymentstatus|pago|payment_status|estado_pago)$/i;
 const SHIPPING_HINT = /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i;
+const SHIPPING_METHOD_HINT = /^(metodo_envio|shipping_method|shippingMethod|metodo|envio_metodo)$/i;
+const SHIPPING_CHANNEL_HINT = /^(canal|canal_envio|shipping_channel|carrier_channel)$/i;
 const STATUS_HINT = /^(status|estado|order_status)$/i;
 const LOTE_HINT = /^(lote|lote_name|nombre_lote|batch)$/i;
 const CATEGORIA_HINT = /^(categoria|category|sub_categoria|sub-categoria|sub_category|subcategoria)$/i;
@@ -121,13 +123,25 @@ export function CellRenderer({
     return <OrderStatusBadge kind="payment" value={v} />;
   }
   if (SHIPPING_HINT.test(col) && row && columns) {
-    // Si la fila tambien tiene payment, ocultamos esta celda (la pipeline ya lo muestra)
+    // Si la fila tambien tiene payment, la pipeline ya lo muestra: omitimos
+    // por completo el texto para evitar redundancia visual.
     const paymentVal = findColValue(columns, row, ["payment", "paymentStatus", "pago", "payment_status"]);
     if (paymentVal !== null) {
-      // Pequenio caption del estado de envio para no perder info
-      return <span className="text-text-muted text-[9px] uppercase tracking-wider">{s}</span>;
+      return null;
     }
     return <OrderStatusBadge kind="shipping" value={v} />;
+  }
+
+  // Canal de envio: pinta un badge coloreado con icono de carrier.
+  if (SHIPPING_CHANNEL_HINT.test(col) && row && columns) {
+    const metodoVal = findColValue(columns, row, ["metodo_envio", "shipping_method", "metodo"]);
+    return <ShippingMethodBadge canal={s} metodo={metodoVal != null ? String(metodoVal) : null} />;
+  }
+  // Si solo viene metodo crudo (sin canal), igual mostrar badge clasificado heuristicamente.
+  if (SHIPPING_METHOD_HINT.test(col) && row && columns) {
+    const canalVal = findColValue(columns, row, ["canal", "canal_envio", "shipping_channel"]);
+    if (canalVal != null) return null; // ya se renderizo en la columna canal
+    return <ShippingMethodBadge canal={s} metodo={s} />;
   }
   if (STATUS_HINT.test(col) && row && columns) {
     const paymentVal = findColValue(columns, row, ["payment", "paymentStatus", "pago", "payment_status"]);
@@ -449,14 +463,32 @@ export function DrillDownModal({
               Sin resultados para esta seleccion en el periodo actual.
             </div>
           )}
-          {data && data.rows.length > 0 && (
+          {data && data.rows.length > 0 && (() => {
+            // Detectar columnas redundantes que se ocultan globalmente:
+            //  - shipping si hay payment (pipeline cubre ambos)
+            //  - metodo_envio si hay canal (badge ya lo cubre)
+            //  - status si hay payment (pipeline cubre)
+            const hasPayment = data.columns.some((c) => /^(payment|paymentStatus|pago|payment_status)$/i.test(c));
+            const hasCanal = data.columns.some((c) => /^(canal|canal_envio|shipping_channel)$/i.test(c));
+            const isHiddenColumn = (c: string) => {
+              if (/^(customer_id|customerId|cliente_id|id_cliente)$/i.test(c)) return true;
+              if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
+              if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
+              if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
+              return false;
+            };
+            const labelFor = (c: string) => {
+              if (/^(payment|paymentStatus|pago|payment_status)$/i.test(c)) return "Estado del pedido";
+              if (/^(canal|canal_envio|shipping_channel)$/i.test(c)) return "Envio";
+              return c;
+            };
+            return (
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                 <tr>
                   {data.columns.map((c) => {
-                    // Si la columna es customer_id la ocultamos (uso interno solo para links)
-                    if (/^(customer_id|customerId|cliente_id|id_cliente)$/i.test(c)) return null;
-                    return <th key={c} className="text-left px-3 py-2 whitespace-nowrap">{c}</th>;
+                    if (isHiddenColumn(c)) return null;
+                    return <th key={c} className="text-left px-3 py-2 whitespace-nowrap">{labelFor(c)}</th>;
                   })}
                 </tr>
               </thead>
@@ -479,9 +511,7 @@ export function DrillDownModal({
                     >
                       {r.map((v, j) => {
                         const col = data.columns[j];
-                        // Si la columna es customer_id la ocultamos (la usamos solo para construir links)
-                        const isHiddenIdCol = /^(customer_id|customerId|cliente_id|id_cliente)$/i.test(col);
-                        if (isHiddenIdCol) return null;
+                        if (isHiddenColumn(col)) return null;
                         // En la primera celda visible mostrar un badge VIP
                         const isFirstVisible = j === 0;
                         return (
@@ -507,7 +537,8 @@ export function DrillDownModal({
                 })}
               </tbody>
             </table>
-          )}
+            );
+          })()}
         </div>
 
         <div className="px-5 py-3 border-t border-border bg-soft text-xs text-text-muted flex items-center gap-2">

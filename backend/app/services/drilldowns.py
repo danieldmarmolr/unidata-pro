@@ -5,10 +5,64 @@ Cada funcion devuelve un set de filas listo para mostrar como tabla.
 from __future__ import annotations
 
 from app.db.engines import get_engine
-from app.services._utils import q
+from app.services._utils import q, col_or_null
 from app.services._utils import resolve_window
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
+
+
+def _shipping_method_expr(eng) -> str:
+    """Detecta dinamicamente la columna que mejor represente el metodo de envio
+    en TN. Devuelve un fragmento SQL que se puede usar directamente como columna
+    derivada llamada `metodo_envio`. Soporta:
+        - Order.shippingOption (string descriptivo TN, ej "Envio Nube - Correo Argentino Clasico")
+        - Order.shippingPickupType (pickup vs ship)
+        - Fulfillment.trackingCompany (carrier real)
+    Si nada existe devuelve NULL::text.
+    """
+    parts = []
+    o = col_or_null(eng, "tienda_nube", "Order", "o", [
+        "shippingOption", "shipping_option",
+        "shippingMethod", "shipping_method",
+        "shippingPickupType", "shipping_pickup_type",
+    ])
+    if o != "NULL::text":
+        parts.append(o)
+    f = col_or_null(eng, "tienda_nube", "Fulfillment", "f", [
+        "trackingCompany", "tracking_company", "carrierName", "carrier",
+    ])
+    if f != "NULL::text":
+        parts.append(f)
+    if not parts:
+        return "NULL::text AS metodo_envio"
+    # COALESCE primero el carrier real (Fulfillment), luego el option de Order
+    expr = "COALESCE(" + ", ".join(reversed(parts)) + ")"
+    return f"NULLIF(TRIM({expr}::text), '') AS metodo_envio"
+
+
+def _classify_channel_sql(method_alias: str = "metodo_envio") -> str:
+    """Devuelve un CASE SQL que clasifica el metodo en canales discretos:
+    OCA / Correo Argentino / Unifast / Retiro presencial / Personalizado / Otro.
+    Recibe el alias de la columna ya calculada."""
+    return f"""
+        CASE
+          WHEN {method_alias} ILIKE '%oca%'                                 THEN 'OCA'
+          WHEN {method_alias} ILIKE '%correo argentino%'
+            OR {method_alias} ILIKE '%correo nube%'
+            OR {method_alias} ILIKE '%envio nube%'                          THEN 'Correo Argentino'
+          WHEN {method_alias} ILIKE '%unifast%'                             THEN 'Unifast'
+          WHEN {method_alias} ILIKE '%retiro%'
+            OR {method_alias} ILIKE '%pickup%'
+            OR {method_alias} ILIKE '%microcentro%'
+            OR {method_alias} ILIKE '%sucursal unistore%'                   THEN 'Retiro presencial'
+          WHEN {method_alias} ILIKE '%moto%'                                THEN 'Moto / Cadeteria'
+          WHEN {method_alias} ILIKE '%andreani%'                            THEN 'Andreani'
+          WHEN {method_alias} ILIKE '%personalizado%'
+            OR {method_alias} ILIKE '%a convenir%'                          THEN 'Personalizado'
+          WHEN {method_alias} IS NULL OR {method_alias} = ''                THEN '(sin metodo)'
+          ELSE 'Otro'
+        END
+    """
 
 
 def _serialize(rows: list, columns: list[str]) -> dict:
@@ -76,19 +130,30 @@ def orders_by_province(unit: str, province: str, period: str = "30d") -> dict:
 def orders_by_customer_unistore(customer_id: int) -> dict:
     """Historial de orders de un customer."""
     eng = get_engine("unistore")
-    rows = q(eng, """
-        SELECT o.id, o.number, o."createdAt"::text AS fecha,
-               o."paymentStatus", o."shippingStatus", o.total::float,
-               COALESCE(NULLIF(TRIM(osa.province),''),'-') AS provincia
-        FROM tienda_nube."Order" o
-        LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
-        WHERE o."customerId" = :cid
-        ORDER BY o."createdAt" DESC
+    method_expr = _shipping_method_expr(eng)
+    canal_sql = _classify_channel_sql("m.metodo_envio")
+    rows = q(eng, f"""
+        WITH base AS (
+          SELECT o.id, o.number, o."createdAt"::text AS fecha,
+                 o."paymentStatus", o."shippingStatus", o.total::float,
+                 COALESCE(NULLIF(TRIM(osa.province),''),'-') AS provincia,
+                 {method_expr}
+          FROM tienda_nube."Order" o
+          LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
+          LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
+          WHERE o."customerId" = :cid
+        )
+        SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus",
+               m.total, m.provincia,
+               m.metodo_envio,
+               {canal_sql} AS canal
+        FROM base m
+        ORDER BY m.fecha DESC
         LIMIT 200
     """, {"cid": int(customer_id)}) or []
     return _serialize(
         rows,
-        ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia"],
+        ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia", "metodo_envio", "canal"],
     )
 
 
@@ -354,28 +419,41 @@ def _orders_serialize(rows: list) -> dict:
     # el link al perfil del cliente y la oculta visualmente
     return _serialize(rows, [
         "id", "numero", "fecha", "payment", "shipping", "status",
-        "total", "cliente", "provincia", "customer_id",
+        "total", "cliente", "provincia", "metodo_envio", "canal", "customer_id",
     ])
 
 
-_ORDER_SELECT = """
-    SELECT o.id, o.number, o."createdAt"::text AS fecha,
-           o."paymentStatus", o."shippingStatus", o.status,
-           o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
-           COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
-           c.id AS customer_id
-    FROM tienda_nube."Order" o
-    LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
-    WHERE {where}
-    ORDER BY o."createdAt" DESC LIMIT 1000
-"""
+def _build_order_select(eng) -> str:
+    method_expr = _shipping_method_expr(eng)
+    canal_sql = _classify_channel_sql("m.metodo_envio")
+    return f"""
+        WITH base AS (
+          SELECT o.id, o.number, o."createdAt"::text AS fecha,
+                 o."paymentStatus", o."shippingStatus", o.status,
+                 o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
+                 COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
+                 c.id AS customer_id,
+                 {method_expr}
+          FROM tienda_nube."Order" o
+          LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
+          LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
+          WHERE {{where}}
+        )
+        SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus", m.status,
+               m.total, m.cliente, m.provincia,
+               m.metodo_envio,
+               {canal_sql} AS canal,
+               m.customer_id
+        FROM base m
+        ORDER BY m.fecha DESC LIMIT 1000
+    """
 
 
 def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
     days = resolve_window(period, from_iso, to_iso)["days"]
     where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _ORDER_SELECT.format(where=where), {"d": days}) or []
+    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
     return _orders_serialize(rows)
 
 
@@ -383,7 +461,7 @@ def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str 
     eng = get_engine("unistore")
     days = resolve_window(period, from_iso, to_iso)["days"]
     where = 'o."createdAt" >= NOW() - make_interval(days => :d)'
-    rows = q(eng, _ORDER_SELECT.format(where=where), {"d": days}) or []
+    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
     return _orders_serialize(rows)
 
 
@@ -391,7 +469,7 @@ def tn_orders_cancelled(period: str = "30d", from_iso: str | None = None, to_iso
     eng = get_engine("unistore")
     days = resolve_window(period, from_iso, to_iso)["days"]
     where = "o.status = 'cancelled' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _ORDER_SELECT.format(where=where), {"d": days}) or []
+    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
     return _orders_serialize(rows)
 
 
@@ -401,7 +479,7 @@ def tn_orders_stuck() -> dict:
     where = """o."paymentStatus" = 'paid'
                AND o."shippingStatus" IN ('unpacked','unshipped','partially_packed','partially_fulfilled')
                AND o."createdAt" < NOW() - INTERVAL '5 days'"""
-    rows = q(eng, _ORDER_SELECT.format(where=where)) or []
+    rows = q(eng, _build_order_select(eng).format(where=where)) or []
     return _orders_serialize(rows)
 
 

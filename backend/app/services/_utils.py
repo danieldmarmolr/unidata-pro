@@ -111,3 +111,32 @@ def scalar(engine: Engine, sql: str, params: dict | None = None) -> Any:
     if rows and rows[0]:
         return rows[0][0]
     return None
+
+
+# Cache de columnas existentes por (schema, table) -> set[col_name]
+_COLUMN_CACHE: dict[tuple[str, str], set[str]] = {}
+
+
+def list_columns(engine: Engine, schema: str, table: str) -> set[str]:
+    """Devuelve las columnas existentes en un table (cacheado in-memory).
+    Util para construir SELECTs defensivos cuando el schema puede variar."""
+    key = (schema, table)
+    if key in _COLUMN_CACHE:
+        return _COLUMN_CACHE[key]
+    rows = q(engine, """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = :s AND table_name = :t
+    """, {"s": schema, "t": table}) or []
+    cols = {r[0] for r in rows}
+    _COLUMN_CACHE[key] = cols
+    return cols
+
+
+def col_or_null(engine: Engine, schema: str, table: str, alias: str, candidates: list[str]) -> str:
+    """Devuelve el primer candidato existente en `<alias>."col"` listo para SELECT.
+    Si ninguna existe, devuelve `NULL::text`. Las columnas se quotean con doble comilla."""
+    cols = list_columns(engine, schema, table)
+    for c in candidates:
+        if c in cols:
+            return f'{alias}."{c}"'
+    return "NULL::text"
