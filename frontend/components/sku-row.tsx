@@ -98,7 +98,12 @@ export function SkuRow({ index, sku, name, rightValue, enrichment, onClick, noLi
           {ean && (
             <>
               <span className="opacity-50">·</span>
-              <span className="font-mono">EAN {ean}</span>
+              <span
+                className="font-mono inline-flex items-center gap-0.5 px-1 rounded bg-amber-50 text-amber-800 border border-amber-200/60"
+                title="EAN - Codigo de barras oficial del producto"
+              >
+                <span className="text-[8px] font-bold">EAN</span> {ean}
+              </span>
             </>
           )}
         </div>

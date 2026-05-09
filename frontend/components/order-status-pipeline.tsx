@@ -1,19 +1,18 @@
 "use client";
 
-import { Inbox, DollarSign, Truck, PackageCheck, AlertCircle, RotateCcw, X, Clock, Check, MapPin, Mail, Package, Bike } from "lucide-react";
+import { Inbox, DollarSign, Truck, PackageCheck, AlertCircle, RotateCcw, X, Clock, Check, MapPin, Mail, Package, Bike, Box } from "lucide-react";
 
 /**
- * Pipeline visual del progreso de una orden: 4 dots que se desbloquean
- *   Recibida -> Pagada -> Enviada -> Entregada
+ * Pipeline visual del progreso de una orden: 5 dots que se desbloquean
+ *   Recibida -> Pagada -> Empaquetada (Digip) -> Enviada -> Entregada
  *
+ * El paso "Empaquetada" depende del Completado en Digip (DespachoPedido).
  * Maneja casos especiales (cancelled / refunded / pending) con iconos rojos
- * o amarillos. Mostrar como tooltip el estado especifico de cada paso.
- *
- * Reemplaza visualmente las 2 columnas Payment + Shipping del PowerBI.
+ * o amarillos. Tooltip muestra el estado especifico de cada paso.
  */
 
 type Step = {
-  key: "received" | "paid" | "shipped" | "delivered";
+  key: "received" | "paid" | "packed" | "shipped" | "delivered";
   label: string;
   icon: any;
   active: boolean;
@@ -35,7 +34,7 @@ function normalize(s: unknown): string {
   return String(s ?? "").trim().toLowerCase();
 }
 
-function buildSteps(payment: string, shipping: string, orderStatus: string): Step[] {
+function buildSteps(payment: string, shipping: string, orderStatus: string, packed?: boolean): Step[] {
   const p = normalize(payment);
   const s = normalize(shipping);
   const o = normalize(orderStatus);
@@ -48,7 +47,12 @@ function buildSteps(payment: string, shipping: string, orderStatus: string): Ste
 
   const isDelivered = SHIPPING_DELIVERED.includes(s);
   const isInTransit = SHIPPING_INTRANSIT.includes(s);
-  const isPacked = SHIPPING_PACKED.includes(s) || isInTransit || isDelivered;
+  // Si llega bool empaquetada del backend (Digip DespachoPedido), lo usamos.
+  // Si no tenemos esa info, asumimos que SHIPPING_PACKED (unshipped/ready_to_ship)
+  // del shippingStatus TN es indicio de que ya esta armado.
+  const isPackedFromDigip = packed === true;
+  const isPackedFromShipping = SHIPPING_PACKED.includes(s) || isInTransit || isDelivered;
+  const isPacked = isPackedFromDigip || isPackedFromShipping;
 
   return [
     {
@@ -68,18 +72,32 @@ function buildSteps(payment: string, shipping: string, orderStatus: string): Ste
       hint: `Pago: ${payment || "—"}`,
     },
     {
+      key: "packed",
+      label: isPacked ? "Empaquetada" : "Sin empaquetar",
+      icon: Box,
+      active: isPacked,
+      // warning si pago confirmado pero aun no empaqueto Digip
+      warning: isPaid && !isPacked && !isCancelled,
+      hint: isPackedFromDigip
+        ? "Despachada por Digip · lista para enviar"
+        : isPackedFromShipping
+        ? "Empaquetada (segun shippingStatus TN)"
+        : "Pendiente de empaquetar en Digip",
+    },
+    {
       key: "shipped",
-      label: isInTransit ? "En camino" : isPacked ? "Lista para enviar" : "Sin armar",
+      label: isInTransit || isDelivered ? "Enviada" : "Sin enviar",
       icon: Truck,
       active: isInTransit || isDelivered,
-      warning: isPacked && !isInTransit,
-      hint: `Envio: ${shipping || "—"}`,
+      // warning si esta empaquetada pero aun no salio
+      warning: isPacked && !isInTransit && !isDelivered && !isCancelled,
+      hint: `Envio TN: ${shipping || "—"}`,
     },
     {
       key: "delivered",
       // Cuando el ciclo esta cumplido reemplazamos el packagecheck por un Check
       // verde brillante para evitar redundancia con "Enviada" del paso anterior.
-      label: isDelivered ? "Ciclo cumplido" : "Entregada",
+      label: isDelivered ? "Recibida por cliente" : "Sin entregar",
       icon: isDelivered ? Check : PackageCheck,
       active: isDelivered,
       hint: isDelivered ? "Pedido entregado · ciclo completo" : "Aun no entregado",
@@ -137,17 +155,27 @@ export function OrderStatusPipeline({
   payment,
   shipping,
   orderStatus,
+  packed,
   compact = false,
 }: {
   payment?: unknown;
   shipping?: unknown;
   orderStatus?: unknown;
+  /** Empaquetada (boolean del backend, derivado de Digip DespachoPedido) */
+  packed?: unknown;
   /** compact: mas estrecho para tablas densas */
   compact?: boolean;
 }) {
-  const steps = buildSteps(String(payment ?? ""), String(shipping ?? ""), String(orderStatus ?? ""));
-  const dotSize = compact ? 22 : 26;
-  const iconSize = compact ? 11 : 13;
+  const packedBool = packed === true || packed === "true" || packed === 1 || packed === "t";
+  const steps = buildSteps(
+    String(payment ?? ""),
+    String(shipping ?? ""),
+    String(orderStatus ?? ""),
+    packedBool,
+  );
+  // Con 5 steps los dots tienen que ser un poco más chicos para no overflow
+  const dotSize = compact ? 20 : 24;
+  const iconSize = compact ? 10 : 12;
 
   const cycleComplete = steps[steps.length - 1].active;
 

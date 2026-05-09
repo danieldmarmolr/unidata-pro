@@ -137,7 +137,12 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
                  o."paymentStatus", o."shippingStatus", o.total::float,
                  COALESCE(NULLIF(TRIM(osa.province),''),'-') AS provincia,
-                 {method_expr}
+                 {method_expr},
+                 EXISTS (
+                   SELECT 1 FROM digip."DespachoPedido" dp
+                   JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                   WHERE pd."orderId" = o.id
+                 ) AS empaquetada
           FROM tienda_nube."Order" o
           LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
           LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
@@ -146,14 +151,15 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
         SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus",
                m.total, m.provincia,
                m.metodo_envio,
-               {canal_sql} AS canal
+               {canal_sql} AS canal,
+               m.empaquetada
         FROM base m
         ORDER BY m.fecha DESC
         LIMIT 200
     """, {"cid": int(customer_id)}) or []
     return _serialize(
         rows,
-        ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia", "metodo_envio", "canal"],
+        ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia", "metodo_envio", "canal", "empaquetada"],
     )
 
 
@@ -431,13 +437,16 @@ def _orders_serialize(rows: list) -> dict:
     # el link al perfil del cliente y la oculta visualmente
     return _serialize(rows, [
         "id", "numero", "fecha", "payment", "shipping", "status",
-        "total", "cliente", "provincia", "metodo_envio", "canal", "customer_id",
+        "total", "cliente", "provincia", "metodo_envio", "canal", "empaquetada", "customer_id",
     ])
 
 
 def _build_order_select(eng) -> str:
     method_expr = _shipping_method_expr(eng)
     canal_sql = _classify_channel_sql("m.metodo_envio")
+    # empaquetada = la orden tiene un registro de despacho en Digip
+    # (los Pedidos Digip que llegaron a DespachoPedido salieron del deposito empaquetados).
+    # Sirve para distinguir el paso "Pagada" → "Empaquetada" antes del envio TN.
     return f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
@@ -445,7 +454,12 @@ def _build_order_select(eng) -> str:
                  o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
                  COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
                  c.id AS customer_id,
-                 {method_expr}
+                 {method_expr},
+                 EXISTS (
+                   SELECT 1 FROM digip."DespachoPedido" dp
+                   JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                   WHERE pd."orderId" = o.id
+                 ) AS empaquetada
           FROM tienda_nube."Order" o
           LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
           LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
@@ -455,6 +469,7 @@ def _build_order_select(eng) -> str:
                m.total, m.cliente, m.provincia,
                m.metodo_envio,
                {canal_sql} AS canal,
+               m.empaquetada,
                m.customer_id
         FROM base m
         ORDER BY m.fecha DESC LIMIT 1000

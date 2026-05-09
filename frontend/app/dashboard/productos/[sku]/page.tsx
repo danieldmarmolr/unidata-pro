@@ -111,11 +111,38 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
 
         {data?.product_info && (
           <div className="bg-surface border border-border rounded-xl p-5 mb-6">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div>
-                <div className="text-xs text-text-muted">SKU</div>
-                <div className="font-mono font-semibold">{data.product_info.sku}</div>
+            {/* Identificacion oficial: SKU interno + EAN (codigo de barras del producto) */}
+            <div className="flex flex-wrap gap-3 mb-4 pb-4 border-b border-border">
+              <div className="flex-1 min-w-[200px] bg-gradient-to-br from-primary/10 to-accent/5 border border-primary/30 rounded-xl px-4 py-3">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-primary/70">Codigo interno (SKU)</div>
+                <div className="font-mono font-extrabold text-lg text-text mt-0.5">{data.product_info.sku}</div>
               </div>
+              <div className="flex-1 min-w-[240px] bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-300 rounded-xl px-4 py-3">
+                <div className="text-[10px] uppercase tracking-wider font-bold text-amber-800">
+                  EAN · Codigo de barras oficial
+                </div>
+                {data.product_info.barcode ? (
+                  <div className="flex items-baseline gap-2 mt-0.5">
+                    <div className="font-mono font-extrabold text-lg text-text tabular-nums tracking-wider">
+                      {data.product_info.barcode}
+                    </div>
+                    <button
+                      onClick={() => navigator.clipboard?.writeText(data.product_info!.barcode)}
+                      className="text-[10px] text-amber-700 hover:text-amber-900 hover:underline"
+                      title="Copiar EAN"
+                    >
+                      copiar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-sm text-amber-700 mt-0.5">Sin EAN registrado</div>
+                )}
+                <div className="text-[10px] text-amber-700/80 mt-0.5">
+                  Codigo escaneable identificador GS1 del producto
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div>
                 <div className="text-xs text-text-muted">Marca</div>
                 <div className="font-semibold">{data.product_info.brand || "—"}</div>
@@ -142,15 +169,9 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
                   <div className="font-semibold">{data.last_sale.slice(0, 10)}</div>
                 </div>
               )}
-              {data.product_info.barcode && (
-                <div>
-                  <div className="text-xs text-text-muted">Barcode</div>
-                  <div className="font-mono text-xs">{data.product_info.barcode}</div>
-                </div>
-              )}
               {data.product_info.product_id > 0 && (
                 <div>
-                  <div className="text-xs text-text-muted">Product ID</div>
+                  <div className="text-xs text-text-muted">Product ID (TN)</div>
                   <div className="font-mono text-xs">{data.product_info.product_id}</div>
                 </div>
               )}
