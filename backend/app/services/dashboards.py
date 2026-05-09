@@ -444,7 +444,7 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
                    SUM(mi.quantity)::int AS units,
                    SUM(mi.unit_price * mi.quantity)::float AS revenue
             FROM meli.meli_order_items mi
-            JOIN meli.meli_orders mo ON mo.id = mi.meli_order_id
+            JOIN meli.meli_orders mo ON mo.id = mi.order_id
             WHERE mo.date_created >= NOW() - INTERVAL '30 days'
               AND mo.status IN ('paid','confirmed','shipped','delivered')
               AND mi.seller_sku IS NOT NULL

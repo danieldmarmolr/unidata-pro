@@ -60,10 +60,19 @@ const ITEMS: NavItem[] = [
   { label: "Inicio",           href: "/dashboard/home",           icon: LayoutDashboard, group: "Principal", roles: ALL },
   { label: "Gerencial",        href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
   { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Customer Success", href: "/dashboard/cs",             icon: HeartHandshake,  group: "Cross", roles: ONLY_GERENCIA },
+  {
+    label: "Customer Success",
+    href: "/dashboard/cs",
+    icon: HeartHandshake,
+    group: "Cross",
+    roles: ONLY_GERENCIA,
+    children: [
+      { label: "Vista general",       href: "/dashboard/cs",       icon: HeartHandshake },
+      { label: "Cohortes",            href: "/dashboard/cohortes", icon: Users          },
+      { label: "Segmentacion RFM",    href: "/dashboard/rfm",      icon: Target         },
+    ],
+  },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Cohortes",         href: "/dashboard/cohortes",       icon: Users,           group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Segmentacion RFM", href: "/dashboard/rfm",            icon: Target,          group: "Cross", roles: ONLY_GERENCIA },
   {
     label: "Producto",
     href: "/dashboard/productos",

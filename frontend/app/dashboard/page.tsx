@@ -12,6 +12,7 @@ import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { IntegrationHealthList } from "@/components/integration-health";
 import { AlertsPanel } from "@/components/alerts-panel";
+import { DrillDownModal } from "@/components/drilldown-modal";
 import { api, getToken } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { ExecutiveOverview, CategoryValue, KpiCard as KpiCardT } from "@/lib/types";
@@ -99,7 +100,7 @@ type ExtendedExec = ExecutiveOverview & {
   lifecycle_mix?: CategoryValue[];
 };
 
-function UnitHealthCard({ u }: { u: UnitHealth }) {
+function UnitHealthCard({ u, drillCtx }: { u: UnitHealth; drillCtx: Ctx }) {
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
       <div className="flex items-center gap-2 mb-4">
@@ -107,31 +108,84 @@ function UnitHealthCard({ u }: { u: UnitHealth }) {
         <div className="text-sm font-bold text-text">{u.label}</div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        {u.metrics.map((m) => (
-          <div key={m.label} className="bg-soft rounded-lg p-3">
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">
-              {m.label}
-            </div>
-            <div className="font-extrabold text-text mt-1 text-base tabular-nums">
-              {m.prefix ?? ""}
-              {typeof m.value === "number" ? formatNumber(m.value) : m.value}
-              {m.suffix ?? ""}
-            </div>
-            {m.delta !== null && m.delta !== undefined && (
-              <div
-                className={
-                  "text-[10px] font-semibold mt-0.5 " +
-                  (m.delta >= 0 ? "text-emerald-600" : "text-error")
-                }
-              >
-                {m.delta >= 0 ? "+" : ""}
-                {m.delta.toFixed(1)}% vs mes ant
-              </div>
-            )}
-          </div>
-        ))}
+        {u.metrics.map((m) => {
+          const drill = getCardDrill(m.label, drillCtx);
+          return (
+            <UnitMetricCell key={m.label} m={m} drill={drill} />
+          );
+        })}
       </div>
     </div>
+  );
+}
+
+type Ctx = Parameters<typeof getCardDrill>[1];
+
+function UnitMetricCell({ m, drill }: { m: UnitMetric; drill: ReturnType<typeof getCardDrill> }) {
+  const [open, setOpen] = useState(false);
+  const interactive = !!drill;
+  const content = (
+    <>
+      <div className="flex items-start justify-between gap-1">
+        <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">
+          {m.label}
+        </div>
+        {interactive && (
+          <span className="text-text-muted opacity-0 group-hover:opacity-100 transition">
+            <SearchIcon />
+          </span>
+        )}
+      </div>
+      <div className="font-extrabold text-text mt-1 text-base tabular-nums">
+        {m.prefix ?? ""}
+        {typeof m.value === "number" ? formatNumber(m.value) : m.value}
+        {m.suffix ?? ""}
+      </div>
+      {m.delta !== null && m.delta !== undefined && (
+        <div
+          className={
+            "text-[10px] font-semibold mt-0.5 " +
+            (m.delta >= 0 ? "text-emerald-600" : "text-error")
+          }
+        >
+          {m.delta >= 0 ? "+" : ""}
+          {m.delta.toFixed(1)}% vs mes ant
+        </div>
+      )}
+    </>
+  );
+  if (!interactive) {
+    return <div className="bg-soft rounded-lg p-3">{content}</div>;
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="bg-soft rounded-lg p-3 text-left hover:bg-soft/70 hover:ring-2 hover:ring-primary/30 transition group cursor-pointer w-full"
+        title={`Click para ver detalle: ${drill.title ?? m.label}`}
+      >
+        {content}
+      </button>
+      {open && (
+        <DrillDownModal
+          title={drill.title ?? m.label}
+          subtitle={drill.subtitle ?? ""}
+          endpoint={drill.endpoint}
+          filename={drill.filename ?? `${m.label.toLowerCase().replace(/\W+/g, "_")}.csv`}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.35-4.35" />
+    </svg>
   );
 }
 
@@ -237,7 +291,7 @@ export default function ExecutiveDashboardPage() {
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               {data.unit_health.map((u) => (
-                <UnitHealthCard key={u.unit} u={u} />
+                <UnitHealthCard key={u.unit} u={u} drillCtx={{ period, customFrom, customTo }} />
               ))}
             </div>
           </div>

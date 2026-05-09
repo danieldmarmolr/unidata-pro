@@ -89,8 +89,28 @@ export function getCardDrill(label: string, ctx: Ctx = {}): KpiDrill | undefined
   }
 
   // Devoluciones
-  if (lc.includes("total devoluciones") || lc.includes("devoluciones") && !lc.includes("monto")) {
+  if (lc.includes("total devoluciones") || lc.includes("devoluciones mes") || lc === "devoluciones" || (lc.includes("devolucion") && !lc.includes("monto") && !lc.includes("abiertas") && !lc.includes("resueltas"))) {
     return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Devoluciones (${period})`, filename: `devoluciones_${period}.csv` };
+  }
+  if (lc.includes("monto") && (lc.includes("devolucion") || lc.includes("dev"))) {
+    return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Monto de devoluciones (${period})`, filename: `monto_devoluciones_${period}.csv` };
+  }
+  if (lc.includes("abiertas") || lc.includes("pendientes")) {
+    return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Devoluciones abiertas`, filename: `dev_abiertas.csv` };
+  }
+  if (lc.includes("resueltas") || lc.includes("cerradas")) {
+    return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Devoluciones resueltas`, filename: `dev_resueltas.csv` };
+  }
+
+  // Vencimiento de suscripciones (Unidrop)
+  if (lc.includes("vencen") || lc.includes("vence")) {
+    const days = lc.match(/<\s*(\d+)\s*d/)?.[1] ?? "15";
+    return { endpoint: `/api/drilldowns/saas/users-expiring${qs({ days, segment: seg })}`, title: `Suscripciones a vencer (${days}d)`, filename: `vencer_${days}d.csv` };
+  }
+
+  // Orders mes (Salud Unistore)
+  if (lc.includes("orders") || lc.includes("órdenes") || lc.includes("ordenes mes")) {
+    return { endpoint: `/api/drilldowns/orders/all${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes (${period})`, filename: `orders_${period}.csv` };
   }
 
   return undefined;
