@@ -267,6 +267,20 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
 
 
 from app.services import lotes_analytics as lotes_svc
+from app.services import cohorts_analytics as cohorts_svc
+
+
+@router.get("/cohorts")
+def get_cohorts(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Cohortes de clientes - replica del PowerBI ERP Analytics.
+    Clasifica en: Nuevo, Segunda compra, Conv. a Recurrente, Recurrente, Recuperado.
+    """
+    return cohorts_svc.cohorts_overview(period, from_iso, to_iso)
 
 
 @router.get("/lotes")

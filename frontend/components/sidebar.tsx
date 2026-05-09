@@ -60,6 +60,7 @@ const ITEMS: NavItem[] = [
   { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA },
   { label: "Customer Success", href: "/dashboard/cs",             icon: HeartHandshake,  group: "Cross", roles: ONLY_GERENCIA },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Cohortes",         href: "/dashboard/cohortes",       icon: Users,           group: "Cross", roles: ONLY_GERENCIA },
   {
     label: "Producto",
     href: "/dashboard/productos",
