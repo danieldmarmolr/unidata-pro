@@ -489,18 +489,20 @@ def customer_detail(customer_id: int) -> dict:
         else:
             estado = "Sin compras"
 
-        cards.append({"label": "Total gastado", "value": round(revenue, 0), "prefix": "$ ",
-                      "hint": f"AOV $ {aov:,.0f}" if aov else ""})
+        cards.append({"label": "Facturacion total Unistore", "value": round(revenue, 0), "prefix": "$ ",
+                      "hint": f"Ticket promedio $ {aov:,.0f}" if aov else "Suma TN paid lifetime"})
         cards.append({"label": "Ordenes pagadas", "value": paid,
-                      "hint": f"de {orders} totales · {cancelled} canceladas"})
-        cards.append({"label": "Estado", "value": estado,
-                      "hint": "Segun ciclo de vida"})
-        cards.append({"label": "Recency",
+                      "hint": f"De {orders} totales · {cancelled} canceladas"})
+        cards.append({"label": "Etapa del cliente", "value": estado,
+                      "hint": "Segun ciclo de vida (Nuevo → 2da → Recurrente)"})
+        cards.append({"label": "Ultima compra (dias)",
                       "value": f"{recency_days} d" if recency_days is not None else "—",
-                      "hint": last_order.strftime("%Y-%m-%d") if last_order else ""})
-        cards.append({"label": "AOV", "value": round(aov, 0), "prefix": "$ "})
+                      "hint": f"Compro el {last_order.strftime('%d/%m/%Y')}" if last_order else "Aun no compro"})
+        cards.append({"label": "Ticket promedio", "value": round(aov, 0), "prefix": "$ ",
+                      "hint": "Facturacion / ordenes pagadas"})
         cards.append({"label": "Tasa cancelacion",
-                      "value": round(cancelled / orders * 100, 1) if orders else 0, "suffix": "%"})
+                      "value": round(cancelled / orders * 100, 1) if orders else 0, "suffix": "%",
+                      "hint": f"{cancelled} / {orders} ordenes"})
 
     rows = q(eng, """
         SELECT id, number, "createdAt"::text, status, "paymentStatus", "shippingStatus", total::float

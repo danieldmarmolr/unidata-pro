@@ -82,8 +82,23 @@ export function CellRenderer({
   if (typeof v === "number") {
     if (CURRENCY_HINT.test(col)) return <>{formatCurrency(v)}</>;
     if (NUMBER_HINT.test(col)) return <>{formatNumber(v)}</>;
-    // En filas de Unidrop, los ids son User.id — NO son order IDs de TN.
-    if (isUnidropRow) return <>{String(v)}</>;
+    // En filas de Unidrop, los ids son User.id - linkear a vista 360 dropshipper.
+    if (isUnidropRow) {
+      // Solo linkear si la columna se llama "id" o "user_id" (no si es phone, dni, etc)
+      if (/^(id|user_id|userId)$/i.test(col)) {
+        return (
+          <Link
+            href={`/dashboard/dropshipper/${encodeURIComponent(String(v))}`}
+            className="text-primary hover:underline font-mono"
+            onClick={(e) => e.stopPropagation()}
+            title="Abrir vista 360 dropshipper Unidrop"
+          >
+            {String(v)}
+          </Link>
+        );
+      }
+      return <>{String(v)}</>;
+    }
     // Order ID grande → linkear a TN admin
     if (looksLikeTnOrderId(col, v)) {
       return (
@@ -166,10 +181,23 @@ export function CellRenderer({
 
   // Cliente: linkear al perfil si tenemos customer_id en la fila, sino busqueda por nombre
   if (CUSTOMER_NAME_HINT.test(col)) {
-    // En filas Unidrop el "cliente" es un Dropshipper (User.id). No tenemos
-    // hoy una vista 360 para dropshippers — mostramos como texto plano para
-    // no llevar al usuario a la vista de Customer Unistore con datos vacios.
+    // En filas Unidrop el "cliente" es un Dropshipper (User.id) - linkear a su
+    // vista 360 propia, NO a la de Customer Unistore.
     if (isUnidropRow) {
+      const userId = findColValue(columns!, row!, ["id", "user_id", "userId"]);
+      if (userId) {
+        return (
+          <Link
+            href={`/dashboard/dropshipper/${encodeURIComponent(String(userId))}`}
+            className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+            onClick={(e) => e.stopPropagation()}
+            title="Abrir vista 360 dropshipper Unidrop"
+          >
+            <User size={10} className="opacity-60" />
+            {s}
+          </Link>
+        );
+      }
       return (
         <span className="inline-flex items-center gap-1 text-text" title="Dropshipper Unidrop">
           <User size={10} className="opacity-60" />

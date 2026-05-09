@@ -266,6 +266,15 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
     return dropshippers_svc.cohort_signups()
 
 
+@router.get("/dropshippers/{user_id}")
+def get_dropshipper_detail(
+    user_id: int,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Vista 360 de un dropshipper Unidrop - NO mezclar con Customer Unistore TN."""
+    return dropshippers_svc.dropshipper_detail(user_id)
+
+
 from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc

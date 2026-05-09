@@ -179,7 +179,13 @@ export default function DropshippersPage() {
                     return (
                       <tr key={d.user_id} className="border-t border-border hover:bg-soft transition">
                         <td className="px-3 py-2 align-top">
-                          <div className="font-medium text-text">{d.fantasy_name || d.nombre}</div>
+                          <a
+                            href={`/dashboard/dropshipper/${d.user_id}`}
+                            className="font-medium text-text hover:text-primary hover:underline"
+                            title="Abrir vista 360 dropshipper Unidrop"
+                          >
+                            {d.fantasy_name || d.nombre}
+                          </a>
                           <div className="text-[11px] text-text-muted">{d.email}</div>
                           {d.dni && <div className="text-[10px] text-text-muted font-mono">DNI {d.dni}</div>}
                         </td>
@@ -248,7 +254,7 @@ export default function DropshippersPage() {
                                 <Mail size={12} />
                               </a>
                             )}
-                            <a href={`/dashboard/customer/${d.user_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-soft text-text-muted hover:text-primary hover:bg-primary/10" title="Ver 360">
+                            <a href={`/dashboard/dropshipper/${d.user_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-soft text-text-muted hover:text-primary hover:bg-primary/10" title="Vista 360 dropshipper Unidrop">
                               <ExternalLink size={12} />
                             </a>
                           </div>

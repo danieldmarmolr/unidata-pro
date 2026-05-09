@@ -187,8 +187,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  return (
  <>
  <Topbar
- title={data?.customer_info?.name ?? `Customer #${id}`}
- subtitle="Customer 360 · Unistore"
+ title={data?.customer_info?.name ?? `Cliente #${id}`}
+ subtitle="Vista 360 · Cliente final Unistore (Tienda Nube) · NO es dropshipper Unidrop"
  />
  <div className="flex-1 px-8 py-6 overflow-y-auto">
  <div className="mb-4">

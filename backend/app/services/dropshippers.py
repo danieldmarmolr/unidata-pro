@@ -248,6 +248,231 @@ def dropshippers_master(
     }
 
 
+def dropshipper_detail(user_id: int) -> dict:
+    """Vista 360 de un dropshipper Unidrop (no confundir con Customer Unistore TN).
+
+    Devuelve KPIs + series mensuales + ultimas ventas MELI + ultimos pagos Talo.
+    Todas las metricas vienen de la BD de Unidrop:
+      - Ventas: mercado_libre_dev.OrderMercadoLibre (NO Tienda Nube)
+      - Pagos: public.PaymentIntent + public.CustomerPaymentAccount
+      - Plan: public.User + mercado_libre_dev.SubscriptionMeli
+      - Cuenta MELI: mercado_libre_dev.MercadoLibreUserAccount
+    """
+    eng = get_engine("unidrop")
+
+    head_rows = q(eng, """
+        SELECT
+            u.id, u.name, u.email, u.phone, u.dni, u.cuit, u.fantasy_name,
+            u.personeria::text, u."isActive", u."createdAt"::text,
+            u."referrerId",
+            sm.id AS plan_id, sm.name AS plan, sm.price::float, sm.number_of_publications_allowed::int,
+            u.start_date_subscription::text, u.end_date_subscription::text,
+            u.subscription_status::text,
+            EXTRACT(DAY FROM (u.end_date_subscription - NOW()))::int AS dias_al_vencimiento,
+            mla.id AS cuenta_meli_id, mla.nickname AS nickname_meli,
+            mla."requiresReauth", mla."expiresAt"::text,
+            (SELECT COUNT(*) FROM public."User" u2 WHERE u2."referrerId" = u.id)::int AS cant_referidos
+        FROM public."User" u
+        LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
+        WHERE u.id = :uid
+    """, {"uid": int(user_id)}) or []
+
+    if not head_rows:
+        return {"error": "Dropshipper no encontrado"}
+
+    h = head_rows[0]
+    user = {
+        "user_id": int(h[0]),
+        "nombre": h[1] or "",
+        "email": h[2] or "",
+        "telefono": h[3] or "",
+        "dni": h[4] or "",
+        "cuit": h[5] or "",
+        "fantasy_name": h[6] or "",
+        "personeria": h[7] or "",
+        "activo": bool(h[8]) if h[8] is not None else True,
+        "creado_en": h[9],
+        "referrer_id": int(h[10]) if h[10] else None,
+        "plan_id": h[11],
+        "plan": h[12] or "",
+        "plan_precio": float(h[13] or 0),
+        "plan_pub_max": int(h[14] or 0),
+        "sub_desde": h[15],
+        "sub_vence": h[16],
+        "sub_status": h[17] or "",
+        "dias_al_vencimiento": int(h[18]) if h[18] is not None else None,
+        "cuenta_meli_id": h[19],
+        "nickname_meli": h[20] or "",
+        "requiere_reauth": bool(h[21]) if h[21] is not None else False,
+        "token_expira": h[22],
+        "cant_referidos": int(h[23] or 0),
+    }
+
+    # KPIs de ventas MELI
+    ventas = q(eng, """
+        SELECT
+            COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
+            COUNT(*)::int AS ordenes_totales,
+            COUNT(*) FILTER (WHERE o."status"='cancelled')::int AS canceladas,
+            MAX(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS ultima_venta,
+            MIN(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS primera_venta,
+            COALESCE(SUM(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
+            COALESCE(SUM(o."merchandise_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_mercaderia,
+            COALESCE(SUM(o."shipping_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_envio,
+            COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
+            COALESCE(AVG(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        LEFT JOIN (
+            SELECT "orderId", SUM("totalAmount")::float AS gmv
+            FROM mercado_libre_dev."PaymentMercadoLibre"
+            GROUP BY 1
+        ) p ON p."orderId" = o.id
+        WHERE mla."userId" = :uid
+    """, {"uid": int(user_id)}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
+    v = ventas[0]
+    ventas_kpi = {
+        "ventas_pagadas": int(v[0] or 0),
+        "ordenes_totales": int(v[1] or 0),
+        "canceladas": int(v[2] or 0),
+        "ultima_venta": v[3],
+        "primera_venta": v[4],
+        "gmv": float(v[5] or 0),
+        "costo_mercaderia": float(v[6] or 0),
+        "costo_envio": float(v[7] or 0),
+        "profit_unidrop": float(v[8] or 0),
+        "ticket_promedio": float(v[9] or 0),
+        "tasa_cancelacion_pct": round(int(v[2] or 0) / max(int(v[1] or 1), 1) * 100, 1),
+    }
+
+    # KPIs de pagos Talo (PaymentIntent / CustomerPaymentAccount)
+    pagos = q(eng, """
+        SELECT
+            COUNT(*)::int AS total_intents,
+            COUNT(*) FILTER (WHERE pi."status"='PROCESSED')::int AS procesados,
+            COALESCE(SUM(pi."paidAmount") FILTER (WHERE pi."status"='PROCESSED'),0)::float AS pagado_total,
+            COALESCE(SUM(pi."pendingAmount") FILTER (WHERE pi."status"<>'PROCESSED'),0)::float AS deuda_pendiente,
+            COUNT(*) FILTER (WHERE pi."status"<>'PROCESSED' AND COALESCE(pi."pendingAmount",0) > 0)::int AS pagos_con_deuda,
+            MAX(pi."createdAt") FILTER (WHERE pi."status"='PROCESSED')::text AS ultimo_pago
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+    """, {"uid": int(user_id)}) or [(0, 0, 0, 0, 0, None)]
+    pg = pagos[0]
+    pagos_kpi = {
+        "total_intents": int(pg[0] or 0),
+        "procesados": int(pg[1] or 0),
+        "pagado_total": float(pg[2] or 0),
+        "deuda_pendiente": float(pg[3] or 0),
+        "pagos_con_deuda": int(pg[4] or 0),
+        "ultimo_pago": pg[5],
+    }
+
+    # Publicaciones
+    pub = q(eng, """
+        SELECT
+            COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE "status" = 'active')::int AS activas,
+            MAX("createdAt")::text AS ultima
+        FROM mercado_libre_dev."PublicationUserMercadoLibre" pum
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = pum."mlAccountId"
+        WHERE mla."userId" = :uid
+    """, {"uid": int(user_id)}) or [(0, 0, None)]
+    p = pub[0]
+    pubs = {
+        "totales": int(p[0] or 0),
+        "activas": int(p[1] or 0),
+        "ultima": p[2],
+    }
+
+    # Serie mensual GMV + profit (12 meses)
+    monthly = q(eng, """
+        SELECT to_char(date_trunc('month', o."dateCreated"), 'YYYY-MM') AS mes,
+               COUNT(*) FILTER (WHERE o."status"='paid')::int AS ordenes,
+               COALESCE(SUM(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
+               COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        LEFT JOIN (
+            SELECT "orderId", SUM("totalAmount")::float AS gmv
+            FROM mercado_libre_dev."PaymentMercadoLibre"
+            GROUP BY 1
+        ) p ON p."orderId" = o.id
+        WHERE mla."userId" = :uid
+          AND o."dateCreated" >= NOW() - INTERVAL '12 months'
+        GROUP BY 1
+        ORDER BY 1
+    """, {"uid": int(user_id)}) or []
+    monthly_series = [{
+        "mes": r[0],
+        "ordenes": int(r[1] or 0),
+        "gmv": round(float(r[2] or 0), 2),
+        "profit": round(float(r[3] or 0), 2),
+    } for r in monthly]
+
+    # Ultimas 50 ventas MELI
+    last_orders = q(eng, """
+        SELECT o.id, o."mlOrderId", o."status", o."dateCreated"::text,
+               COALESCE(p.gmv,0)::float AS total,
+               COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+               COALESCE(o."shipping_cost",0)::float AS shipping_cost
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        LEFT JOIN (
+            SELECT "orderId", SUM("totalAmount")::float AS gmv
+            FROM mercado_libre_dev."PaymentMercadoLibre"
+            GROUP BY 1
+        ) p ON p."orderId" = o.id
+        WHERE mla."userId" = :uid
+        ORDER BY o."dateCreated" DESC NULLS LAST
+        LIMIT 50
+    """, {"uid": int(user_id)}) or []
+    orders = [{
+        "id": int(r[0]) if r[0] else None,
+        "ml_order_id": r[1] or "",
+        "status": r[2] or "",
+        "fecha": r[3],
+        "total": round(float(r[4] or 0), 2),
+        "profit_unidrop": round(float(r[5] or 0), 2),
+        "shipping_cost": round(float(r[6] or 0), 2),
+    } for r in last_orders]
+
+    # Ultimos 50 pagos Talo
+    last_pagos = q(eng, """
+        SELECT pi.id, pi."status"::text, pi."createdAt"::text,
+               COALESCE(pi."paidAmount",0)::float AS paid,
+               COALESCE(pi."pendingAmount",0)::float AS pending,
+               COALESCE(array_length(pi."mlOrderIds",1),0)::int AS ml_orders,
+               COALESCE(array_length(pi."orderIds",1),0)::int AS tn_orders
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+        ORDER BY pi."createdAt" DESC NULLS LAST
+        LIMIT 50
+    """, {"uid": int(user_id)}) or []
+    pagos_list = [{
+        "id": int(r[0]) if r[0] else None,
+        "status": r[1] or "",
+        "fecha": r[2],
+        "paid": round(float(r[3] or 0), 2),
+        "pending": round(float(r[4] or 0), 2),
+        "ml_orders": int(r[5] or 0),
+        "tn_orders": int(r[6] or 0),
+    } for r in last_pagos]
+
+    return {
+        "user": user,
+        "ventas": ventas_kpi,
+        "pagos": pagos_kpi,
+        "publicaciones": pubs,
+        "monthly": monthly_series,
+        "ultimas_ventas": orders,
+        "ultimos_pagos": pagos_list,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
 def cohort_signups() -> dict:
     """Cohort por mes de signup: usuarios que se sumaron y cuántos siguen activos / vendieron."""
     eng = get_engine("unidrop")
