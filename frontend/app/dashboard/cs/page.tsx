@@ -53,6 +53,8 @@ export default function CustomerSuccessPage() {
  const [channel, setChannel] = useState<Channel>("all");
  const [drillCustomerId, setDrillCustomerId] = useState<{ id: number; name: string } | null>(null);
  const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
+ // Drilldown contextual de CS (estados de cliente y segmentos RFM)
+ const [csDrill, setCsDrill] = useState<{ endpoint: string; title: string; subtitle: string; filename: string } | null>(null);
 
  const { data, isLoading, isFetching, error } = useQuery<CsResp>({
  queryKey: ["dashboards", "cs", unit, period, customFrom, customTo, channel],
@@ -81,7 +83,12 @@ export default function CustomerSuccessPage() {
  { value: "unidrop", label: "Unidrop" },
  ]}
  />
-        <TodayPanel compact={period !== "today"} unit={unit} />
+        <TodayPanel
+          compact={period !== "today"}
+          unit={unit}
+          context="cs"
+          title="Comparador HOY · Customer Success"
+        />
  <Segmented<Channel>
  value={channel}
  onChange={setChannel}
@@ -141,7 +148,7 @@ export default function CustomerSuccessPage() {
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  <CategoryTable
  caption="Estados de cliente"
- subtitle="Nuevo · 2da compra · Convertido a Recurrente · Recurrente · Recuperado"
+ subtitle="Click una fila para ver los customers de ese estado"
  data={data.customer_status_dist ?? []}
  formatter="number"
  extraColumns={[
@@ -149,16 +156,34 @@ export default function CustomerSuccessPage() {
  { key: "revenue_total", label: "Revenue total", format: "currency" },
  ]}
  showProgress
+ onRowClick={(r) => {
+ const status = r.category;
+ setCsDrill({
+ endpoint: `/api/drilldowns/cs/customers-by-status?status=${encodeURIComponent(status)}`,
+ title: `Customers en estado: ${status}`,
+ subtitle: "Click en un cliente para abrir su perfil 360",
+ filename: `cs_estado_${status.toLowerCase().replace(/\W+/g, "_")}.csv`,
+ });
+ }}
  />
  <CategoryTable
  caption="Segmentacion RFM"
- subtitle="Champions · Fieles · En riesgo · Nuevos potenciales · Perdidos · Standard"
+ subtitle="Click una fila para ver los customers de ese segmento"
  data={data.rfm_segments ?? []}
  formatter="number"
  extraColumns={[
  { key: "revenue", label: "Revenue total", format: "currency" },
  ]}
  showProgress
+ onRowClick={(r) => {
+ const seg = r.category;
+ setCsDrill({
+ endpoint: `/api/drilldowns/cs/customers-by-rfm?segment=${encodeURIComponent(seg)}`,
+ title: `Customers RFM: ${seg}`,
+ subtitle: "Click en un cliente para abrir su perfil 360",
+ filename: `cs_rfm_${seg.toLowerCase().replace(/\W+/g, "_")}.csv`,
+ });
+ }}
  />
  </div>
  <div className="mb-6">
@@ -390,6 +415,15 @@ export default function CustomerSuccessPage() {
  endpoint={`/api/drilldowns/customers/${drillCustomerId.id}/orders`}
  filename={`user_${drillCustomerId.id}_orders.csv`}
  onClose={() => setDrillCustomerId(null)}
+ />
+ )}
+ {csDrill && (
+ <DrillDownModal
+ title={csDrill.title}
+ subtitle={csDrill.subtitle}
+ endpoint={csDrill.endpoint}
+ filename={csDrill.filename}
+ onClose={() => setCsDrill(null)}
  />
  )}
  <OrderDetailModal orderId={drillOrderId} onClose={() => setDrillOrderId(null)} />

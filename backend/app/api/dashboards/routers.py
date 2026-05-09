@@ -389,14 +389,21 @@ def get_lote_detail(
 def get_today(
     _: Annotated[str, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop", "all"], Query()] = "all",
+    context: Annotated[Literal["default", "cs"], Query()] = "default",
 ) -> dict:
     """Comparador HOY. Si unit=unistore o unidrop, muestra solo bloques de esa unidad.
-    Default 'all' = vista cross-unidad (Gerencial)."""
-    cache_key = f"today-snap-{unit}"
+    Default 'all' = vista cross-unidad (Gerencial).
+
+    context: cambia los bloques segun la pagina origen:
+    - 'default': GMV, ordenes, ticket promedio, devoluciones (vista ventas/gerencial)
+    - 'cs': customers nuevos, recurrentes, cancelaciones, refunds (Customer Success)
+    """
+    cache_key = f"today-snap-{unit}-{context}"
     @cached(_cache, key=lambda: cache_key)
     def _b() -> dict:
         scope = None if unit == "all" else unit
-        return today_svc.today_snapshot(unit=scope)
+        ctx = None if context == "default" else context
+        return today_svc.today_snapshot(unit=scope, context=ctx)
     return _b()
 
 

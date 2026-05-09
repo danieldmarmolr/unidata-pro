@@ -225,3 +225,25 @@ def drill_devoluciones(
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     return svc.devoluciones_list(period, modelo, from_iso=from_iso, to_iso=to_iso)
+
+
+# ===== Customer Success drilldowns =====
+
+@router.get("/cs/customers-by-status")
+def drill_cs_customers_by_status(
+    _: Annotated[dict, Depends(current_user)],
+    status: Annotated[str, Query()],
+) -> dict:
+    """Lista de customers Unistore en un estado de ciclo de vida dado.
+    Valido: Nuevo / 2da compra / Convertido a Recurrente / Recurrente / Recuperado."""
+    return svc.cs_customers_by_status(status)
+
+
+@router.get("/cs/customers-by-rfm")
+def drill_cs_customers_by_rfm(
+    _: Annotated[dict, Depends(current_user)],
+    segment: Annotated[str, Query()],
+) -> dict:
+    """Lista de customers Unistore en un segmento RFM dado.
+    Valido: Champions / Fieles / Nuevos potenciales / En riesgo / Perdidos / Standard."""
+    return svc.cs_customers_by_rfm(segment)

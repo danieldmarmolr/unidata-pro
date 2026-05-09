@@ -741,3 +741,129 @@ def tn_credentials_active() -> dict:
     """) or []
     return _serialize(rows, ["store_id", "tienda", "user_id", "email", "personeria", "creado"])
 
+
+# ============================================================
+# CUSTOMER SUCCESS: drilldowns por estado del cliente y segmento RFM
+# ============================================================
+
+def cs_customers_by_status(status: str) -> dict:
+    """Lista de customers Unistore en un estado de ciclo de vida dado.
+    Estados validos: 'Nuevo', '2da compra', 'Convertido a Recurrente',
+    'Recurrente', 'Recuperado'.
+    """
+    eng = get_engine("unistore")
+    rows = q(eng, """
+        WITH stats AS (
+            SELECT "customerId" AS cid,
+                   COUNT(*) AS orders,
+                   MIN("createdAt")::text AS first_order,
+                   MAX("createdAt")::text AS last_order,
+                   SUM(total)::float AS total_spent
+            FROM tienda_nube."Order"
+            WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+            GROUP BY 1
+        ),
+        gaps AS (
+            SELECT "customerId" AS cid,
+                   MAX(EXTRACT(DAY FROM ("createdAt" - prev_at)))::int AS max_gap_days
+            FROM (
+                SELECT "customerId", "createdAt",
+                       LAG("createdAt") OVER (PARTITION BY "customerId" ORDER BY "createdAt") AS prev_at
+                FROM tienda_nube."Order"
+                WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+            ) x WHERE prev_at IS NOT NULL
+            GROUP BY 1
+        ),
+        classified AS (
+            SELECT s.cid, s.orders, s.first_order, s.last_order, s.total_spent,
+                   COALESCE(g.max_gap_days, 0) AS max_gap_days,
+                   CASE
+                     WHEN s.orders = 1 THEN 'Nuevo'
+                     WHEN s.orders = 2 THEN '2da compra'
+                     WHEN s.orders = 3 THEN 'Convertido a Recurrente'
+                     WHEN s.orders >= 4 AND COALESCE(g.max_gap_days,0) > 180 THEN 'Recuperado'
+                     WHEN s.orders >= 4 THEN 'Recurrente'
+                     ELSE 'Otros'
+                   END AS estado
+            FROM stats s
+            LEFT JOIN gaps g ON g.cid = s.cid
+        )
+        SELECT cl.cid AS customer_id,
+               COALESCE(c.name, c.email, 'Customer ' || cl.cid::text) AS cliente,
+               cl.orders AS ordenes,
+               EXTRACT(DAY FROM (NOW() - cl.last_order::timestamp))::int AS recency_dias,
+               cl.total_spent AS facturacion,
+               (cl.total_spent / NULLIF(cl.orders, 0))::float AS ticket_promedio,
+               COALESCE(c.email, '') AS email,
+               COALESCE(c.phone, '') AS telefono,
+               cl.first_order::date AS primera_compra,
+               cl.last_order::date AS ultima_compra
+        FROM classified cl
+        LEFT JOIN tienda_nube."Customer" c ON c.id = cl.cid
+        WHERE cl.estado = :st
+        ORDER BY cl.total_spent DESC NULLS LAST
+        LIMIT 1000
+    """, {"st": status}) or []
+    return _serialize(
+        rows,
+        ["customer_id", "cliente", "ordenes", "recency_dias", "facturacion",
+         "ticket_promedio", "email", "telefono", "primera_compra", "ultima_compra"],
+    )
+
+
+def cs_customers_by_rfm(segment: str) -> dict:
+    """Lista de customers Unistore en un segmento RFM dado.
+    Segmentos validos: 'Champions', 'Fieles', 'Nuevos potenciales',
+    'En riesgo', 'Perdidos', 'Standard'.
+    """
+    eng = get_engine("unistore")
+    rows = q(eng, """
+        WITH base AS (
+            SELECT "customerId" AS cid,
+                   COUNT(*) AS frequency,
+                   EXTRACT(DAY FROM (NOW() - MAX("createdAt")))::int AS recency_days,
+                   SUM(total)::float AS monetary
+            FROM tienda_nube."Order"
+            WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+            GROUP BY 1
+        ),
+        scored AS (
+            SELECT b.*,
+                   NTILE(5) OVER (ORDER BY recency_days DESC) AS r_score,
+                   NTILE(5) OVER (ORDER BY frequency ASC) AS f_score,
+                   NTILE(5) OVER (ORDER BY monetary ASC) AS m_score
+            FROM base b
+        ),
+        classified AS (
+            SELECT s.*,
+                   CASE
+                     WHEN r_score>=4 AND f_score>=4 AND m_score>=4 THEN 'Champions'
+                     WHEN r_score>=3 AND f_score>=3 AND m_score>=3 THEN 'Fieles'
+                     WHEN r_score>=4 AND f_score<=2 THEN 'Nuevos potenciales'
+                     WHEN r_score<=2 AND f_score>=4 THEN 'En riesgo'
+                     WHEN r_score<=1 AND f_score<=2 THEN 'Perdidos'
+                     ELSE 'Standard'
+                   END AS segmento
+            FROM scored s
+        )
+        SELECT cl.cid AS customer_id,
+               COALESCE(c.name, c.email, 'Customer ' || cl.cid::text) AS cliente,
+               cl.frequency AS ordenes,
+               cl.recency_days AS recency_dias,
+               cl.monetary AS facturacion,
+               (cl.r_score::text || cl.f_score::text || cl.m_score::text) AS rfm,
+               COALESCE(c.email, '') AS email,
+               COALESCE(c.phone, '') AS telefono,
+               COALESCE(NULLIF(TRIM(c."billingProvince"),''), '-') AS provincia
+        FROM classified cl
+        LEFT JOIN tienda_nube."Customer" c ON c.id = cl.cid
+        WHERE cl.segmento = :seg
+        ORDER BY cl.monetary DESC NULLS LAST
+        LIMIT 1000
+    """, {"seg": segment}) or []
+    return _serialize(
+        rows,
+        ["customer_id", "cliente", "ordenes", "recency_dias", "facturacion",
+         "rfm", "email", "telefono", "provincia"],
+    )
+

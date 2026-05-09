@@ -29,16 +29,23 @@ export function TodayPanel({
   compact = false,
   title = "Comparador HOY",
   unit,
+  context,
 }: {
   compact?: boolean;
   title?: string;
   /** Si se pasa "unistore" o "unidrop" filtra a esa unidad. Sin valor = vista cross (Gerencial). */
   unit?: "unistore" | "unidrop";
+  /** Cambia los bloques segun la pagina origen.
+   *  - default: GMV / ordenes / ticket / devoluciones (gerencial / ventas)
+   *  - cs: customers nuevos / recurrentes / cancelaciones / refunds (Customer Success)
+   */
+  context?: "default" | "cs";
 }) {
   const scope = unit ?? "all";
+  const ctx = context ?? "default";
   const { data, isLoading } = useQuery<TodaySnapshot>({
-    queryKey: ["dashboards", "today", scope],
-    queryFn: () => api<TodaySnapshot>(`/api/dashboards/today?unit=${scope}`),
+    queryKey: ["dashboards", "today", scope, ctx],
+    queryFn: () => api<TodaySnapshot>(`/api/dashboards/today?unit=${scope}&context=${ctx}`),
     staleTime: 60_000,
   });
 

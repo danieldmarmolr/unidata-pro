@@ -46,13 +46,21 @@ def _kpi_block(label: str, values: dict[str, float], *, prefix: str = "", suffix
     return out
 
 
-def today_snapshot(unit: str | None = None) -> dict:
+def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
     """Snapshot HOY vs 7d/30d/365d.
 
     - Si unit es None: muestra TODOS los KPIs (vista cross-unidad / Gerencial).
     - Si unit='unistore': solo Unistore (incluye Devoluciones/Unidev por ser parte del dominio).
     - Si unit='unidrop': solo Unidrop.
+
+    context: cambia qué bloques se muestran segun la pagina:
+    - None / 'gerencial' / 'ventas' (default): GMV, Ordenes, Ticket promedio, Devoluciones
+    - 'cs' (Customer Success): Customers nuevos, Recurrentes que volvieron,
+      Customers en riesgo activos, Cancelaciones, Refunds
     """
+    if context == "cs":
+        return _today_snapshot_cs(unit)
+
     show_unistore = unit in (None, "unistore")
     show_unidrop = unit in (None, "unidrop")
     show_unidev = unit in (None, "unistore")  # Unidev pertenece al dominio Unistore
@@ -170,6 +178,100 @@ def today_snapshot(unit: str | None = None) -> dict:
 
     return {
         "level": "today",
+        "today_date": today_ar().isoformat(),
+        "blocks": blocks,
+        "generated_at": now_ar().isoformat(),
+    }
+
+
+def _today_snapshot_cs(unit: str | None = None) -> dict:
+    """Snapshot HOY contextual para Customer Success.
+
+    Bloques (por defecto unit=unistore que es donde tenemos data de customers):
+    - Customers nuevos (primera compra hoy)
+    - Customers que volvieron (compraron antes y otra vez hoy)
+    - Cancelaciones del dia
+    - Refunds del dia (monto)
+    """
+    show_unistore = unit in (None, "unistore")
+    blocks: list[dict] = []
+
+    if show_unistore:
+        uni = get_engine("unistore")
+
+        # Customers nuevos del dia (primera compra paid)
+        def new_customers(days_back: int) -> float:
+            return int(scalar(uni, """
+                WITH first_orders AS (
+                    SELECT "customerId", MIN("createdAt"::date) AS first_at
+                    FROM tienda_nube."Order"
+                    WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+                    GROUP BY "customerId"
+                )
+                SELECT COUNT(*) FROM first_orders
+                WHERE first_at = (CURRENT_DATE - CAST(:d AS integer))
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Customers nuevos (Unistore)",
+            {k: new_customers(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Primera compra paid del dia",
+        ))
+
+        # Customers recurrentes que volvieron hoy (paid orders del dia con cliente que ya tenia historial)
+        def returning_customers(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COUNT(DISTINCT o."customerId")
+                FROM tienda_nube."Order" o
+                WHERE o."paymentStatus" = 'paid'
+                  AND o."customerId" IS NOT NULL
+                  AND o."createdAt"::date = (CURRENT_DATE - CAST(:d AS integer))
+                  AND EXISTS (
+                    SELECT 1 FROM tienda_nube."Order" o2
+                    WHERE o2."customerId" = o."customerId"
+                      AND o2."paymentStatus" = 'paid'
+                      AND o2."createdAt" < o."createdAt"
+                  )
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Customers recurrentes (Unistore)",
+            {k: returning_customers(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Volvieron a comprar hoy (no es su primera compra)",
+        ))
+
+        # Cancelaciones del dia
+        def cancellations(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COUNT(*) FROM tienda_nube."Order"
+                WHERE "status" = 'cancelled'
+                  AND COALESCE("cancelledAt", "createdAt")::date = (CURRENT_DATE - CAST(:d AS integer))
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Cancelaciones del dia",
+            {k: cancellations(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Ordenes Unistore que terminaron en cancelled",
+        ))
+
+        # Refunds (paymentStatus refunded)
+        def refunds_amount(days_back: int) -> float:
+            return float(scalar(uni, """
+                SELECT COALESCE(SUM(total),0) FROM tienda_nube."Order"
+                WHERE "paymentStatus" = 'refunded'
+                  AND COALESCE("cancelledAt", "createdAt")::date = (CURRENT_DATE - CAST(:d AS integer))
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Refunds (monto)",
+            {k: refunds_amount(d) for k, d in ANCHORS_DAYS.items()},
+            prefix="$ ",
+            hint="Suma de ordenes con paymentStatus=refunded",
+        ))
+
+    return {
+        "level": "today",
+        "context": "cs",
         "today_date": today_ar().isoformat(),
         "blocks": blocks,
         "generated_at": now_ar().isoformat(),
