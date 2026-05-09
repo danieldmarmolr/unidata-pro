@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { X, Download, ExternalLink, User, MapPin } from "lucide-react";
+import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
@@ -25,6 +25,12 @@ const SKU_HINT = /^(sku|sku2|producto_sku|seller_sku|codigo|articulo)$/i;
 const PAYMENT_HINT = /^(payment|paymentstatus|pago|payment_status|estado_pago)$/i;
 const SHIPPING_HINT = /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i;
 const STATUS_HINT = /^(status|estado|order_status)$/i;
+const LOTE_HINT = /^(lote|lote_name|nombre_lote|batch)$/i;
+const CATEGORIA_HINT = /^(categoria|category|sub_categoria|sub-categoria|sub_category|subcategoria)$/i;
+const MARCA_HINT = /^(marca|brand|fabricante)$/i;
+const PROVEEDOR_HINT = /^(proveedor|supplier|provider|origen)$/i;
+const CIUDAD_HINT = /^(ciudad|city|localidad)$/i;
+const PRODUCT_NAME_HINT = /^(producto|product|product_name|nombre_producto|item)$/i;
 
 /** Busca en la fila el valor de una columna (case-insensitive, devuelve null si no esta). */
 function findColValue(columns: string[], row: unknown[], colNames: string[]): unknown {
@@ -181,6 +187,98 @@ export function CellRenderer({
         {s}
       </Link>
     );
+  }
+
+  // Lote -> /dashboard/lotes con filtro
+  if (LOTE_HINT.test(col)) {
+    return (
+      <Link
+        href={`/dashboard/lotes?lote=${encodeURIComponent(s)}`}
+        className="inline-flex items-center gap-1 text-primary hover:underline font-mono"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver detalle del lote"
+      >
+        <Boxes size={10} className="opacity-60" />
+        {s}
+      </Link>
+    );
+  }
+
+  // Categoria -> filtro en productos
+  if (CATEGORIA_HINT.test(col) && s.length <= 60) {
+    return (
+      <Link
+        href={`/dashboard/productos?categoria=${encodeURIComponent(s)}`}
+        className="inline-flex items-center gap-1 text-text hover:text-primary hover:underline"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver productos de esta categoria"
+      >
+        <Tag size={10} className="opacity-50" />
+        {s}
+      </Link>
+    );
+  }
+
+  // Marca -> filtro en productos
+  if (MARCA_HINT.test(col) && s.length <= 60) {
+    return (
+      <Link
+        href={`/dashboard/productos?marca=${encodeURIComponent(s)}`}
+        className="text-text hover:text-primary hover:underline"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver productos de esta marca"
+      >
+        {s}
+      </Link>
+    );
+  }
+
+  // Proveedor -> filtro en lotes
+  if (PROVEEDOR_HINT.test(col) && s.length <= 60) {
+    return (
+      <Link
+        href={`/dashboard/lotes?proveedor=${encodeURIComponent(s)}`}
+        className="inline-flex items-center gap-1 text-text hover:text-primary hover:underline"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver lotes de este proveedor"
+      >
+        <Building size={10} className="opacity-50" />
+        {s}
+      </Link>
+    );
+  }
+
+  // Ciudad -> mapa con filtro
+  if (CIUDAD_HINT.test(col) && s.length <= 60) {
+    return (
+      <Link
+        href={`/dashboard/mapa?ciudad=${encodeURIComponent(s)}`}
+        className="inline-flex items-center gap-1 text-text hover:text-primary hover:underline"
+        onClick={(e) => e.stopPropagation()}
+        title="Ver detalle en el mapa"
+      >
+        <MapPin size={10} className="opacity-50" />
+        {s}
+      </Link>
+    );
+  }
+
+  // Nombre de producto: si la fila tiene un sku asociado, linkear al detalle
+  if (PRODUCT_NAME_HINT.test(col) && row && columns) {
+    const skuVal = findColValue(columns, row, ["sku", "sku2", "seller_sku", "codigo", "articulo"]);
+    if (skuVal) {
+      return (
+        <Link
+          href={`/dashboard/productos/${encodeURIComponent(String(skuVal))}`}
+          className="inline-flex items-center gap-1 text-text hover:text-primary hover:underline"
+          onClick={(e) => e.stopPropagation()}
+          title="Ver detalle del producto"
+        >
+          <Package size={10} className="opacity-50" />
+          {s.length > 60 ? s.slice(0, 57) + "..." : s}
+        </Link>
+      );
+    }
   }
 
   // Phone -> WhatsApp link

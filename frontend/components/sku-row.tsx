@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ImageOff } from "lucide-react";
 import type { SkuEnrichment } from "@/lib/use-sku-enrichment";
 
@@ -9,7 +10,10 @@ type Props = {
   name?: string | null;
   rightValue?: React.ReactNode;
   enrichment?: SkuEnrichment;
+  /** Si se pasa, sobreescribe el comportamiento default (link al detalle del SKU). */
   onClick?: () => void;
+  /** Si true, renderiza sin link (modo display puro). */
+  noLink?: boolean;
 };
 
 /**
@@ -20,16 +24,40 @@ type Props = {
  *
  * Funciona aun cuando enrichment esta cargando (placeholder gris).
  */
-export function SkuRow({ index, sku, name, rightValue, enrichment, onClick }: Props) {
+export function SkuRow({ index, sku, name, rightValue, enrichment, onClick, noLink }: Props) {
   const displayName = enrichment?.name || name || sku;
   const ean = enrichment?.ean;
   const img = enrichment?.image_url;
 
+  // Comportamiento default: si no hay onClick custom y no esta el flag noLink,
+  // wrapear en Link al detalle del SKU
+  const Wrapper = ({ children }: { children: React.ReactNode }) => {
+    if (onClick) {
+      return (
+        <div
+          className="flex items-center gap-3 py-1.5 cursor-pointer hover:bg-soft/60 -mx-2 px-2 rounded transition"
+          onClick={onClick}
+        >
+          {children}
+        </div>
+      );
+    }
+    if (!noLink && sku) {
+      return (
+        <Link
+          href={`/dashboard/productos/${encodeURIComponent(sku)}`}
+          className="flex items-center gap-3 py-1.5 cursor-pointer hover:bg-soft/60 -mx-2 px-2 rounded transition"
+        >
+          {children}
+        </Link>
+      );
+    }
+    return <div className="flex items-center gap-3 py-1.5">{children}</div>;
+  };
+
   return (
-    <div
-      className={`flex items-center gap-3 py-1.5 ${onClick ? "cursor-pointer hover:bg-soft/60 -mx-2 px-2 rounded" : ""}`}
-      onClick={onClick}
-    >
+    <Wrapper>
+    <>
       {/* Index */}
       {typeof index === "number" && (
         <div className="text-xs text-text-muted font-semibold tabular-nums w-4 text-right">
@@ -82,6 +110,7 @@ export function SkuRow({ index, sku, name, rightValue, enrichment, onClick }: Pr
           {rightValue}
         </div>
       )}
-    </div>
+    </>
+    </Wrapper>
   );
 }

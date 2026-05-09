@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.api import admin as admin_api
 from app.api import auth as auth_api
@@ -31,6 +35,12 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url=None,
 )
+
+# Rate limiter - protege endpoints sensibles (login, register) de brute-force.
+# Identifica por IP saliente.
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,

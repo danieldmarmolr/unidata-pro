@@ -3,12 +3,17 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.auth.security import current_user, issue_token
 from app.config import Settings, get_settings
 from app.db import users_db
+
+# Limiter compartido (configurado en main.py) - lo usamos solo para decorar endpoints
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -44,7 +49,9 @@ class CheckBody(BaseModel):
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")  # Anti brute-force: max 10 intentos por minuto por IP
 def login(
+    request: Request,
     body: LoginBody,
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> TokenResponse:
@@ -78,7 +85,8 @@ def change_password(
 # ----- Self-registration (Camino A: dominio @unistore.ar) -----
 
 @router.post("/register")
-def register(body: RegisterBody) -> dict:
+@limiter.limit("5/minute")  # Anti spam: max 5 registros por minuto por IP
+def register(request: Request, body: RegisterBody) -> dict:
     """Self-registration con dominio @unistore.ar.
     Crea cuenta en estado 'pendiente de password' (rol lector).
     Despues de esto el frontend debe pedirle al user que setee su password
