@@ -27,7 +27,7 @@ def dropshippers_master(
     riesgo: str = "all",
     actividad: str = "all",
     search: str | None = None,
-    limit: int = 1000,
+    limit: int = 10000,
 ) -> dict:
     """
     Master view: 1 row por dropshipper con todas las metricas agregadas.
