@@ -256,7 +256,7 @@ def get_dropshippers(
     riesgo: Annotated[str, Query()] = "all",
     actividad: Annotated[str, Query()] = "all",
     search: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(le=2000)] = 1000,
+    limit: Annotated[int, Query(le=20000)] = 10000,
 ) -> dict:
     return dropshippers_svc.dropshippers_master(plan, riesgo, actividad, search, limit)
 
