@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginBody(BaseModel):
     email: str
     password: str
+    totp_code: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -60,6 +61,20 @@ def login(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Credenciales invalidas")
     if not user.get("is_active"):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inactivo")
+
+    # 2FA obligatorio para admins con TOTP habilitado
+    if user.get("is_admin") and user.get("totp_enabled"):
+        if not body.totp_code:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "2FA requerido: ingresa el codigo de tu app autenticadora",
+                headers={"X-Requires-2FA": "true"},
+            )
+        import pyotp
+        secret = users_db.get_totp_secret(user["id"])
+        if not secret or not pyotp.TOTP(secret).verify(body.totp_code, valid_window=1):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Codigo 2FA invalido")
+
     token = issue_token(user["id"], user["email"], user["role"], settings, is_admin=user.get("is_admin", False))
     return TokenResponse(access_token=token, user=user)
 
@@ -123,6 +138,63 @@ def set_initial_password(
         )
     token = issue_token(user["id"], user["email"], user["role"], settings, is_admin=user.get("is_admin", False))
     return TokenResponse(access_token=token, user=user)
+
+
+# ----- 2FA TOTP (solo admins) -----
+
+class TotpEnableBody(BaseModel):
+    code: str
+
+
+class TotpDisableBody(BaseModel):
+    password: str
+
+
+@router.post("/2fa/setup")
+def totp_setup(user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Genera un secreto TOTP y devuelve el otpauth URI para QR.
+    El secret queda guardado pero `totp_enabled` sigue en False hasta que
+    el user verifique con /2fa/enable."""
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Solo administradores pueden habilitar 2FA")
+    import pyotp
+    secret = pyotp.random_base32()
+    users_db.set_totp_secret(user["id"], secret, enabled=False)
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=user["email"],
+        issuer_name="UNIDATA",
+    )
+    return {"secret": secret, "otpauth_uri": uri}
+
+
+@router.post("/2fa/enable")
+def totp_enable(
+    body: TotpEnableBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Verifica el codigo del setup y habilita 2FA permanentemente."""
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Solo administradores")
+    import pyotp
+    secret = users_db.get_totp_secret(user["id"])
+    if not secret:
+        raise HTTPException(400, "Primero ejecuta /2fa/setup")
+    if not pyotp.TOTP(secret).verify(body.code, valid_window=1):
+        raise HTTPException(400, "Codigo invalido")
+    users_db.set_totp_secret(user["id"], secret, enabled=True)
+    return {"ok": True, "totp_enabled": True}
+
+
+@router.post("/2fa/disable")
+def totp_disable(
+    body: TotpDisableBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Deshabilita 2FA. Requiere password actual como confirmacion."""
+    if not users_db.authenticate(user["email"], body.password):
+        raise HTTPException(401, "Password incorrecto")
+    users_db.set_totp_secret(user["id"], None, enabled=False)
+    return {"ok": True, "totp_enabled": False}
 
 
 @router.post("/check")

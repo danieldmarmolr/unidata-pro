@@ -80,3 +80,17 @@ def update_user(
     if result is None:
         raise HTTPException(404, "Usuario no encontrado o sin cambios")
     return result
+
+
+@router.post("/backup/run")
+def trigger_backup(admin: Annotated[dict, Depends(require_admin)]) -> dict:
+    """Dispara backup manual de Supabase. Usa pg_dump + opcional S3.
+
+    Requiere SUPABASE_DB_URL en entorno. Si BACKUP_S3_BUCKET tambien esta,
+    sube el dump a S3. Sino, queda en disco local del server.
+    """
+    from app.scripts.backup_supabase import main as backup_main
+    code = backup_main()
+    if code != 0:
+        raise HTTPException(500, f"Backup fallo con codigo {code}. Revisa logs del server.")
+    return {"ok": True, "message": "Backup ejecutado correctamente"}

@@ -57,6 +57,8 @@ def init() -> None:
             # Migraciones idempotentes
             cur.execute("ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT")
+            cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE")
             # Backfill: usuarios con role='admin' obtienen is_admin=TRUE automaticamente.
             # Esto es idempotente (si ya estaba TRUE no cambia nada).
             cur.execute("UPDATE users SET is_admin = TRUE WHERE role = 'admin' AND is_admin = FALSE")
@@ -292,6 +294,33 @@ def needs_password_setup(email: str) -> bool:
         return cur.fetchone() is not None
 
 
+# ----- 2FA TOTP -----
+
+def get_totp_secret(user_id: int) -> str | None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT totp_secret FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    return row["totp_secret"] if row else None
+
+
+def set_totp_secret(user_id: int, secret: str | None, enabled: bool) -> None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET totp_secret = %s, totp_enabled = %s, updated_at = NOW() WHERE id = %s",
+            (secret, enabled, user_id),
+        )
+
+
+def is_totp_enabled(user_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT totp_enabled FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    return bool(row and row["totp_enabled"])
+
+
 # ----- internals -----
 
 def _to_dict(row: dict | None) -> dict:
@@ -299,8 +328,10 @@ def _to_dict(row: dict | None) -> dict:
         return {}
     d = dict(row)
     d.pop("password_hash", None)
+    d.pop("totp_secret", None)
     d["is_active"] = bool(d.get("is_active"))
     d["is_admin"] = bool(d.get("is_admin"))
+    d["totp_enabled"] = bool(d.get("totp_enabled"))
     # ISO format para timestamps
     for k in ("created_at", "updated_at"):
         if k in d and d[k] is not None and not isinstance(d[k], str):
