@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bell, RefreshCcw, CalendarRange, Calendar } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Bell, RefreshCcw, CalendarRange, Calendar, Search, X } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getUser, type AuthUser } from "@/lib/api";
 import { useGlobalFilters, type Period } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { SkuSearchBox } from "@/components/sku-search-box";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "HOY" },
@@ -116,6 +118,43 @@ function CustomRangePicker() {
   );
 }
 
+function GlobalSearchModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const router = useRouter();
+  if (!open) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-start justify-center p-4 pt-[15vh]"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-surface rounded-2xl shadow-2xl border border-border w-full max-w-xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h3 className="text-sm font-bold text-text">Buscar SKU o EAN globalmente</h3>
+          <button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Cerrar">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5">
+          <SkuSearchBox
+            unit="unistore"
+            placeholder="Escribi un SKU o escanea EAN..."
+            autoFocus
+            onSkuSelected={(sku) => {
+              onClose();
+              router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
+            }}
+          />
+          <div className="mt-3 text-[11px] text-text-muted">
+            Tip: <kbd className="bg-soft border border-border rounded px-1.5 py-0.5 font-mono">Ctrl+K</kbd> abre este buscador desde cualquier pagina.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Topbar({
   title,
   subtitle,
@@ -129,61 +168,89 @@ export function Topbar({
   const period = useGlobalFilters((s) => s.period);
   const setPeriod = useGlobalFilters((s) => s.setPeriod);
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   useEffect(() => setUser(getUser()), []);
+
+  // Atajo Ctrl+K / Cmd+K para abrir busqueda global
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+      if (e.key === "Escape" && searchOpen) {
+        setSearchOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen]);
+
   const initial = (user?.name || user?.email || "?").charAt(0).toUpperCase();
   const display = user?.name || user?.email?.split("@")[0] || "anonimo";
   return (
-    <header className="h-16 bg-surface border-b border-border px-8 flex items-center justify-between">
-      <div>
-        <h1 className="text-lg font-bold text-text leading-none">{title}</h1>
-        {subtitle && <div className="text-xs text-text-muted mt-1">{subtitle}</div>}
-      </div>
-      <div className="flex items-center gap-2">
-        {!hidePeriod && (
-          <div className="hidden md:flex items-center gap-1.5 pr-2 mr-1 border-r border-border">
-            <CalendarRange size={13} className="text-text-muted" />
-            <div className="inline-flex bg-soft border border-border rounded-lg p-0.5">
-              {PERIOD_OPTIONS.map((p) => (
-                <button
-                  key={p.value}
-                  onClick={() => setPeriod(p.value)}
-                  className={cn(
-                    "px-2.5 py-1 text-[11px] font-semibold rounded-md transition whitespace-nowrap",
-                    period === p.value
-                      ? "bg-surface text-primary shadow-sm"
-                      : "text-text-muted hover:text-primary",
-                  )}
-                >
-                  {p.label}
-                </button>
-              ))}
-              <CustomRangePicker />
+    <>
+      <header className="h-14 sm:h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16">
+        <div className="min-w-0 flex-1">
+          <h1 className="text-base sm:text-lg font-bold text-text leading-none truncate">{title}</h1>
+          {subtitle && <div className="text-[10px] sm:text-xs text-text-muted mt-1 truncate">{subtitle}</div>}
+        </div>
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+          {!hidePeriod && (
+            <div className="hidden lg:flex items-center gap-1.5 pr-2 mr-1 border-r border-border">
+              <CalendarRange size={13} className="text-text-muted" />
+              <div className="inline-flex bg-soft border border-border rounded-lg p-0.5">
+                {PERIOD_OPTIONS.map((p) => (
+                  <button
+                    key={p.value}
+                    onClick={() => setPeriod(p.value)}
+                    className={cn(
+                      "px-2.5 py-1 text-[11px] font-semibold rounded-md transition whitespace-nowrap",
+                      period === p.value
+                        ? "bg-surface text-primary shadow-sm"
+                        : "text-text-muted hover:text-primary",
+                    )}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <CustomRangePicker />
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => setSearchOpen(true)}
+            title="Buscar SKU/EAN (Ctrl+K)"
+            className="w-9 h-9 grid place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
+          >
+            <Search size={15} />
+          </button>
+          <button
+            onClick={() => qc.invalidateQueries()}
+            title="Refrescar datos"
+            className="hidden sm:grid w-9 h-9 place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
+          >
+            <RefreshCcw size={15} />
+          </button>
+          <button
+            title="Notificaciones"
+            className="hidden sm:grid w-9 h-9 place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
+          >
+            <Bell size={15} />
+          </button>
+          <div className="ml-1 sm:ml-2 flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-soft border border-border">
+            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-primary text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
+              {initial}
+            </div>
+            <div className="text-xs hidden sm:block">
+              <div className="font-semibold text-text leading-none truncate max-w-[120px]">{display}</div>
+              <div className="text-[10px] text-text-muted mt-0.5">{user?.role || "..."}</div>
             </div>
           </div>
-        )}
-        <button
-          onClick={() => qc.invalidateQueries()}
-          title="Refrescar datos"
-          className="w-9 h-9 grid place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
-        >
-          <RefreshCcw size={15} />
-        </button>
-        <button
-          title="Notificaciones"
-          className="w-9 h-9 grid place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
-        >
-          <Bell size={15} />
-        </button>
-        <div className="ml-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-soft border border-border">
-          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-primary text-white flex items-center justify-center text-xs font-bold">
-            {initial}
-          </div>
-          <div className="text-xs">
-            <div className="font-semibold text-text leading-none">{display}</div>
-            <div className="text-[10px] text-text-muted mt-0.5">{user?.role || "..."}</div>
-          </div>
         </div>
-      </div>
-    </header>
+      </header>
+
+      <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+    </>
   );
 }

@@ -268,6 +268,17 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
 
 from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
+from app.services import rfm_analytics as rfm_svc
+
+
+@router.get("/rfm")
+def get_rfm(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=30, le=730)] = 365,
+) -> dict:
+    """RFM Segmentation - Champions / Loyal / At Risk / etc.
+    Replica del PowerBI ERP Analytics seccion Customer Success."""
+    return rfm_svc.rfm_overview(period_days=period_days)
 
 
 @router.get("/cohorts")

@@ -34,6 +34,7 @@ import {
   Boxes,
   Shapes,
   Settings,
+  Target,
   X,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ const ITEMS: NavItem[] = [
   { label: "Customer Success", href: "/dashboard/cs",             icon: HeartHandshake,  group: "Cross", roles: ONLY_GERENCIA },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
   { label: "Cohortes",         href: "/dashboard/cohortes",       icon: Users,           group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Segmentacion RFM", href: "/dashboard/rfm",            icon: Target,          group: "Cross", roles: ONLY_GERENCIA },
   {
     label: "Producto",
     href: "/dashboard/productos",
