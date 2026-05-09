@@ -258,14 +258,24 @@ def get_dropshippers(
     canal: Annotated[Literal["all", "meli", "tn", "ambos", "sin_canal"], Query()] = "all",
     search: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(le=20000)] = 10000,
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Listado de dropshippers Unidrop. canal:
     - all: todos los que tienen alguna senal de operacion (MELI o TN)
     - meli: solo MELI (todos los con suscripcion estan aqui)
     - tn: solo TN (sin suscripcion - no requieren plan MELI)
     - ambos: vende en MELI y TN
-    - sin_canal: alta sin operar"""
-    return dropshippers_svc.dropshippers_master(plan, riesgo, actividad, search, limit, canal=canal)
+    - sin_canal: alta sin operar
+
+    period: ventana temporal aplicada a los KPIs de ventas/pagos (no a la
+    identidad del dropshipper). Por defecto 30d para no mostrar GMV
+    historico completo cuando el usuario espera 'el mes'."""
+    return dropshippers_svc.dropshippers_master(
+        plan, riesgo, actividad, search, limit, canal=canal,
+        period=period, from_iso=from_iso, to_iso=to_iso,
+    )
 
 
 @router.get("/dropshippers/cohorts")
@@ -277,9 +287,13 @@ def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
 def get_dropshipper_detail(
     user_id: int,
     _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
-    """Vista 360 de un dropshipper Unidrop - NO mezclar con Customer Unistore TN."""
-    return dropshippers_svc.dropshipper_detail(user_id)
+    """Vista 360 de un dropshipper Unidrop - NO mezclar con Customer Unistore TN.
+    period: ventana aplicada a KPIs ventas/pagos. Mensual chart siempre 12m."""
+    return dropshippers_svc.dropshipper_detail(user_id, period=period, from_iso=from_iso, to_iso=to_iso)
 
 
 from app.services import lotes_analytics as lotes_svc

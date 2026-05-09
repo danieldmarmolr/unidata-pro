@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { Mail, Search, ExternalLink, AlertTriangle, Sparkles } from "lucide-react";
 
@@ -94,6 +95,9 @@ function waLink(phone: string | null): string | null {
 }
 
 export default function DropshippersPage() {
+  const period = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
   const [plan, setPlan] = useState<Plan>("all");
   const [riesgo, setRiesgo] = useState<Riesgo>("all");
   const [actividad, setActividad] = useState<Actividad>("all");
@@ -101,9 +105,9 @@ export default function DropshippersPage() {
   const [search, setSearch] = useState("");
 
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ["dropshippers", plan, riesgo, actividad, canal, search],
+    queryKey: ["dropshippers", plan, riesgo, actividad, canal, search, period, customFrom, customTo],
     queryFn: () => {
-      const qs = new URLSearchParams();
+      const qs = new URLSearchParams(periodToQuery(period, customFrom, customTo));
       qs.set("plan", plan);
       qs.set("riesgo", riesgo);
       qs.set("actividad", actividad);
@@ -119,7 +123,6 @@ export default function DropshippersPage() {
       <Topbar
         title="Dropshippers Unidrop"
         subtitle="Operadores por canal · solo MELI (con suscripcion) · solo TN (sin sub) · ambos · alertas y deuda"
-        hidePeriod
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         {/* KPI strip */}

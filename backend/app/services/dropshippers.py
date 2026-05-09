@@ -17,7 +17,7 @@ import datetime as dt
 import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar
+from app.services._utils import q, scalar, resolve_window
 
 log = logging.getLogger("unidata.dropshippers")
 
@@ -29,6 +29,9 @@ def dropshippers_master(
     search: str | None = None,
     limit: int = 10000,
     canal: str = "all",
+    period: str = "30d",
+    from_iso: str | None = None,
+    to_iso: str | None = None,
 ) -> dict:
     """
     Master view: 1 row por dropshipper con todas las metricas agregadas.
@@ -47,7 +50,11 @@ def dropshippers_master(
         operacion (MELI o TN), no solo los con subscriptionId.
     """
     eng = get_engine("unidrop")
-    p: dict = {}
+    # Ventana temporal para los KPIs (ventas/pagos). El universo del listado
+    # NO se filtra por fecha (los dropshippers existen aunque no hayan
+    # vendido en el periodo) - solo cambian los agregados monetarios.
+    days = resolve_window(period, from_iso, to_iso)["days"]
+    p: dict = {"period_days": int(days)}
     # El universo ahora incluye: usuarios con suscripcion MELI O con cuenta MELI
     # vinculada O con credencial TN O con orders TN. NO requiere subscriptionId.
     # TiendaNubeCredential se cruza por store_id (NO tiene userId).
@@ -106,6 +113,7 @@ def dropshippers_master(
             FROM mercado_libre_dev."PaymentMercadoLibre"
             GROUP BY 1
         ) p ON p."orderId" = o.id
+        WHERE o."dateCreated" >= NOW() - make_interval(days => :period_days)
         GROUP BY mla."id"
     ),
     pagos AS (
@@ -118,9 +126,12 @@ def dropshippers_master(
         FROM public."PaymentIntent" pi
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa."id" = pi."customerAccountId"
         WHERE pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :period_days)
         GROUP BY cpa."userId"
     ),
     deuda AS (
+        -- Deuda NO se filtra por periodo: la deuda pendiente es estado actual,
+        -- no una metrica de actividad temporal.
         SELECT cpa."userId" AS user_id,
                COALESCE(SUM(pi."pendingAmount") FILTER (WHERE pi."status" <> 'PROCESSED'),0)::float AS deuda_pendiente,
                COUNT(*) FILTER (WHERE pi."status" <> 'PROCESSED' AND COALESCE(pi."pendingAmount",0) > 0)::int AS pagos_con_deuda
@@ -128,7 +139,7 @@ def dropshippers_master(
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa."id" = pi."customerAccountId"
         GROUP BY cpa."userId"
     ),
-    -- TN: agregados de orders TN del cliente final del dropshipper.
+    -- TN: agregados de orders TN del cliente final del dropshipper - filtrados por periodo.
     -- user_id apunta al dropshipper Unidrop, NO al cliente final.
     tn AS (
         SELECT user_id,
@@ -138,6 +149,7 @@ def dropshippers_master(
                MAX(created_at) FILTER (WHERE payment_status::text = 'paid')::text AS tn_ultima_venta
         FROM public.tienda_nube_orders
         WHERE user_id IS NOT NULL
+          AND created_at >= NOW() - make_interval(days => :period_days)
         GROUP BY user_id
     ),
     -- Credenciales TN: cruce via store_id (NO existe userId en TiendaNubeCredential).
@@ -395,7 +407,12 @@ def dropshippers_master(
     }
 
 
-def dropshipper_detail(user_id: int) -> dict:
+def dropshipper_detail(
+    user_id: int,
+    period: str = "30d",
+    from_iso: str | None = None,
+    to_iso: str | None = None,
+) -> dict:
     """Vista 360 de un dropshipper Unidrop (no confundir con Customer Unistore TN).
 
     Devuelve KPIs + series mensuales + ultimas ventas MELI + ultimos pagos Talo.
@@ -404,8 +421,11 @@ def dropshipper_detail(user_id: int) -> dict:
       - Pagos: public.PaymentIntent + public.CustomerPaymentAccount
       - Plan: public.User + mercado_libre_dev.SubscriptionMeli
       - Cuenta MELI: mercado_libre_dev.MercadoLibreUserAccount
+
+    period filtra los KPIs de ventas y pagos (la chart mensual siempre 12m).
     """
     eng = get_engine("unidrop")
+    days = resolve_window(period, from_iso, to_iso)["days"]
 
     head_rows = q(eng, """
         SELECT
@@ -477,7 +497,8 @@ def dropshipper_detail(user_id: int) -> dict:
             GROUP BY 1
         ) p ON p."orderId" = o.id
         WHERE mla."userId" = :uid
-    """, {"uid": int(user_id)}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
+          AND o."dateCreated" >= NOW() - make_interval(days => :d)
+    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
     v = ventas[0]
     ventas_kpi = {
         "ventas_pagadas": int(v[0] or 0),
@@ -504,7 +525,8 @@ def dropshipper_detail(user_id: int) -> dict:
             COALESCE(AVG(total) FILTER (WHERE payment_status::text='paid'),0)::float AS ticket_promedio
         FROM public.tienda_nube_orders
         WHERE user_id = :uid
-    """, {"uid": int(user_id)}) or [(0, 0, 0, None, None, 0)]
+          AND created_at >= NOW() - make_interval(days => :d)
+    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0)]
     tnv = tn_v[0]
     tn_kpi = {
         "ventas_pagadas": int(tnv[0] or 0),

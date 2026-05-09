@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
 
@@ -126,10 +127,13 @@ function statusColor(s: string): string {
 
 export default function DropshipperPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const period = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
 
   const { data, isLoading, error } = useQuery<DropshipperDetail>({
-    queryKey: ["dropshipper", id],
-    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}`),
+    queryKey: ["dropshipper", id, period, customFrom, customTo],
+    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}?${periodToQuery(period, customFrom, customTo)}`),
     staleTime: 60_000,
   });
 
@@ -179,7 +183,6 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
       <Topbar
         title={u.fantasy_name || u.nombre || `Dropshipper #${u.user_id}`}
         subtitle="Vista 360 · Dropshipper Unidrop · ventas MELI · pagos Talo · suscripcion"
-        hidePeriod
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">

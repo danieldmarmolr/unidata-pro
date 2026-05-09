@@ -95,7 +95,7 @@ function ExploreContent() {
 
   return (
     <>
-      <Topbar title={title} subtitle={subtitle || "Analisis completo - explorador"} hidePeriod />
+      <Topbar title={title} subtitle={subtitle || "Analisis completo - explorador"} />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <div className="bg-surface border border-border rounded-xl flex flex-col h-[calc(100vh-160px)]">
           {/* Toolbar */}
