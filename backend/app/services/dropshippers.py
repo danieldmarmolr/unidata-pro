@@ -50,10 +50,14 @@ def dropshippers_master(
     p: dict = {}
     # El universo ahora incluye: usuarios con suscripcion MELI O con cuenta MELI
     # vinculada O con credencial TN O con orders TN. NO requiere subscriptionId.
+    # TiendaNubeCredential se cruza por store_id (NO tiene userId).
+    # Con eso un User esta vinculado a una tienda TN si u.store_id = tnc.store_id.
     wh: list[str] = [
         "(u.\"subscriptionId\" IS NOT NULL "
         " OR u.\"mercadoLibreAccountId\" IS NOT NULL "
-        " OR EXISTS (SELECT 1 FROM public.\"TiendaNubeCredential\" tnc WHERE tnc.\"userId\" = u.id) "
+        " OR (u.store_id IS NOT NULL AND EXISTS ("
+        "       SELECT 1 FROM public.\"TiendaNubeCredential\" tnc WHERE tnc.store_id = u.store_id"
+        "    )) "
         " OR EXISTS (SELECT 1 FROM public.tienda_nube_orders tno WHERE tno.user_id = u.id))"
     ]
 
@@ -136,12 +140,14 @@ def dropshippers_master(
         WHERE user_id IS NOT NULL
         GROUP BY user_id
     ),
-    -- Credenciales TN: si el dropshipper tiene tienda TN conectada
+    -- Credenciales TN: cruce via store_id (NO existe userId en TiendaNubeCredential).
+    -- Un User esta vinculado a una tienda TN si comparte store_id con la credencial.
     tnc AS (
-        SELECT "userId" AS user_id, COUNT(*)::int AS tn_tiendas
-        FROM public."TiendaNubeCredential"
-        WHERE "userId" IS NOT NULL
-        GROUP BY "userId"
+        SELECT u2.id AS user_id, COUNT(*)::int AS tn_tiendas
+        FROM public."User" u2
+        INNER JOIN public."TiendaNubeCredential" t ON t.store_id = u2.store_id
+        WHERE u2.store_id IS NOT NULL
+        GROUP BY u2.id
     )
     SELECT
         u.id AS user_id,
@@ -509,9 +515,12 @@ def dropshipper_detail(user_id: int) -> dict:
         "ticket_promedio": float(tnv[5] or 0),
     }
 
-    # Tiendas TN conectadas
+    # Tiendas TN conectadas (cruce por store_id, no por userId).
     tn_stores = q(eng, """
-        SELECT COUNT(*)::int FROM public."TiendaNubeCredential" WHERE "userId" = :uid
+        SELECT COUNT(*)::int
+        FROM public."User" u
+        INNER JOIN public."TiendaNubeCredential" t ON t.store_id = u.store_id
+        WHERE u.id = :uid AND u.store_id IS NOT NULL
     """, {"uid": int(user_id)}) or [(0,)]
     tn_kpi["tiendas_conectadas"] = int(tn_stores[0][0] or 0)
 
