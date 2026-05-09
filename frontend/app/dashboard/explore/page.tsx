@@ -146,11 +146,30 @@ function ExploreContent() {
                 {search ? "Sin coincidencias para el filtro" : "Sin resultados"}
               </div>
             )}
-            {data && filteredSorted && filteredSorted.length > 0 && (
+            {data && filteredSorted && filteredSorted.length > 0 && (() => {
+              // Misma logica de columnas redundantes que el modal de drilldown:
+              // shipping/status si hay payment (pipeline cubre), metodo_envio si hay canal.
+              const hasPayment = data.columns.some((c) => /^(payment|paymentStatus|pago|payment_status)$/i.test(c));
+              const hasCanal = data.columns.some((c) => /^(canal|canal_envio|shipping_channel)$/i.test(c));
+              const isHiddenColumn = (c: string) => {
+                if (/^(customer_id|customerId|cliente_id|id_cliente|_unit)$/i.test(c)) return true;
+                if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
+                if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
+                if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
+                return false;
+              };
+              const labelFor = (c: string) => {
+                if (/^(payment|paymentStatus|pago|payment_status)$/i.test(c)) return "Estado del pedido";
+                if (/^(canal|canal_envio|shipping_channel)$/i.test(c)) return "Envio";
+                return c;
+              };
+              const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado)$/i.test(c));
+              return (
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                   <tr>
                     {data.columns.map((c, i) => {
+                      if (isHiddenColumn(c)) return null;
                       const sortedHere = sortCol === i;
                       return (
                         <th
@@ -159,7 +178,7 @@ function ExploreContent() {
                           className="text-left px-3 py-2 whitespace-nowrap cursor-pointer hover:bg-border/40"
                         >
                           <span className="inline-flex items-center gap-1">
-                            {c}
+                            {labelFor(c)}
                             {sortedHere && (sortDir === "asc" ? <ArrowUp size={9} /> : <ArrowDown size={9} />)}
                           </span>
                         </th>
@@ -168,18 +187,46 @@ function ExploreContent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredSorted.map((r, i) => (
-                    <tr key={i} className="border-t border-border hover:bg-soft transition">
-                      {r.map((v, j) => (
-                        <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
-                          <CellRenderer col={data.columns[j]} v={v} />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
+                  {filteredSorted.map((r, i) => {
+                    const totalVal = totalIdx >= 0 ? Number(r[totalIdx]) : NaN;
+                    const isVip = !Number.isNaN(totalVal) && totalVal >= 300000;
+                    return (
+                      <tr
+                        key={i}
+                        className={
+                          isVip
+                            ? "border-t border-amber-200 bg-gradient-to-r from-amber-50/80 via-amber-50/40 to-transparent hover:from-amber-100/80 transition"
+                            : "border-t border-border hover:bg-soft transition"
+                        }
+                        title={isVip ? `Compra alta: ${formatCurrency(totalVal)} (VIP)` : undefined}
+                      >
+                        {r.map((v, j) => {
+                          const col = data.columns[j];
+                          if (isHiddenColumn(col)) return null;
+                          const isFirstVisible = j === 0;
+                          return (
+                            <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
+                              <div className="inline-flex items-center gap-1.5">
+                                {isFirstVisible && isVip && (
+                                  <span
+                                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-sm shadow-amber-500/30 flex-shrink-0"
+                                    title={`Compra VIP: ${formatCurrency(totalVal)}`}
+                                  >
+                                    <span className="text-[8px] font-extrabold">★</span>
+                                  </span>
+                                )}
+                                <CellRenderer col={col} v={v} row={r} columns={data.columns} />
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
-            )}
+              );
+            })()}
           </div>
         </div>
       </div>

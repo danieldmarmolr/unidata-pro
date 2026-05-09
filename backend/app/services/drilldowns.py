@@ -341,27 +341,39 @@ def stuck_order_detail(order_id: int) -> dict:
 # SAAS / UNIDROP USER LISTS
 # ============================================================
 
-_USER_COLS = ["id", "nombre", "email", "telefono", "provincia", "personeria", "creado", "vence", "activo"]
-_USER_SQL = """
-    SELECT u.id,
-           COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, ''::text) AS nombre,
-           u.email,
-           COALESCE(NULLIF(TRIM(u.phone),''), '') AS telefono,
-           COALESCE((
-              SELECT NULLIF(TRIM(o.billing_province),'')
-              FROM public.tienda_nube_orders o
-              WHERE o.user_id = u.id
-                AND o.billing_province IS NOT NULL
-              ORDER BY o.created_at DESC NULLS LAST LIMIT 1
-           ), '') AS provincia,
-           COALESCE(u.personeria::text, '') AS personeria,
-           u."createdAt"::text,
-           u.end_date_subscription::text,
-           COALESCE(u."isActive", TRUE) AS activo
-    FROM public."User" u
-    WHERE {where}
-    ORDER BY {order} LIMIT 1000
-"""
+# _unit es columna oculta consumida por el frontend para construir el link
+# correcto al detalle (Unidrop dropshipper vs Unistore customer).
+_USER_COLS = ["id", "nombre", "email", "telefono", "provincia", "personeria", "creado", "vence", "activo", "_unit"]
+
+
+def _user_province_expr(eng) -> str:
+    """Detecta dinamicamente la columna de provincia en public.User de Unidrop.
+    Antes se cruzaba con tienda_nube_orders (mezcla de unidades) — ahora
+    sale exclusivamente del propio User. Soporta varias variantes posibles."""
+    return col_or_null(eng, "public", "User", "u", [
+        "province", "state", "region", "address_province",
+        "provincia", "provinceName", "addressProvince",
+        "billingProvince", "shippingProvince",
+    ])
+
+
+def _build_user_sql(eng) -> str:
+    prov_expr = _user_province_expr(eng)
+    return f"""
+        SELECT u.id,
+               COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, ''::text) AS nombre,
+               u.email,
+               COALESCE(NULLIF(TRIM(u.phone),''), '') AS telefono,
+               COALESCE(NULLIF(TRIM({prov_expr}::text),''), '') AS provincia,
+               COALESCE(u.personeria::text, '') AS personeria,
+               u."createdAt"::text,
+               u.end_date_subscription::text,
+               COALESCE(u."isActive", TRUE) AS activo,
+               'unidrop'::text AS _unit
+        FROM public."User" u
+        WHERE {{where}}
+        ORDER BY {{order}} LIMIT 1000
+    """
 
 
 def _seg_clause(segment: str) -> str:
@@ -373,14 +385,14 @@ def _seg_clause(segment: str) -> str:
 def saas_users_all(segment: str = "all") -> dict:
     eng = get_engine("unidrop")
     where = "1=1" + _seg_clause(segment)
-    rows = q(eng, _USER_SQL.format(where=where, order='u."createdAt" DESC')) or []
+    rows = q(eng, _build_user_sql(eng).format(where=where, order='u."createdAt" DESC')) or []
     return _serialize(rows, _USER_COLS)
 
 
 def saas_users_active(segment: str = "all") -> dict:
     eng = get_engine("unidrop")
     where = "u.end_date_subscription > NOW() AND COALESCE(u.\"isActive\", TRUE) IS TRUE" + _seg_clause(segment)
-    rows = q(eng, _USER_SQL.format(where=where, order="u.end_date_subscription ASC")) or []
+    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription ASC")) or []
     return _serialize(rows, _USER_COLS)
 
 
@@ -388,8 +400,8 @@ def saas_users_new(period: str = "30d", segment: str = "all", from_iso: str | No
     eng = get_engine("unidrop")
     days = resolve_window(period, from_iso, to_iso)["days"]
     where = 'u."createdAt" >= NOW() - make_interval(days => :d)' + _seg_clause(segment)
-    sql = _USER_SQL.format(where=where, order='u."createdAt" DESC')
-    rows = q(eng, sql, {"d": days}) or []
+    sql_built = _build_user_sql(eng).format(where=where, order='u."createdAt" DESC')
+    rows = q(eng, sql_built, {"d": days}) or []
     return _serialize(rows, _USER_COLS)
 
 
@@ -399,14 +411,14 @@ def saas_users_churned(period: str = "30d", segment: str = "all", from_iso: str 
     where = """u.end_date_subscription IS NOT NULL
                AND u.end_date_subscription >= NOW() - make_interval(days => :d)
                AND u.end_date_subscription <= NOW()""" + _seg_clause(segment)
-    rows = q(eng, _USER_SQL.format(where=where, order="u.end_date_subscription DESC"), {"d": days}) or []
+    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription DESC"), {"d": days}) or []
     return _serialize(rows, _USER_COLS)
 
 
 def saas_users_expiring(days_window: int = 7, segment: str = "all") -> dict:
     eng = get_engine("unidrop")
     where = f"u.end_date_subscription BETWEEN NOW() AND NOW() + INTERVAL '{int(days_window)} days'" + _seg_clause(segment)
-    rows = q(eng, _USER_SQL.format(where=where, order="u.end_date_subscription ASC")) or []
+    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription ASC")) or []
     return _serialize(rows, _USER_COLS)
 
 

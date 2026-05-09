@@ -69,9 +69,21 @@ export function CellRenderer({
   columns?: string[];
 }) {
   if (v === null || v === undefined || v === "") return <>—</>;
+  // Detectar contexto Unidrop: si la fila tiene una columna _unit con valor 'unidrop'
+  // entonces los IDs y nombres NO deben linkear a vistas de Unistore (TN admin /
+  // /dashboard/customer/[id]). Esto evita mostrar "Customer 360 · Unistore" con
+  // datos vacios cuando el id en realidad es un User.id de Unidrop.
+  const isUnidropRow = (() => {
+    if (!row || !columns) return false;
+    const idx = columns.findIndex((c) => /^_unit$/i.test(c));
+    if (idx < 0) return false;
+    return String(row[idx] ?? "").toLowerCase() === "unidrop";
+  })();
   if (typeof v === "number") {
     if (CURRENCY_HINT.test(col)) return <>{formatCurrency(v)}</>;
     if (NUMBER_HINT.test(col)) return <>{formatNumber(v)}</>;
+    // En filas de Unidrop, los ids son User.id — NO son order IDs de TN.
+    if (isUnidropRow) return <>{String(v)}</>;
     // Order ID grande → linkear a TN admin
     if (looksLikeTnOrderId(col, v)) {
       return (
@@ -94,8 +106,8 @@ export function CellRenderer({
   if (typeof v === "string" && (/^\d{4}-\d{2}-\d{2}T/.test(v) || /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(v))) {
     return <>{fmtArDateTime(v)}</>;
   }
-  // Order id como string
-  if (typeof v === "string" && looksLikeTnOrderId(col, v)) {
+  // Order id como string (solo en rows de Unistore — en Unidrop el id es User.id)
+  if (typeof v === "string" && !isUnidropRow && looksLikeTnOrderId(col, v)) {
     return (
       <a
         href={tnAdminUrl(v)}
@@ -154,6 +166,17 @@ export function CellRenderer({
 
   // Cliente: linkear al perfil si tenemos customer_id en la fila, sino busqueda por nombre
   if (CUSTOMER_NAME_HINT.test(col)) {
+    // En filas Unidrop el "cliente" es un Dropshipper (User.id). No tenemos
+    // hoy una vista 360 para dropshippers — mostramos como texto plano para
+    // no llevar al usuario a la vista de Customer Unistore con datos vacios.
+    if (isUnidropRow) {
+      return (
+        <span className="inline-flex items-center gap-1 text-text" title="Dropshipper Unidrop">
+          <User size={10} className="opacity-60" />
+          {s}
+        </span>
+      );
+    }
     let customerId: unknown = null;
     if (row && columns) {
       customerId = findColValue(columns, row, ["customer_id", "customerId", "cliente_id", "id_cliente"]);
