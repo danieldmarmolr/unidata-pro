@@ -55,7 +55,12 @@ type Resp = {
   stats: {
     total: number; gmv: number; profit_unidrop: number; pago_unidrop: number; deuda_pendiente: number;
     sin_publicar: number; sin_vender: number; con_deuda: number; token_expira: number;
+    activos_30d?: number; inactivos?: number;
   };
+  filtered_stats?: {
+    total: number; gmv: number; profit_unidrop: number; pago_unidrop: number; deuda_pendiente: number;
+  };
+  filters_applied?: { plan: string; riesgo: string; actividad: string; search: string };
   generated_at: string;
 };
 
@@ -148,10 +153,37 @@ export default function DropshippersPage() {
             />
             {data && (
               <div className="text-xs text-text-muted ml-auto">
-                {formatNumber(data.total)} dropshippers
+                {data.stats.total === data.total
+                  ? `${formatNumber(data.total)} dropshippers`
+                  : (
+                    <span>
+                      Viendo <span className="font-bold text-text">{formatNumber(data.total)}</span> de {formatNumber(data.stats.total)}
+                      {(riesgo !== "all" || actividad !== "all" || search) && (
+                        <button
+                          onClick={() => { setRiesgo("all"); setActividad("all"); setSearch(""); }}
+                          className="ml-2 text-primary hover:underline text-[11px]"
+                          title="Quitar filtros"
+                        >
+                          limpiar filtros
+                        </button>
+                      )}
+                    </span>
+                  )}
               </div>
             )}
           </div>
+
+          {/* Banner de filtro activo con sub-totales */}
+          {data?.filtered_stats && data.stats.total !== data.total && (
+            <div className="px-4 py-2.5 bg-gradient-to-r from-primary/5 to-accent/5 border-b border-border flex items-center gap-4 flex-wrap text-xs">
+              <span className="font-semibold text-primary">Subset filtrado:</span>
+              <span><span className="text-text-muted">GMV</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.gmv)}</span></span>
+              <span><span className="text-text-muted">Profit</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.profit_unidrop)}</span></span>
+              <span><span className="text-text-muted">Pagado</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.pago_unidrop)}</span></span>
+              <span><span className="text-text-muted">Deuda</span> <span className="font-bold tabular-nums text-error">{formatCurrency(data.filtered_stats.deuda_pendiente)}</span></span>
+              <span className="text-[10px] text-text-muted ml-auto">Los KPIs de arriba siguen mostrando totales del universo</span>
+            </div>
+          )}
 
           <div className="overflow-x-auto max-h-[calc(100vh-360px)] overflow-y-auto">
             {isLoading ? (

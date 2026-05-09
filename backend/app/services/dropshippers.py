@@ -180,9 +180,51 @@ def dropshippers_master(
         "deuda_pendiente", "pagos_con_deuda",
     ]
 
-    items = [dict(zip(keys, r)) for r in rows]
+    universe = [dict(zip(keys, r)) for r in rows]
 
-    # Filtros derivados (lado python)
+    # ============================================================
+    # STATS GLOBALES sobre el UNIVERSO (plan + search ya aplicados)
+    # NO se afectan por riesgo / actividad — esos son filtros de la
+    # tabla, no del totalizador. Antes los KPIs y los chips caian a 0
+    # cuando se filtraba "con deuda" porque se calculaban sobre la
+    # lista filtrada.
+    # ============================================================
+    cutoff_30d = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
+
+    def _last_sale_dt(it):
+        uv = it.get("ultima_venta")
+        if not uv:
+            return None
+        try:
+            d = dt.datetime.fromisoformat(uv.replace(" ", "T"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=dt.timezone.utc)
+            return d
+        except Exception:
+            return None
+
+    universe_total = len(universe)
+    sum_gmv = sum(float(it.get("gmv") or 0) for it in universe)
+    sum_profit = sum(float(it.get("profit_unidrop") or 0) for it in universe)
+    sum_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in universe)
+    sum_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in universe)
+
+    sin_publicar_u = sum(1 for it in universe if (it.get("pub_activas") or 0) == 0)
+    sin_vender_u = sum(1 for it in universe if (it.get("ventas_pagadas") or 0) == 0)
+    con_deuda_u = sum(1 for it in universe if (it.get("deuda_pendiente") or 0) > 0)
+    token_expira_u = sum(1 for it in universe if it.get("requiere_reauth") is True)
+
+    activos_30d = sum(
+        1 for it in universe
+        if (_last_sale_dt(it) is not None and _last_sale_dt(it) >= cutoff_30d)
+    )
+    inactivos = universe_total - activos_30d
+
+    # ============================================================
+    # FILTROS de la lista (afectan SOLO la tabla, no los KPIs)
+    # ============================================================
+    items = list(universe)
+
     if riesgo == "sin_publicar":
         items = [it for it in items if (it.get("pub_activas") or 0) == 0]
     elif riesgo == "sin_vender":
@@ -193,56 +235,49 @@ def dropshippers_master(
         items = [it for it in items if it.get("requiere_reauth") is True]
 
     if actividad == "activo":
-        # Tiene venta en los ultimos 30d
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-        def _is_active(it):
-            uv = it.get("ultima_venta")
-            if not uv: return False
-            try:
-                d = dt.datetime.fromisoformat(uv.replace(" ", "T"))
-                if d.tzinfo is None: d = d.replace(tzinfo=dt.timezone.utc)
-                return d >= cutoff
-            except Exception:
-                return False
-        items = [it for it in items if _is_active(it)]
+        items = [it for it in items if (_last_sale_dt(it) is not None and _last_sale_dt(it) >= cutoff_30d)]
     elif actividad == "inactivo":
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=30)
-        def _is_inactive(it):
-            uv = it.get("ultima_venta")
-            if not uv: return True
-            try:
-                d = dt.datetime.fromisoformat(uv.replace(" ", "T"))
-                if d.tzinfo is None: d = d.replace(tzinfo=dt.timezone.utc)
-                return d < cutoff
-            except Exception:
-                return True
-        items = [it for it in items if _is_inactive(it)]
+        items = [it for it in items if not (_last_sale_dt(it) is not None and _last_sale_dt(it) >= cutoff_30d)]
 
-    # Stats agregados (sobre la lista filtrada)
-    total = len(items)
-    sum_gmv = sum(float(it.get("gmv") or 0) for it in items)
-    sum_profit = sum(float(it.get("profit_unidrop") or 0) for it in items)
-    sum_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in items)
-    sum_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in items)
-
-    sin_publicar = sum(1 for it in items if (it.get("pub_activas") or 0) == 0)
-    sin_vender = sum(1 for it in items if (it.get("ventas_pagadas") or 0) == 0)
-    con_deuda = sum(1 for it in items if (it.get("deuda_pendiente") or 0) > 0)
-    token_expira = sum(1 for it in items if it.get("requiere_reauth") is True)
+    # KPIs adicionales SOBRE LA LISTA FILTRADA — utiles cuando el usuario
+    # quiere ver agregados del subset (ej: "GMV de los con_deuda")
+    filtered_total = len(items)
+    filtered_gmv = sum(float(it.get("gmv") or 0) for it in items)
+    filtered_profit = sum(float(it.get("profit_unidrop") or 0) for it in items)
+    filtered_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in items)
+    filtered_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in items)
 
     return {
         "items": items,
-        "total": total,
+        "total": filtered_total,  # cantidad de la lista visible
+        # Stats globales del universo (plan + search aplicados, NO riesgo/actividad)
         "stats": {
-            "total": total,
+            "total": universe_total,
             "gmv": round(sum_gmv, 0),
             "profit_unidrop": round(sum_profit, 0),
             "pago_unidrop": round(sum_pago, 0),
             "deuda_pendiente": round(sum_deuda, 0),
-            "sin_publicar": sin_publicar,
-            "sin_vender": sin_vender,
-            "con_deuda": con_deuda,
-            "token_expira": token_expira,
+            "sin_publicar": sin_publicar_u,
+            "sin_vender": sin_vender_u,
+            "con_deuda": con_deuda_u,
+            "token_expira": token_expira_u,
+            "activos_30d": activos_30d,
+            "inactivos": inactivos,
+        },
+        # Stats del subset filtrado por riesgo/actividad — NO afectan los KPIs
+        # principales pero permiten al frontend mostrar "viendo 3 de 1087"
+        "filtered_stats": {
+            "total": filtered_total,
+            "gmv": round(filtered_gmv, 0),
+            "profit_unidrop": round(filtered_profit, 0),
+            "pago_unidrop": round(filtered_pago, 0),
+            "deuda_pendiente": round(filtered_deuda, 0),
+        },
+        "filters_applied": {
+            "plan": plan,
+            "riesgo": riesgo,
+            "actividad": actividad,
+            "search": search or "",
         },
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
