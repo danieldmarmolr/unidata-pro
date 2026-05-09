@@ -45,9 +45,11 @@ type ProvinceDetail = {
 
 type Metric = "revenue" | "orders" | "customers";
 
-// Discrete categorical buckets (5 levels) for clear contrast
+// Discrete categorical buckets (5 levels) for clear contrast.
+// El idx 0 ahora tiene mas contraste sobre fondo blanco para que las
+// provincias sin datos sean visibles igualmente.
 const SCALE_COLORS = [
-  "#f8f5fb", // 0 (very pale)
+  "#e8e5ee", // 0 - gris suave (provincia sin datos pero visible)
   "#dbc7eb", // low
   "#b48cd8", // mid
   "#8a52c4", // high
@@ -171,13 +173,15 @@ export default function MapaPage() {
                 Error cargando mapa: {geoError}
               </div>
             ) : (
-              <div className="relative bg-white rounded-lg">
+              <div className="relative bg-white rounded-lg overflow-hidden">
                 <ComposableMap
                   projection="geoMercator"
-                  projectionConfig={{ center: [-65, -40], scale: 700 }}
-                  width={700}
+                  // Argentina: lat -22 a -55 (33° de span), lon -73 a -53 (20°).
+                  // Centro [-65, -38]. Con Mercator a -38° lat: scale ~1500 llena 900px alto.
+                  projectionConfig={{ center: [-65, -38], scale: 1500 }}
+                  width={550}
                   height={900}
-                  style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 280px)" }}
+                  style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 220px)", display: "block" }}
                 >
                   <Geographies geography={geoData!}>
                     {({ geographies }: { geographies: any[] }) => (
@@ -194,8 +198,9 @@ export default function MapaPage() {
                               style={{
                                 default: {
                                   fill: colorScale(value, maxValue),
-                                  stroke: isSelected ? "#7a3eae" : "#ffffff",
-                                  strokeWidth: isSelected ? 2.5 : 1,
+                                  // stroke gris para que las provincias sean visibles incluso sin datos
+                                  stroke: isSelected ? "#7a3eae" : "#94a3b8",
+                                  strokeWidth: isSelected ? 2 : 0.6,
                                   outline: "none",
                                   cursor: "pointer",
                                 },
