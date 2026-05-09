@@ -79,7 +79,12 @@ def _build_engine(cfg: UnitConfig) -> Engine:
         pool_recycle=300,
         pool_size=5,
         max_overflow=5,
-        connect_args={"options": "-c statement_timeout=30000", "connect_timeout": 10},
+        connect_args={
+            # statement_timeout: 30s | timezone Argentina: NOW(), CURRENT_DATE,
+            # CURRENT_TIMESTAMP, etc devuelven hora local AR (UTC-3) automaticamente
+            "options": "-c statement_timeout=30000 -c timezone=America/Argentina/Buenos_Aires",
+            "connect_timeout": 10,
+        },
     )
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))

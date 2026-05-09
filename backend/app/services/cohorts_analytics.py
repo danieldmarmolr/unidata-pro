@@ -16,6 +16,8 @@ facturacion, ticket promedio.
 from __future__ import annotations
 
 import datetime as dt
+
+from app.utils.tz import today_ar, now_ar
 import logging
 
 from app.db.engines import get_engine
@@ -66,7 +68,7 @@ def cohorts_overview(period: str = "30d", from_iso: str | None = None, to_iso: s
     """, p) or []
 
     # Clasificar cada cliente
-    today = dt.date.today()
+    today = today_ar()
     states_count: dict[str, dict] = {
         "nuevo": {"customers": 0, "ordenes": 0, "facturacion": 0.0},
         "segunda_compra": {"customers": 0, "ordenes": 0, "facturacion": 0.0},
@@ -167,7 +169,7 @@ def cohorts_overview(period: str = "30d", from_iso: str | None = None, to_iso: s
             k: sorted(v, key=lambda x: -x["facturacion_periodo"])[:10]
             for k, v in customers_by_state.items()
         },
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": now_ar().isoformat(),
     }
 
 

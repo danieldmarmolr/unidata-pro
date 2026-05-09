@@ -7,6 +7,8 @@ Cada bloque devuelve {label, today, w_ago, m_ago, y_ago, deltas %}
 from __future__ import annotations
 
 import datetime as dt
+
+from app.utils.tz import today_ar, now_ar
 import logging
 
 from app.db.engines import get_engine
@@ -168,7 +170,7 @@ def today_snapshot(unit: str | None = None) -> dict:
 
     return {
         "level": "today",
-        "today_date": dt.date.today().isoformat(),
+        "today_date": today_ar().isoformat(),
         "blocks": blocks,
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": now_ar().isoformat(),
     }

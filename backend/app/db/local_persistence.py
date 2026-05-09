@@ -56,10 +56,16 @@ def _ensure_pool() -> psycopg2.pool.ThreadedConnectionPool:
 
 @contextmanager
 def get_conn() -> Iterator[psycopg2.extensions.connection]:
-    """Context manager: saca una conexion del pool, la devuelve al salir."""
+    """Context manager: saca una conexion del pool, la devuelve al salir.
+
+    Setea timezone Argentina al inicio para que NOW(), CURRENT_DATE, etc
+    devuelvan hora local AR (UTC-3).
+    """
     pool = _ensure_pool()
     conn = pool.getconn()
     try:
+        with conn.cursor() as cur:
+            cur.execute("SET TIME ZONE 'America/Argentina/Buenos_Aires'")
         yield conn
         conn.commit()
     except Exception:

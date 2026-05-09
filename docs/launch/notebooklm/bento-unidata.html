@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="es-AR">
+<head>
+<meta charset="UTF-8">
+<title>UNIDATA · Bento</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#7a3eae;--primary-d:#4e1e7a;--darkest:#21093a;
+    --accent:#a259ff;--accent-2:#c084fc;
+    --bg:#f5f5f7;--surface:#fff;--soft:#f5f0fb;--border:#e0cff3;
+    --text:#21093a;--muted:#6b7280;--success:#25d366;--warn:#f59e0b;--error:#fb2c36;
+  }
+  *,*:before,*:after{box-sizing:border-box;margin:0;padding:0;}
+  html,body{font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-font-smoothing:antialiased;background:#1a1a1a;}
+  body{display:flex;justify-content:center;padding:0;}
+
+  .post{
+    width:1080px;height:1350px;background:var(--bg);
+    padding:28px 32px;display:flex;flex-direction:column;gap:16px;
+    position:relative;
+  }
+
+  .top-bar{display:flex;align-items:center;justify-content:space-between;padding:0 6px;}
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand-logo{
+    width:34px;height:34px;border-radius:9px;
+    background:linear-gradient(135deg,var(--accent),var(--primary));
+    color:white;font-weight:900;font-size:18px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .brand-name{font-weight:800;font-size:18px;color:var(--text);letter-spacing:-0.3px;}
+  .top-tag{
+    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2.5px;
+    color:var(--primary);background:var(--soft);padding:6px 12px;border-radius:999px;
+    border:1px solid var(--border);
+  }
+
+  /* ─── Bento grid ─── */
+  .bento{
+    display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(5,1fr);
+    gap:10px;flex:1;min-height:0;
+  }
+  .card{
+    background:var(--surface);border:1px solid var(--border);
+    border-radius:18px;padding:16px;position:relative;overflow:hidden;
+    display:flex;flex-direction:column;justify-content:space-between;
+  }
+  .card.span2{grid-column:span 2;}
+  .card.span2r{grid-row:span 2;}
+  .card.hero{grid-column:span 2;grid-row:span 2;}
+
+  .label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;}
+  .title{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-0.3px;line-height:1.2;}
+  .title.lg{font-size:22px;}
+  .title.xl{font-size:32px;line-height:1.05;letter-spacing:-1px;}
+
+  /* Variants */
+  .v-purple{background:linear-gradient(135deg,var(--primary),var(--accent));color:white;border:none;}
+  .v-purple .label{color:rgba(255,255,255,0.75);}
+  .v-purple .title{color:white;}
+  .v-dark{background:#0a0a0c;color:white;border:1px solid #1f1f24;}
+  .v-dark .label{color:rgba(255,255,255,0.5);}
+  .v-dark .title{color:white;}
+  .v-soft{background:var(--soft);}
+  .v-glow{
+    background:
+      radial-gradient(circle at 70% 30%,rgba(162,89,255,0.25),transparent 60%),
+      linear-gradient(135deg,#1a0d2e 0%,#0a0a14 100%);
+    color:white;border:1px solid rgba(162,89,255,0.2);
+  }
+  .v-glow .label{color:rgba(255,255,255,0.6);}
+  .v-glow .title{color:white;}
+
+  /* Hero */
+  .hero-card{
+    background:linear-gradient(135deg,#21093a 0%,#4e1e7a 50%,#7a3eae 100%);
+    color:white;border:none;align-items:center;justify-content:center;
+    padding:28px;text-align:center;
+  }
+  .hero-card::before{
+    content:'';position:absolute;inset:0;
+    background:radial-gradient(circle at 50% 35%,rgba(192,132,252,0.4) 0%,transparent 60%);
+  }
+  .hero-card .h-logo{
+    width:90px;height:90px;border-radius:22px;
+    background:linear-gradient(135deg,var(--accent),var(--primary));
+    color:white;font-weight:900;font-size:54px;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 20px 60px rgba(162,89,255,0.5);position:relative;z-index:2;
+    margin-bottom:14px;
+  }
+  .hero-card .h-name{
+    font-size:48px;font-weight:800;letter-spacing:-1.8px;color:white;position:relative;z-index:2;
+  }
+  .hero-card .h-tag{
+    font-size:14px;color:rgba(255,255,255,0.78);margin-top:8px;
+    font-weight:500;letter-spacing:0.3px;position:relative;z-index:2;
+  }
+
+  /* Mini KPIs preview */
+  .mini-kpi-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+  .mini-k{
+    background:var(--soft);border:1px solid var(--border);border-radius:8px;padding:8px 10px;
+  }
+  .mini-k .n{font-size:18px;font-weight:800;color:var(--primary);letter-spacing:-0.5px;line-height:1;}
+  .mini-k .l{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;margin-top:3px;font-weight:600;}
+
+  /* SQL preview */
+  .sql-prev{
+    background:#0a0a0e;color:#e4e4e7;border-radius:10px;padding:10px 12px;
+    font-family:'JetBrains Mono','SF Mono',monospace;font-size:10px;line-height:1.5;
+    margin-top:8px;
+  }
+  .sql-prev .kw{color:#c084fc;}
+  .sql-prev .fn{color:#7dd3fc;}
+  .sql-prev .tbl{color:#fbcfe8;}
+
+  /* Cohort heatmap */
+  .hm{display:grid;grid-template-columns:repeat(8,1fr);gap:2px;margin-top:8px;}
+  .hm-c{aspect-ratio:1;border-radius:2px;background:rgba(162,89,255,0.1);}
+
+  /* Sparkline */
+  .spark{width:100%;height:50px;margin-top:6px;}
+
+  /* Mobile mockup */
+  .phone{
+    margin:6px auto 0;width:54px;height:90px;background:#0a0a0e;
+    border-radius:12px;border:2px solid #2c2c34;padding:6px 4px;
+    display:flex;flex-direction:column;gap:3px;
+  }
+  .phone-bar{height:3px;background:rgba(162,89,255,0.4);border-radius:2px;}
+  .phone-bar.s{width:60%;}
+  .phone-bar.m{width:80%;}
+
+  /* Funnel mini */
+  .fn{display:flex;flex-direction:column;gap:3px;margin-top:8px;}
+  .fn div{
+    background:linear-gradient(90deg,var(--primary),var(--accent));
+    height:9px;border-radius:3px;
+  }
+  .fn .f1{width:100%;}
+  .fn .f2{width:78%;opacity:0.85;}
+  .fn .f3{width:60%;opacity:0.7;}
+
+  /* Brand chips */
+  .brand-chips{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;}
+  .bc{
+    background:var(--soft);border:1px solid var(--border);
+    border-radius:7px;padding:6px 4px;text-align:center;
+    font-size:9px;font-weight:700;color:var(--primary);
+    letter-spacing:1.2px;
+  }
+
+  /* Big icon */
+  .big-icon{
+    font-size:42px;line-height:1;margin-bottom:6px;
+  }
+
+  /* Pulse dot */
+  .live-dot{
+    width:8px;height:8px;border-radius:50%;background:var(--success);
+    box-shadow:0 0 0 4px rgba(37,211,102,0.2);display:inline-block;margin-right:6px;
+  }
+
+  /* Donut */
+  .donut-mini{width:60px;height:60px;margin:6px auto 0;}
+
+  /* Tabs/segmented */
+  .seg{
+    display:flex;gap:4px;margin-top:8px;
+    background:var(--soft);border-radius:8px;padding:3px;
+  }
+  .seg div{
+    flex:1;text-align:center;padding:5px;font-size:9px;font-weight:700;
+    color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;
+    border-radius:6px;
+  }
+  .seg .on{background:var(--surface);color:var(--primary);box-shadow:0 1px 3px rgba(0,0,0,0.06);}
+
+  /* Footer ribbon */
+  .footer-ribbon{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:0 6px;font-size:11px;color:var(--muted);font-weight:500;
+  }
+  .footer-ribbon strong{color:var(--text);font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="post">
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="brand">
+      <div class="brand-logo">U</div>
+      <div class="brand-name">UNIDATA</div>
+    </div>
+    <div class="top-tag">Nuevo · Disponible ahora</div>
+  </div>
+
+  <!-- Bento grid -->
+  <div class="bento">
+
+    <!-- Row 1 -->
+    <!-- (1) Dashboards count - tall featured -->
+    <div class="card v-purple span2r">
+      <div>
+        <div class="label">14 dashboards</div>
+        <div class="title xl" style="margin-top:8px;">Todo<br>el grupo<br>en vivo.</div>
+      </div>
+      <div class="mini-kpi-grid">
+        <div class="mini-k" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);"><div class="n" style="color:white;">$8.4M</div><div class="l" style="color:rgba(255,255,255,0.7);">Hoy</div></div>
+        <div class="mini-k" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.2);"><div class="n" style="color:white;">▲18%</div><div class="l" style="color:rgba(255,255,255,0.7);">vs ayer</div></div>
+      </div>
+    </div>
+
+    <!-- (2) KPI cards -->
+    <div class="card">
+      <div class="label">KPIs</div>
+      <div class="title">Hoy vs 7d / 30d / 1 año</div>
+      <svg class="spark" viewBox="0 0 80 30" preserveAspectRatio="none">
+        <path fill="rgba(162,89,255,0.2)" d="M0,22 L10,18 L20,20 L30,12 L40,14 L50,8 L60,10 L70,4 L80,6 L80,30 L0,30 Z"/>
+        <path stroke="#a259ff" stroke-width="1.5" fill="none" d="M0,22 L10,18 L20,20 L30,12 L40,14 L50,8 L60,10 L70,4 L80,6"/>
+      </svg>
+    </div>
+
+    <!-- (3) SQL libre - wide -->
+    <div class="card v-dark span2">
+      <div>
+        <div class="label">SQL libre</div>
+        <div class="title">Tu pregunta. Tu respuesta.</div>
+      </div>
+      <div class="sql-prev">
+<span class="kw">SELECT</span> sku, <span class="fn">SUM</span>(qty) <span class="kw">AS</span> u<br>
+<span class="kw">FROM</span> <span class="tbl">orders</span> <span class="kw">JOIN</span> <span class="tbl">items</span><br>
+<span class="kw">WHERE</span> paid_at &gt; <span class="kw">NOW</span>()-7;
+      </div>
+    </div>
+
+    <!-- (4) Mobile -->
+    <div class="card v-soft">
+      <div class="label">Mobile-first</div>
+      <div class="title">Sin VPN.<br>Sin instalar.</div>
+      <div class="phone">
+        <div class="phone-bar"></div>
+        <div class="phone-bar m"></div>
+        <div class="phone-bar s"></div>
+        <div class="phone-bar"></div>
+        <div class="phone-bar m"></div>
+      </div>
+    </div>
+
+    <!-- Row 2 -->
+    <!-- (5) Roles -->
+    <div class="card">
+      <div class="big-icon">🔒</div>
+      <div class="title">Roles<br>separados</div>
+      <div class="label" style="margin-top:4px;">Unistore · Unidrop</div>
+    </div>
+
+    <!-- (6) HERO center -->
+    <div class="card hero hero-card">
+      <div class="h-logo">U</div>
+      <div class="h-name">UNIDATA</div>
+      <div class="h-tag">Nuestra plataforma de datos</div>
+    </div>
+
+    <!-- (7) Datos en vivo -->
+    <div class="card v-glow">
+      <div class="label"><span class="live-dot"></span>En vivo</div>
+      <div class="title" style="margin-top:8px;">Túnel SSH<br>cifrado a prod</div>
+    </div>
+
+    <!-- Row 3 -->
+    <!-- (8) Audit -->
+    <div class="card">
+      <div class="big-icon">🛡️</div>
+      <div class="title">Audit log</div>
+      <div class="label" style="margin-top:4px;">Cada query, registrada</div>
+    </div>
+
+    <!-- (9) Drilldown -->
+    <div class="card v-soft">
+      <div class="big-icon">🎯</div>
+      <div class="title">Drilldown</div>
+      <div class="label" style="margin-top:4px;">Click → detalle</div>
+    </div>
+
+    <!-- Row 4 -->
+    <!-- (10) Cohorts -->
+    <div class="card span2">
+      <div class="label">Cohorts retention</div>
+      <div class="title">Quién vuelve y quién no</div>
+      <div class="hm" id="hm">
+        <script>
+          (function(){
+            const hm=document.getElementById('hm');if(!hm)return;
+            const data=[100,72,58,49,42,38,35,32,100,68,54,46,40,36,33,30,100,75,61,52,45,40,37,34,100,70,57,48,42,38,35,32];
+            data.forEach(v=>{
+              const c=document.createElement('div');c.className='hm-c';
+              c.style.background=`rgba(162,89,255,${Math.max(0.1,v/100)})`;
+              hm.appendChild(c);
+            });
+          })();
+        </script>
+      </div>
+    </div>
+
+    <!-- (11) Multi-canal -->
+    <div class="card">
+      <div class="label">Multi-canal</div>
+      <div class="title">TN · MELI<br>Drop · TaloPay</div>
+      <div class="seg">
+        <div class="on">TN</div><div>ML</div><div>DRP</div>
+      </div>
+    </div>
+
+    <!-- (12) Funnel -->
+    <div class="card">
+      <div class="label">Funnel logístico</div>
+      <div class="title">Sin sorpresas</div>
+      <div class="fn">
+        <div class="f1"></div><div class="f2"></div><div class="f3"></div>
+      </div>
+    </div>
+
+    <!-- Row 5 -->
+    <!-- (13) Brands -->
+    <div class="card v-soft">
+      <div class="label">Todo el grupo</div>
+      <div class="title">4 unidades<br>1 plataforma</div>
+      <div class="brand-chips">
+        <div class="bc">UNISTORE</div><div class="bc">UNIDROP</div>
+        <div class="bc">UNIDEV</div><div class="bc">UNIFULL</div>
+      </div>
+    </div>
+
+    <!-- (14) Storytelling -->
+    <div class="card v-purple">
+      <div class="label">Hub central</div>
+      <div class="title">Así viene<br>el día.</div>
+    </div>
+
+    <!-- (15) Búsqueda SKU -->
+    <div class="card">
+      <div class="big-icon">📦</div>
+      <div class="title">Búsqueda<br>por SKU</div>
+      <div class="label" style="margin-top:4px;">Con barcode scanner</div>
+    </div>
+
+    <!-- (16) Customer 360 -->
+    <div class="card">
+      <div class="big-icon">🤝</div>
+      <div class="title">Customer 360</div>
+      <div class="label" style="margin-top:4px;">Salud · NPS · LTV</div>
+    </div>
+
+    <!-- (17) Export PDF -->
+    <div class="card v-dark">
+      <div class="label">Reportes</div>
+      <div class="title">Exportás PDF<br>al toque.</div>
+    </div>
+
+  </div>
+
+  <!-- Footer -->
+  <div class="footer-ribbon">
+    <div><strong>Pedí tu acceso →</strong> al canal interno</div>
+    <div>Hecha por nosotros · para nosotros</div>
+  </div>
+
+</div>
+
+</body>
+</html>

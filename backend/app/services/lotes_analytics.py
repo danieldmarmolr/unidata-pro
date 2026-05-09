@@ -20,6 +20,8 @@ Metodologia:
 from __future__ import annotations
 
 import datetime as dt
+
+from app.utils.tz import today_ar, now_ar
 import logging
 
 from sqlalchemy import text
@@ -166,7 +168,7 @@ def _get_sales_by_sku_in_period(skus: list[str], from_date: dt.date | None, to_d
     params = {
         "skus": skus_clean,
         "from_date": from_date,
-        "to_date": to_date or dt.date.today(),
+        "to_date": to_date or today_ar(),
     }
     date_filter_tn = ""
     date_filter_ml = ""
@@ -281,7 +283,7 @@ def _build_sku_period_map(lotes: list[dict]) -> dict[tuple[str, int], tuple[dt.d
             sku_lotes.setdefault(sku, []).append((fi, lote["lote_id"]))
 
     # 2. Para cada SKU, ordenar por fecha y armar tuplas (start, end)
-    today = dt.date.today()
+    today = today_ar()
     period_map: dict[tuple[str, int], tuple[dt.date | None, dt.date | None]] = {}
     for sku, dates in sku_lotes.items():
         dates.sort(key=lambda x: x[0])
@@ -399,7 +401,7 @@ def _calc_estado(consumo_pct: float, fecha_ingreso: str | None) -> str:
     fi = _parse_date(fecha_ingreso)
     if not fi:
         return "sin_fecha"
-    days = (dt.date.today() - fi).days
+    days = (today_ar() - fi).days
     if days <= 0:
         return "nuevo"
     expected_at_days = (days / 180) * 100  # se "espera" 100% consumido en 6 meses
@@ -436,7 +438,7 @@ def lotes_overview(filters: dict | None = None) -> dict:
             },
             "lotes": [],
             "filters_available": _get_filters_available(),
-            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "generated_at": now_ar().isoformat(),
         }
 
     # Build period_map para atribuir ventas al lote correcto
@@ -510,7 +512,7 @@ def lotes_overview(filters: dict | None = None) -> dict:
         "totals": totals,
         "lotes": lotes_summary,
         "filters_available": _get_filters_available(),
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": now_ar().isoformat(),
     }
 
 

@@ -10,6 +10,8 @@ Cada blurb incluye un `link` opcional para que el frontend lo haga clickable:
 from __future__ import annotations
 
 import datetime as dt
+
+from app.utils.tz import today_ar, now_ar
 import logging
 from urllib.parse import quote
 
@@ -45,7 +47,7 @@ def today_story() -> dict:
     uni = get_engine("unistore")
     drop = get_engine("unidrop")
 
-    today_date = dt.date.today()
+    today_date = today_ar()
     today_iso = today_date.isoformat()
 
     # ============================================================
@@ -374,5 +376,5 @@ def today_story() -> dict:
     return {
         "today_date": today_iso,
         "blurbs": blurbs,
-        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "generated_at": now_ar().isoformat(),
     }
