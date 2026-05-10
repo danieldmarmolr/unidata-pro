@@ -14,7 +14,12 @@ import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-type Tab = "abc" | "matrix" | "rotation" | "stockout" | "cross-sell" | "trends" | "returns";
+type Tab =
+  | "abc" | "matrix" | "abc-margen"
+  | "rotation" | "stockout" | "simulator"
+  | "cross-sell" | "affinity" | "cannibalization"
+  | "trends" | "lifecycle" | "elasticity" | "returns"
+  | "forecast";
 
 export default function ProductAnalyticsPage() {
   const period = useGlobalFilters((s) => s.period);
@@ -27,39 +32,123 @@ export default function ProductAnalyticsPage() {
     <>
       <Topbar
         title="Producto · Análisis avanzado"
-        subtitle="ABC · ABC×XYZ · Rotación · Stockout · Cross-sell · Tendencias · Devoluciones"
+        subtitle="14 análisis · Performance · Stock · Behavior · Forecast · Quality"
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
-        <DashboardHeader
-          generatedAt={undefined}
-          isFetching={false}
-          filters={
-            <Segmented<Tab>
-              value={tab}
-              onChange={setTab}
-              options={[
-                { value: "abc", label: "ABC" },
-                { value: "matrix", label: "ABC×XYZ" },
-                { value: "rotation", label: "Rotación" },
-                { value: "stockout", label: "Stockout" },
-                { value: "cross-sell", label: "Cross-sell" },
-                { value: "trends", label: "Tendencias" },
-                { value: "returns", label: "Devoluciones" },
-              ]}
-            />
-          }
-        />
+        {/* Navigation: agrupada en 5 categorias */}
+        <div className="mb-4 space-y-2">
+          <TabGroup
+            label="🎯 Performance"
+            color="from-emerald-50 to-teal-50"
+            tabs={[
+              { value: "abc", label: "ABC (Pareto)" },
+              { value: "abc-margen", label: "ABC por margen" },
+              { value: "matrix", label: "ABC × XYZ" },
+            ]}
+            current={tab}
+            onChange={setTab}
+          />
+          <TabGroup
+            label="📦 Stock & Rotación"
+            color="from-blue-50 to-cyan-50"
+            tabs={[
+              { value: "rotation", label: "Rotación (DoI)" },
+              { value: "stockout", label: "Stockout risk" },
+              { value: "simulator", label: "Simulador stockout" },
+            ]}
+            current={tab}
+            onChange={setTab}
+          />
+          <TabGroup
+            label="🤝 Behavior / Cross-sell"
+            color="from-cyan-50 to-sky-50"
+            tabs={[
+              { value: "cross-sell", label: "Cross-sell pairs" },
+              { value: "affinity", label: "Affinity (lift)" },
+              { value: "cannibalization", label: "Canibalización" },
+            ]}
+            current={tab}
+            onChange={setTab}
+          />
+          <TabGroup
+            label="📈 Tendencias & Forecast"
+            color="from-violet-50 to-purple-50"
+            tabs={[
+              { value: "trends", label: "Tendencias 30d" },
+              { value: "lifecycle", label: "Lifecycle" },
+              { value: "elasticity", label: "Elasticidad-precio" },
+              { value: "forecast", label: "Forecast por SKU" },
+            ]}
+            current={tab}
+            onChange={setTab}
+          />
+          <TabGroup
+            label="🛡️ Quality"
+            color="from-rose-50 to-pink-50"
+            tabs={[
+              { value: "returns", label: "Returns rate" },
+            ]}
+            current={tab}
+            onChange={setTab}
+          />
+        </div>
 
         {tab === "abc" && <AbcSection qs={_qs} />}
+        {tab === "abc-margen" && <AbcMargenSection qs={_qs} />}
         {tab === "matrix" && <AbcXyzSection qs={_qs} />}
         {tab === "rotation" && <RotationSection />}
         {tab === "stockout" && <StockoutSection />}
+        {tab === "simulator" && <SimulatorSection />}
         {tab === "cross-sell" && <CrossSellSection qs={_qs} />}
+        {tab === "affinity" && <AffinitySection />}
+        {tab === "cannibalization" && <CannibalizationSection />}
         {tab === "trends" && <TrendsSection />}
+        {tab === "lifecycle" && <LifecycleSection />}
+        {tab === "elasticity" && <ElasticitySection />}
+        {tab === "forecast" && <ForecastSection />}
         {tab === "returns" && <ReturnsSection />}
       </div>
     </>
+  );
+}
+
+// ============================================================
+// TabGroup component - grupo de tabs por categoria
+// ============================================================
+function TabGroup({
+  label,
+  color,
+  tabs,
+  current,
+  onChange,
+}: {
+  label: string;
+  color: string;
+  tabs: { value: Tab; label: string }[];
+  current: Tab;
+  onChange: (t: Tab) => void;
+}) {
+  return (
+    <div className={`bg-gradient-to-r ${color} border border-border rounded-lg px-3 py-2 flex items-center gap-2 flex-wrap`}>
+      <span className="text-[10px] font-bold uppercase tracking-wider text-text-muted whitespace-nowrap">{label}</span>
+      <div className="flex gap-1 flex-wrap">
+        {tabs.map((t) => (
+          <button
+            key={t.value}
+            onClick={() => onChange(t.value)}
+            className={
+              "px-3 py-1 text-xs rounded-md transition whitespace-nowrap " +
+              (current === t.value
+                ? "bg-primary text-white shadow"
+                : "bg-white/80 text-text hover:bg-white border border-border/60")
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -646,6 +735,509 @@ function ReturnsSection() {
           </table>
         </div>
       </div>
+    </>
+  );
+}
+
+// ============================================================
+// ABC por Margen
+// ============================================================
+function AbcMargenSection({ qs }: { qs: string }) {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-abc-margen", qs],
+    queryFn: () => api(`/api/dashboards/products/abc-margen?${qs}`),
+    staleTime: 60_000,
+  });
+  if (isLoading || !data) return <SectionLoader />;
+  return (
+    <>
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-900">
+        <strong>⚠️ {data.warning}</strong>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        {(["A", "B", "C"] as const).map((c) => (
+          <div key={c} className="bg-surface border-2 rounded-xl p-4" style={{ borderColor: c === "A" ? "#10b981" : c === "B" ? "#f59e0b" : "#94a3b8" }}>
+            <div className="text-xs uppercase tracking-wider font-bold text-text-muted">Clase {c} · Margen</div>
+            <div className="text-3xl font-extrabold text-text tabular-nums mt-1">{formatNumber(data.classes[c].count)}</div>
+            <div className="text-[11px] text-text-muted">SKUs · margen total {formatCurrency(data.classes[c].margen)} ({data.classes[c].pct_margen}%)</div>
+          </div>
+        ))}
+      </div>
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+              <tr>
+                <th className="text-right px-3 py-2">#</th>
+                <th className="text-left px-3 py-2">SKU / Producto</th>
+                <th className="text-right px-3 py-2">Revenue</th>
+                <th className="text-right px-3 py-2">Costo est.</th>
+                <th className="text-right px-3 py-2">Margen est.</th>
+                <th className="text-right px-3 py-2">Margen %</th>
+                <th className="text-left px-3 py-2">Clase</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.skus.slice(0, 500).map((s: any) => (
+                <tr key={s.sku} className="border-t border-border hover:bg-soft/40">
+                  <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{s.rank_margen}</td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(s.sku)}`} className="text-primary hover:underline">{s.nombre}</Link>
+                    <div className="text-[10px] text-text-muted/70 font-mono">{s.sku}</div>
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(s.revenue)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{formatCurrency(s.costo_estimado)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums font-bold text-emerald-700">{formatCurrency(s.margen_estimado)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{s.margen_pct}%</td>
+                  <td className="px-3 py-1.5"><span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold text-white" style={{ backgroundColor: s.clase_margen === "A" ? "#10b981" : s.clase_margen === "B" ? "#f59e0b" : "#94a3b8" }}>{s.clase_margen}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// Simulator Stockout
+// ============================================================
+function SimulatorSection() {
+  const [change, setChange] = useState(50);
+  const [days, setDays] = useState(30);
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-simulator", change, days],
+    queryFn: () => api(`/api/dashboards/products/stockout-simulator?demand_change_pct=${change}&days_to_simulate=${days}`),
+    staleTime: 60_000,
+  });
+  return (
+    <>
+      <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-4">
+        <div className="text-sm font-bold text-violet-900 mb-2">🎲 ¿Qué pasaría si...?</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+          <label className="block">
+            <span className="text-text-muted font-semibold">Cambio de demanda</span>
+            <div className="flex items-center gap-2 mt-1">
+              <input
+                type="range" min="-50" max="200" step="10" value={change}
+                onChange={(e) => setChange(Number(e.target.value))}
+                className="flex-1"
+              />
+              <span className={"font-extrabold tabular-nums w-12 text-right " + (change > 0 ? "text-emerald-700" : change < 0 ? "text-rose-700" : "text-text-muted")}>
+                {change >= 0 ? "+" : ""}{change}%
+              </span>
+            </div>
+            <div className="text-[10px] text-text-muted/70 mt-0.5">
+              {change > 0 ? "📈 Simulando promo/black-friday" : change < 0 ? "📉 Simulando caida estacional" : "Sin cambio (baseline)"}
+            </div>
+          </label>
+          <label className="block">
+            <span className="text-text-muted font-semibold">Horizonte (días)</span>
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="mt-1 w-full px-3 py-1.5 border border-border rounded text-sm">
+              <option value={7}>7 días</option>
+              <option value={14}>14 días</option>
+              <option value={30}>30 días</option>
+              <option value={60}>60 días</option>
+              <option value={90}>90 días</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      {isLoading || !data ? <SectionLoader /> : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+            <div className="bg-surface border-2 border-rose-300 rounded-xl p-4">
+              <div className="text-xs uppercase tracking-wider font-bold text-rose-700">SKUs en stockout</div>
+              <div className="text-3xl font-extrabold text-text mt-1">{formatNumber(data.skus_stockout)}</div>
+              <div className="text-[11px] text-text-muted mt-1">de {formatNumber(data.total_skus)} con stock</div>
+            </div>
+            <div className="bg-surface border-2 border-amber-300 rounded-xl p-4">
+              <div className="text-xs uppercase tracking-wider font-bold text-amber-700">Déficit total</div>
+              <div className="text-3xl font-extrabold text-text mt-1">{formatNumber(data.deficit_total_unidades)}</div>
+              <div className="text-[11px] text-text-muted mt-1">unidades a reponer</div>
+            </div>
+            <div className="bg-surface border-2 border-violet-300 rounded-xl p-4">
+              <div className="text-xs uppercase tracking-wider font-bold text-violet-700">Escenario</div>
+              <div className="text-3xl font-extrabold text-text mt-1">{data.demand_change_pct >= 0 ? "+" : ""}{data.demand_change_pct}%</div>
+              <div className="text-[11px] text-text-muted mt-1">demanda en {data.days_to_simulate}d</div>
+            </div>
+          </div>
+          <div className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">SKU</th>
+                    <th className="text-right px-3 py-2">Stock</th>
+                    <th className="text-right px-3 py-2">Ventas/día actual</th>
+                    <th className="text-right px-3 py-2">Ventas/día simulado</th>
+                    <th className="text-right px-3 py-2">Días que dura</th>
+                    <th className="text-right px-3 py-2">Déficit (u)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.skus_at_risk.map((s: any) => (
+                    <tr key={s.sku} className="border-t border-border hover:bg-soft/40">
+                      <td className="px-3 py-1.5">
+                        <Link href={`/dashboard/productos/${encodeURIComponent(s.sku)}`} className="text-primary hover:underline">{s.nombre}</Link>
+                        <div className="text-[10px] text-text-muted/70 font-mono">{s.sku}</div>
+                      </td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{formatNumber(s.stock_actual)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{s.ventas_dia_avg_actual}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{s.ventas_dia_simulado}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-rose-700">{s.days_left_simulado}d</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-bold text-amber-700">{formatNumber(s.deficit_unidades)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+// ============================================================
+// Affinity (lift + confidence)
+// ============================================================
+function AffinitySection() {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-affinity"],
+    queryFn: () => api(`/api/dashboards/products/affinity?period_days=90&top_n=50`),
+    staleTime: 60_000,
+  });
+  if (isLoading || !data) return <SectionLoader />;
+  return (
+    <>
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 text-xs text-emerald-900">
+        <strong>Lift &gt; 1</strong> = asociación real (no es azar). <strong>Confidence A→B</strong> = % de clientes que compran A y también compran B. Ordenado por lift descendente — los mejores pares al tope.
+      </div>
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+              <tr>
+                <th className="text-right px-3 py-2">#</th>
+                <th className="text-left px-3 py-2">Producto A</th>
+                <th className="text-left px-3 py-2">Producto B</th>
+                <th className="text-right px-3 py-2">Co-oc</th>
+                <th className="text-right px-3 py-2">Lift</th>
+                <th className="text-right px-3 py-2">Conf A→B</th>
+                <th className="text-right px-3 py-2">Conf B→A</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.pairs.map((p: any, i: number) => (
+                <tr key={`${p.sku_a}-${p.sku_b}`} className="border-t border-border hover:bg-soft/40">
+                  <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{i + 1}</td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(p.sku_a)}`} className="text-primary hover:underline">{p.name_a}</Link>
+                    <div className="text-[10px] text-text-muted/70 font-mono">{p.sku_a}</div>
+                  </td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(p.sku_b)}`} className="text-primary hover:underline">{p.name_b}</Link>
+                    <div className="text-[10px] text-text-muted/70 font-mono">{p.sku_b}</div>
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{p.co_oc}</td>
+                  <td className={"px-3 py-1.5 text-right tabular-nums font-bold " + (p.lift > 3 ? "text-emerald-700" : p.lift > 1.5 ? "text-emerald-600" : "text-text")}>{p.lift}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{p.confidence_ab_pct}%</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{p.confidence_ba_pct}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// Cannibalization
+// ============================================================
+function CannibalizationSection() {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-cannibalization"],
+    queryFn: () => api(`/api/dashboards/products/cannibalization`),
+    staleTime: 60_000,
+  });
+  if (isLoading || !data) return <SectionLoader />;
+  return (
+    <>
+      <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-4 text-xs text-rose-900">
+        <strong>Canibalización:</strong> mismo cliente <em>aumenta</em> compras del SKU A y <em>reduce</em> compras del SKU B. Indica sustitución entre productos del mismo cliente. Útil para detectar nuevos productos que matan a los viejos.
+      </div>
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+              <tr>
+                <th className="text-right px-3 py-2">#</th>
+                <th className="text-left px-3 py-2">SKU que gana ↑</th>
+                <th className="text-left px-3 py-2">SKU que pierde ↓</th>
+                <th className="text-right px-3 py-2">Clientes</th>
+                <th className="text-right px-3 py-2">Unidades sustituidas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.pairs.map((p: any, i: number) => (
+                <tr key={`${p.sku_gain}-${p.sku_loss}`} className="border-t border-border hover:bg-soft/40">
+                  <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{i + 1}</td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(p.sku_gain)}`} className="text-emerald-700 hover:underline font-medium">{p.name_gain}</Link>
+                    <div className="text-[10px] text-text-muted/70 font-mono">{p.sku_gain}</div>
+                  </td>
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(p.sku_loss)}`} className="text-rose-700 hover:underline font-medium">{p.name_loss}</Link>
+                    <div className="text-[10px] text-text-muted/70 font-mono">{p.sku_loss}</div>
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums font-bold">{p.clientes}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{p.unidades_sustituidas}</td>
+                </tr>
+              ))}
+              {data.pairs.length === 0 && (
+                <tr><td colSpan={5} className="text-center py-8 text-text-muted">Sin canibalizaciones detectadas en el período</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+function LifecycleSection() {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-lifecycle"],
+    queryFn: () => api(`/api/dashboards/products/lifecycle`),
+    staleTime: 60_000,
+  });
+  if (isLoading || !data) return <SectionLoader />;
+  const stages = ["nuevo", "growth", "maduro", "declive", "dormido"];
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+        {stages.map((k) => (
+          <div key={k} className="bg-surface border-2 rounded-xl p-4" style={{ borderColor: data.stages[k].color }}>
+            <div className="text-xs uppercase tracking-wider font-bold" style={{ color: data.stages[k].color }}>{data.stages[k].label}</div>
+            <div className="text-2xl font-extrabold text-text mt-1 tabular-nums">{formatNumber(data.stages[k].count)}</div>
+            <div className="text-[10px] text-text-muted mt-1 line-clamp-2">{data.stages[k].desc}</div>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        {stages.map((k) => (
+          <div key={k} className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-border" style={{ background: `linear-gradient(to right, ${data.stages[k].color}15, transparent)` }}>
+              <h3 className="text-sm font-bold" style={{ color: data.stages[k].color }}>{data.stages[k].label}</h3>
+              <p className="text-[10px] text-text-muted">{data.stages[k].count} SKUs · top 50 por revenue 30d</p>
+            </div>
+            <div className="max-h-[400px] overflow-y-auto">
+              {data.stages[k].skus.length === 0 && <div className="p-4 text-xs text-text-muted text-center">Sin SKUs</div>}
+              {data.stages[k].skus.map((s: any) => (
+                <div key={s.sku} className="px-4 py-2 border-b border-border last:border-0 hover:bg-soft/40">
+                  <Link href={`/dashboard/productos/${encodeURIComponent(s.sku)}`} className="text-xs text-primary hover:underline font-medium block truncate">{s.nombre}</Link>
+                  <div className="flex items-center gap-2 mt-1 text-[10px]">
+                    <span className="font-bold">{formatCurrency(s.rev_30d)}</span>
+                    {s.growth_pct !== null && <span className={s.growth_pct >= 0 ? "text-emerald-700 font-bold" : "text-rose-700 font-bold"}>{s.growth_pct >= 0 ? "+" : ""}{s.growth_pct}%</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// Price Elasticity
+// ============================================================
+function ElasticitySection() {
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-elasticity"],
+    queryFn: () => api(`/api/dashboards/products/price-elasticity`),
+    staleTime: 60_000,
+  });
+  const [filter, setFilter] = useState<"all" | "elastica" | "inelastica" | "anomala">("all");
+  if (isLoading || !data) return <SectionLoader />;
+
+  const visible = filter === "all" ? data.skus : data.skus.filter((s: any) => s.kind === filter);
+
+  return (
+    <>
+      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4 text-xs text-blue-900">
+        <strong>Elasticidad-precio:</strong> -1 significa que si subís el precio 10% bajan las ventas 10%. Valores &lt;-1 son <strong>elásticos</strong> (sensibles al precio). Entre 0 y -1 son <strong>inelásticos</strong> (podés subir precio sin perder mucho volumen).
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        {(["elastica", "inelastica", "anomala"] as const).map((k) => (
+          <button
+            key={k}
+            onClick={() => setFilter(filter === k ? "all" : k)}
+            className={"bg-surface border-2 rounded-xl p-4 text-left transition hover:shadow-lg " + (filter === k ? "ring-2 ring-primary" : "")}
+            style={{ borderColor: data.kinds[k].color }}
+          >
+            <div className="text-xs uppercase tracking-wider font-bold" style={{ color: data.kinds[k].color }}>{data.kinds[k].label}</div>
+            <div className="text-2xl font-extrabold text-text mt-1 tabular-nums">{formatNumber(data.skus.filter((s: any) => s.kind === k).length)}</div>
+            <div className="text-[10px] text-text-muted mt-1">{data.kinds[k].desc}</div>
+          </button>
+        ))}
+      </div>
+      <div className="bg-surface border border-border rounded-xl overflow-hidden">
+        <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+              <tr>
+                <th className="text-left px-3 py-2">SKU</th>
+                <th className="text-right px-3 py-2">Elasticidad</th>
+                <th className="text-left px-3 py-2">Tipo</th>
+                <th className="text-right px-3 py-2">Precio avg</th>
+                <th className="text-right px-3 py-2">Unidades/mes avg</th>
+                <th className="text-right px-3 py-2">Puntos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((s: any) => (
+                <tr key={s.sku} className="border-t border-border hover:bg-soft/40">
+                  <td className="px-3 py-1.5">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(s.sku)}`} className="text-primary hover:underline font-mono">{s.sku}</Link>
+                  </td>
+                  <td className={"px-3 py-1.5 text-right tabular-nums font-bold " + (s.kind === "elastica" ? "text-rose-700" : s.kind === "inelastica" ? "text-emerald-700" : "text-text-muted")}>{s.elasticity}</td>
+                  <td className="px-3 py-1.5"><span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold text-white" style={{ backgroundColor: data.kinds[s.kind].color }}>{s.kind}</span></td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(s.precio_avg)}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{s.unidades_avg}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-text-muted">{s.data_points}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
+// Forecast por SKU
+// ============================================================
+function ForecastSection() {
+  const [sku, setSku] = useState<string>("");
+  const [submittedSku, setSubmittedSku] = useState<string>("");
+  const [daysHistory, setDaysHistory] = useState(90);
+  const [daysAhead, setDaysAhead] = useState(30);
+  const { data, isLoading } = useQuery<any>({
+    queryKey: ["product-forecast", submittedSku, daysHistory, daysAhead],
+    queryFn: () => api(`/api/dashboards/products/forecast/${encodeURIComponent(submittedSku)}?days_history=${daysHistory}&days_ahead=${daysAhead}`),
+    staleTime: 60_000,
+    enabled: !!submittedSku,
+  });
+  return (
+    <>
+      <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-4">
+        <div className="text-sm font-bold text-violet-900 mb-2">🔮 Forecast por SKU</div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
+          <div className="md:col-span-2">
+            <label className="text-text-muted font-semibold">SKU a forecastear</label>
+            <input
+              type="text"
+              value={sku}
+              onChange={(e) => setSku(e.target.value.toUpperCase())}
+              placeholder="Ej: SW7EN1"
+              onKeyDown={(e) => e.key === "Enter" && setSubmittedSku(sku.trim())}
+              className="mt-1 w-full px-3 py-1.5 border border-border rounded text-sm font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-text-muted font-semibold">Historia (días)</label>
+            <select value={daysHistory} onChange={(e) => setDaysHistory(Number(e.target.value))} className="mt-1 w-full px-3 py-1.5 border border-border rounded text-sm">
+              <option value={30}>30</option>
+              <option value={60}>60</option>
+              <option value={90}>90</option>
+              <option value={180}>180</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-text-muted font-semibold">Forecast (días)</label>
+            <select value={daysAhead} onChange={(e) => setDaysAhead(Number(e.target.value))} className="mt-1 w-full px-3 py-1.5 border border-border rounded text-sm">
+              <option value={7}>7</option>
+              <option value={14}>14</option>
+              <option value={30}>30</option>
+              <option value={60}>60</option>
+              <option value={90}>90</option>
+            </select>
+          </div>
+        </div>
+        <button
+          onClick={() => setSubmittedSku(sku.trim())}
+          disabled={!sku}
+          className="mt-3 px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-accent text-white font-semibold text-sm shadow disabled:opacity-50"
+        >
+          Generar forecast
+        </button>
+      </div>
+
+      {!submittedSku && <div className="text-text-muted text-sm text-center py-12">Ingresá un SKU y dale "Generar forecast"</div>}
+      {submittedSku && (isLoading ? <SectionLoader /> : data?.error ? (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 text-rose-700 text-sm">{data.error}</div>
+      ) : data && (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+            <div className="bg-surface border border-border rounded-xl p-4">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Tendencia</div>
+              <div className="text-xl font-extrabold text-text mt-1 capitalize">{data.trend}</div>
+              <div className="text-[10px] text-text-muted">Slope: {data.slope}</div>
+            </div>
+            <div className="bg-surface border border-border rounded-xl p-4">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Promedio histórico</div>
+              <div className="text-xl font-extrabold text-text mt-1 tabular-nums">{data.avg_units_history} u/día</div>
+            </div>
+            <div className="bg-surface border-2 border-emerald-300 rounded-xl p-4">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold">Predicción {daysAhead}d</div>
+              <div className="text-xl font-extrabold text-text mt-1 tabular-nums">{formatNumber(data.predicted_total_period)} unidades</div>
+            </div>
+            <div className="bg-surface border border-border rounded-xl p-4">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Modelo</div>
+              <div className="text-sm font-extrabold text-text mt-1">Linear + Exp Smoothing</div>
+              <div className="text-[10px] text-text-muted">Ensemble promedio</div>
+            </div>
+          </div>
+
+          {/* Series visualization: barras simples */}
+          <div className="bg-surface border border-border rounded-xl p-4 overflow-x-auto">
+            <h3 className="text-sm font-bold text-text mb-3">Historia + Forecast — {data.sku}</h3>
+            <div className="flex gap-0.5 items-end" style={{ minHeight: 160 }}>
+              {[...data.history.map((h: any) => ({ ...h, isForecast: false })), ...data.forecast.map((f: any) => ({ ...f, units: f.units_pred, isForecast: true }))].map((p: any, i: number) => {
+                const maxV = Math.max(...data.history.map((h: any) => h.units), ...data.forecast.map((f: any) => f.units_pred), 1);
+                const h = (p.units / maxV) * 140;
+                return (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end" title={`${p.dia}: ${p.units}u${p.isForecast ? " (forecast)" : ""}`}>
+                    <div
+                      style={{
+                        height: Math.max(2, h),
+                        width: "100%",
+                        background: p.isForecast ? "rgba(122, 62, 174, 0.6)" : "rgba(122, 62, 174, 1)",
+                        borderRadius: "2px 2px 0 0",
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-4 mt-3 text-[10px] text-text-muted">
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm" style={{ background: "rgba(122,62,174,1)" }} /> Histórico</span>
+              <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm" style={{ background: "rgba(122,62,174,0.6)" }} /> Forecast</span>
+              <span>Total puntos: {data.history.length + data.forecast.length}</span>
+            </div>
+          </div>
+        </>
+      ))}
     </>
   );
 }

@@ -376,6 +376,76 @@ def get_products_returns_rate(
     return prod_analytics_svc.returns_rate_by_sku(period_days)
 
 
+@router.get("/products/abc-margen")
+def get_products_abc_margen(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """ABC pero por margen estimado (no solo revenue)."""
+    return prod_analytics_svc.abc_margin(period, from_iso, to_iso)
+
+
+@router.get("/products/lifecycle")
+def get_products_lifecycle(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=30, le=730)] = 180,
+) -> dict:
+    """Lifecycle stage por SKU: nuevo / growth / maduro / declive / dormido."""
+    return prod_analytics_svc.product_lifecycle(period_days)
+
+
+@router.get("/products/price-elasticity")
+def get_products_price_elasticity(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=60, le=730)] = 180,
+) -> dict:
+    """Elasticidad-precio por SKU usando regresion simple."""
+    return prod_analytics_svc.price_elasticity(period_days)
+
+
+@router.get("/products/cannibalization")
+def get_products_cannibalization(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=30, le=365)] = 90,
+) -> dict:
+    """Pares de SKUs donde uno sustituye al otro en mismos clientes."""
+    return prod_analytics_svc.cannibalization_pairs(period_days)
+
+
+@router.get("/products/forecast/{sku}")
+def get_products_forecast(
+    sku: str,
+    _: Annotated[str, Depends(current_user)],
+    days_history: Annotated[int, Query(ge=14, le=365)] = 90,
+    days_ahead: Annotated[int, Query(ge=7, le=180)] = 30,
+) -> dict:
+    """Forecast ventas proximos N dias por SKU (linear regression + exp smoothing)."""
+    return prod_analytics_svc.forecast_sku(sku, days_history, days_ahead)
+
+
+@router.get("/products/stockout-simulator")
+def get_products_stockout_sim(
+    _: Annotated[str, Depends(current_user)],
+    demand_change_pct: Annotated[float, Query(ge=-100, le=500)] = 0,
+    days_to_simulate: Annotated[int, Query(ge=7, le=180)] = 30,
+) -> dict:
+    """Simula stockouts si la demanda cambia X% en los proximos N dias."""
+    return prod_analytics_svc.stockout_simulator(demand_change_pct, days_to_simulate)
+
+
+@router.get("/products/affinity")
+def get_products_affinity(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=30, le=365)] = 90,
+    min_support: Annotated[int, Query(ge=2, le=50)] = 5,
+    top_n: Annotated[int, Query(ge=10, le=200)] = 50,
+) -> dict:
+    """Lift + confidence para pares de SKUs (mejor que co-ocurrencia simple)."""
+    return prod_analytics_svc.affinity_score_pairs(period_days, min_support, top_n)
+
+
 @router.get("/customers-vip")
 def get_customers_vip(
     _: Annotated[str, Depends(current_user)],
