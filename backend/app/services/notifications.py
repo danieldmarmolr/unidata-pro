@@ -151,7 +151,69 @@ def get_notifications() -> dict:
                 "count": n,
             })
 
-    # 6. Dropshippers con deuda Talo activa
+    # 6. VIP Gold inactivos > 60 dias (Unistore)
+    if uni:
+        n = _safe(lambda: int(scalar(uni, """
+            SELECT COUNT(*) FROM (
+                SELECT c.id,
+                       SUM(o.total)::float AS lifetime,
+                       EXTRACT(DAY FROM (NOW() - MAX(o."createdAt")))::int AS recency
+                FROM tienda_nube."Customer" c
+                INNER JOIN tienda_nube."Order" o ON o."customerId" = c.id
+                WHERE o."paymentStatus" = 'paid'
+                GROUP BY c.id
+                HAVING SUM(o.total) >= 5000000
+                  AND EXTRACT(DAY FROM (NOW() - MAX(o."createdAt"))) > 60
+            ) x
+        """) or 0))
+        if n > 0:
+            items.append({
+                "id": "vip_gold_inactive",
+                "severity": "error",
+                "icon": "alert",
+                "title": f"{n} VIP Gold inactivos >60d",
+                "body": "Clientes top tier sin comprar hace mas de 60 dias - retencion critica",
+                "href": "/dashboard/cs",
+                "drill": {
+                    "endpoint": "/api/dashboards/customers-vip?tier=gold",
+                    "title": "VIP Gold (revisar inactivos)",
+                    "filename": "vip_gold_inactivos.csv",
+                },
+                "count": n,
+            })
+
+    # 7. VIPs Silver+ inactivos > 90 dias
+    if uni:
+        n = _safe(lambda: int(scalar(uni, """
+            SELECT COUNT(*) FROM (
+                SELECT c.id,
+                       SUM(o.total)::float AS lifetime,
+                       EXTRACT(DAY FROM (NOW() - MAX(o."createdAt")))::int AS recency
+                FROM tienda_nube."Customer" c
+                INNER JOIN tienda_nube."Order" o ON o."customerId" = c.id
+                WHERE o."paymentStatus" = 'paid'
+                GROUP BY c.id
+                HAVING SUM(o.total) >= 1000000 AND SUM(o.total) < 5000000
+                  AND EXTRACT(DAY FROM (NOW() - MAX(o."createdAt"))) > 90
+            ) x
+        """) or 0))
+        if n > 0:
+            items.append({
+                "id": "vip_silver_inactive",
+                "severity": "warning",
+                "icon": "alert",
+                "title": f"{n} VIP Silver inactivos >90d",
+                "body": "Clientes premium sin comprar hace mas de 90 dias",
+                "href": "/dashboard/cs",
+                "drill": {
+                    "endpoint": "/api/dashboards/customers-vip?tier=silver",
+                    "title": "VIP Silver (revisar inactivos)",
+                    "filename": "vip_silver_inactivos.csv",
+                },
+                "count": n,
+            })
+
+    # 8. Dropshippers con deuda Talo activa
     if drop:
         n = _safe(lambda: int(scalar(drop, """
             SELECT COUNT(DISTINCT cpa."userId")

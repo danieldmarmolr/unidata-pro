@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building } from "lucide-react";
+import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building, Share2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
@@ -410,6 +410,54 @@ function downloadCsv(filename: string, columns: string[], rows: unknown[][]) {
   URL.revokeObjectURL(a.href);
 }
 
+/** Excel xlsx descargado: genera tabla HTML que Excel parsea como .xlsx.
+ * Mantiene estilos basicos (header violeta) sin requerir libreria xlsx. */
+function downloadXlsx(filename: string, columns: string[], rows: unknown[][]) {
+  const escape = (v: unknown) => {
+    if (v === null || v === undefined) return "";
+    return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  };
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+    xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
+    <head><meta charset="utf-8"></head>
+    <body>
+      <table border="1">
+        <thead>
+          <tr style="background:#7a3eae;color:white;font-weight:bold">
+            ${columns.map((c) => `<th>${escape(c)}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${rows
+            .map(
+              (r) => `<tr>${r.map((v) => `<td>${escape(v)}</td>`).join("")}</tr>`,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </body></html>`;
+  const blob = new Blob(["﻿" + html], {
+    type: "application/vnd.ms-excel;charset=utf-8",
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename.replace(/\.csv$/, "") + ".xls";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/** Copia al clipboard un link compartible que abre el drilldown en el explorer. */
+async function copyShareLink(endpoint: string, title: string, subtitle: string, filename: string) {
+  const params = new URLSearchParams({ endpoint, title, subtitle, filename });
+  const url = `${window.location.origin}/dashboard/explore?${params.toString()}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function DrillDownModal({
   title,
   subtitle,
@@ -519,12 +567,32 @@ export function DrillDownModal({
               <ExternalLink size={12} /> <span className="hidden sm:inline">Abrir</span>
             </button>
             {data && data.rows.length > 0 && (
-              <button
-                onClick={() => downloadCsv(filename, data.columns, data.rows)}
-                className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
-              >
-                <Download size={12} /> <span className="hidden sm:inline">CSV</span>
-              </button>
+              <>
+                <button
+                  onClick={() => downloadXlsx(filename, data.columns, data.rows)}
+                  className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition font-semibold"
+                  title="Descargar como Excel (xls)"
+                >
+                  <Download size={12} /> <span className="hidden sm:inline">Excel</span>
+                </button>
+                <button
+                  onClick={() => downloadCsv(filename, data.columns, data.rows)}
+                  className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
+                  title="Descargar como CSV"
+                >
+                  <Download size={12} /> <span className="hidden sm:inline">CSV</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    const ok = await copyShareLink(endpoint!, title, subtitle ?? "", filename);
+                    alert(ok ? "Link copiado al portapapeles" : "No pude copiar - tu navegador bloqueo el clipboard");
+                  }}
+                  className="inline-flex items-center gap-1 text-xs px-2 sm:px-2.5 py-1.5 rounded-lg border border-border hover:border-primary hover:text-primary transition"
+                  title="Copiar link para compartir esta vista con el equipo"
+                >
+                  <Share2 size={12} /> <span className="hidden lg:inline">Compartir</span>
+                </button>
+              </>
             )}
             <button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Cerrar">
               <X size={18} />

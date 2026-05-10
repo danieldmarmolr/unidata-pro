@@ -70,6 +70,9 @@ app.include_router(costs_api.router)
 from app.api import skus as skus_api
 app.include_router(skus_api.router)
 
+from app.api import exports as exports_api
+app.include_router(exports_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

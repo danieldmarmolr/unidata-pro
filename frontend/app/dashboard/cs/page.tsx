@@ -142,6 +142,9 @@ export default function CustomerSuccessPage() {
  </div>
  </div>
 
+ {/* VIP section (solo Unistore) */}
+ {unit === "unistore" && <VipCsSection onDrill={setCsDrill} />}
+
  {/* -aligned: estados cliente + RFM (solo Unistore) */}
  {unit === "unistore" && data && (
  <>
@@ -428,5 +431,74 @@ export default function CustomerSuccessPage() {
  )}
  <OrderDetailModal orderId={drillOrderId} onClose={() => setDrillOrderId(null)} />
  </>
+ );
+}
+
+// Seccion VIP en Customer Success con cards Gold/Silver/Bronze clickeables.
+function VipCsSection({
+ onDrill,
+}: {
+ onDrill: (d: { endpoint: string; title: string; subtitle: string; filename: string }) => void;
+}) {
+ const { data } = useQuery<{
+  total_vips: number;
+  tiers: {
+   gold: { count: number; lifetime_total: number };
+   silver: { count: number; lifetime_total: number };
+   bronze: { count: number; lifetime_total: number };
+  };
+  lifetime_total: number;
+ }>({
+  queryKey: ["vip-overview"],
+  queryFn: () => api("/api/dashboards/customers-vip/overview"),
+  staleTime: 5 * 60_000,
+ });
+ if (!data || data.total_vips === 0) return null;
+ const cards = [
+  { tier: "all", label: "Total VIPs", count: data.total_vips, lifetime: data.lifetime_total, icon: "★", bg: "from-violet-500 to-fuchsia-600", border: "border-violet-300" },
+  { tier: "gold", label: "Gold", count: data.tiers.gold.count, lifetime: data.tiers.gold.lifetime_total, icon: "👑", bg: "from-yellow-400 to-amber-500", border: "border-amber-400" },
+  { tier: "silver", label: "Silver", count: data.tiers.silver.count, lifetime: data.tiers.silver.lifetime_total, icon: "💎", bg: "from-slate-400 to-zinc-500", border: "border-slate-400" },
+  { tier: "bronze", label: "Bronze", count: data.tiers.bronze.count, lifetime: data.tiers.bronze.lifetime_total, icon: "⭐", bg: "from-orange-400 to-amber-500", border: "border-amber-400" },
+ ];
+ return (
+  <div className="mb-6">
+   <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+    <div>
+     <h3 className="text-sm font-bold text-text">Clientes VIP — segmentar por tier</h3>
+     <p className="text-[11px] text-text-muted">Click cualquier card para abrir el listado completo · CSV/Excel exportable</p>
+    </div>
+    <a
+     href="/dashboard/exports?team=Marketing"
+     className="text-[11px] font-semibold text-primary hover:underline"
+    >
+     Ver en Centro de Exportaciones →
+    </a>
+   </div>
+   <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    {cards.map((c) => (
+     <button
+      key={c.tier}
+      onClick={() => onDrill({
+       endpoint: `/api/dashboards/customers-vip?tier=${c.tier}`,
+       title: c.tier === "all" ? "Todos los clientes VIP" : `Clientes VIP ${c.label}`,
+       subtitle: "Click un cliente para abrir su perfil 360 - exportable a Excel/CSV",
+       filename: `vip_${c.tier}.csv`,
+      })}
+      className={`bg-surface border-2 ${c.border} rounded-xl p-4 hover:shadow-lg transition text-left group`}
+     >
+      <div className="flex items-start justify-between mb-2">
+       <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{c.label}</div>
+       <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${c.bg} text-white flex items-center justify-center shadow-md text-base`}>
+        {c.icon}
+       </div>
+      </div>
+      <div className="text-2xl font-extrabold text-text tabular-nums">{c.count.toLocaleString("es-AR")}</div>
+      <div className="text-[10px] text-text-muted mt-0.5">
+       Lifetime: <span className="font-bold text-text">$ {(c.lifetime / 1_000_000).toFixed(1)}M</span>
+      </div>
+     </button>
+    ))}
+   </div>
+  </div>
  );
 }
