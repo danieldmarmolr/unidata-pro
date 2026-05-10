@@ -81,8 +81,9 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ONLY_GERENCIA,
     children: [
-      { label: "Vista general",       href: "/dashboard/productos", icon: ShoppingBag },
-      { label: "Costos importacion",  href: "/dashboard/costos",    icon: DollarSign  },
+      { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
+      { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
+      { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
     ],
   },
   { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL },

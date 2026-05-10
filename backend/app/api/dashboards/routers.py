@@ -304,6 +304,76 @@ from app.services import envios_unistore as envios_uni_svc
 from app.services import envios_meli_unidrop as envios_meli_svc
 from app.services import notifications as notif_svc
 from app.services import customer_vip as vip_svc
+from app.services import product_analytics as prod_analytics_svc
+
+
+@router.get("/products/abc")
+def get_products_abc(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Clasificacion ABC (Pareto 80/15/5) por revenue."""
+    return prod_analytics_svc.abc_analysis(period, from_iso, to_iso)
+
+
+@router.get("/products/abc-xyz")
+def get_products_abc_xyz(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Matriz ABC x XYZ (importancia x volatilidad) con accion sugerida por cuadrante."""
+    return prod_analytics_svc.abc_xyz_matrix(period, from_iso, to_iso)
+
+
+@router.get("/products/rotation")
+def get_products_rotation(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+) -> dict:
+    """Days of Inventory por SKU. Buckets: rapido / normal / lento / muerto."""
+    return prod_analytics_svc.inventory_rotation(period=period)
+
+
+@router.get("/products/stockout-risk")
+def get_products_stockout(
+    _: Annotated[str, Depends(current_user)],
+    threshold_days: Annotated[int, Query(ge=1, le=180)] = 14,
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+) -> dict:
+    """SKUs en riesgo de agotamiento en menos de threshold_days dias."""
+    return prod_analytics_svc.stockout_risk(threshold_days, period)
+
+
+@router.get("/products/cross-sell")
+def get_products_cross_sell(
+    _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    top_n: Annotated[int, Query(ge=5, le=100)] = 30,
+) -> dict:
+    """Top pares de SKUs comprados juntos (market basket simple)."""
+    return prod_analytics_svc.cross_sell_pairs(period=period, top_n=top_n)
+
+
+@router.get("/products/trends")
+def get_products_trends(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=7, le=180)] = 30,
+) -> dict:
+    """SKUs con growth/decline > 30% comparando periodo actual vs anterior identico."""
+    return prod_analytics_svc.product_trends(period_days)
+
+
+@router.get("/products/returns-rate")
+def get_products_returns_rate(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=7, le=365)] = 90,
+) -> dict:
+    """% de devoluciones por SKU sobre ventas (calidad / expectativa)."""
+    return prod_analytics_svc.returns_rate_by_sku(period_days)
 
 
 @router.get("/customers-vip")
