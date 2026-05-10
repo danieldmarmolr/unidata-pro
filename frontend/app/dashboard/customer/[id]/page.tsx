@@ -10,6 +10,7 @@ import { OrderDetailModal } from "@/components/order-detail-modal";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { ArrowLeft, Mail, MapPin, Smartphone, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
+import { OrderStatusPipeline } from "@/components/order-status-pipeline";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
 
 type Detail = {
@@ -109,9 +110,15 @@ function ExpandableOrderRow({ order, idx, onOpenDetail }: { order: CategoryValue
  </div>
  </td>
  <td className="px-3 py-2 align-middle text-xs text-text-muted">{e.fecha ?? "—"}</td>
- <td className="px-3 py-2 align-middle"><StatusPill value={String(e.status ?? "")} /></td>
- <td className="px-3 py-2 align-middle"><StatusPill value={String(e.payment ?? "")} /></td>
- <td className="px-3 py-2 align-middle"><StatusPill value={String(e.shipping ?? "")} /></td>
+ <td className="px-3 py-2 align-middle">
+  <OrderStatusPipeline
+    payment={e.payment}
+    shipping={e.shipping}
+    orderStatus={e.status}
+    packed={e.empaquetada}
+    compact
+  />
+ </td>
  <td className="px-3 py-2 align-middle text-right font-bold tabular-nums">{formatCurrency(order.value)}</td>
  <td className="px-3 py-2 align-middle text-center">
  <button
@@ -291,9 +298,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  <th className="px-3 py-2">#</th>
  <th className="px-3 py-2">Numero</th>
  <th className="px-3 py-2">Fecha</th>
- <th className="px-3 py-2">Status</th>
- <th className="px-3 py-2">Pago</th>
- <th className="px-3 py-2">Envio</th>
+ <th className="px-3 py-2">Estado del pedido</th>
  <th className="px-3 py-2 text-right">Total</th>
  <th className="px-3 py-2 text-center"></th>
  </tr>

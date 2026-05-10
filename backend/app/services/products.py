@@ -505,10 +505,16 @@ def customer_detail(customer_id: int) -> dict:
                       "hint": f"{cancelled} / {orders} ordenes"})
 
     rows = q(eng, """
-        SELECT id, number, "createdAt"::text, status, "paymentStatus", "shippingStatus", total::float
-        FROM tienda_nube."Order"
-        WHERE "customerId" = :cid
-        ORDER BY "createdAt" DESC LIMIT 50
+        SELECT o.id, o.number, o."createdAt"::text, o.status,
+               o."paymentStatus", o."shippingStatus", o.total::float,
+               EXISTS (
+                 SELECT 1 FROM digip."DespachoPedido" dp
+                 JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                 WHERE pd."orderId" = o.id
+               ) AS empaquetada
+        FROM tienda_nube."Order" o
+        WHERE o."customerId" = :cid
+        ORDER BY o."createdAt" DESC LIMIT 50
     """, {"cid": customer_id}) or []
     orders_list = [{
         "category": str(r[1] or r[0]),
@@ -516,7 +522,10 @@ def customer_detail(customer_id: int) -> dict:
         "extra": {
             "id": int(r[0] or 0),
             "fecha": r[2][:10] if r[2] else "",
-            "status": r[3] or "", "payment": r[4] or "", "shipping": r[5] or "",
+            "status": r[3] or "",
+            "payment": r[4] or "",
+            "shipping": r[5] or "",
+            "empaquetada": bool(r[7]) if r[7] is not None else False,
         },
     } for r in rows]
 
