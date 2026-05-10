@@ -2,7 +2,8 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
-import { ImageOff } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ImageOff, ChevronRight } from "lucide-react";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 
@@ -11,6 +12,66 @@ type Row = {
   value: number;
   extra?: Record<string, number | string | null> | null;
 };
+
+// Lista de provincias argentinas para auto-detection
+const AR_PROVINCES = new Set([
+  "Buenos Aires", "Capital Federal", "Ciudad de Buenos Aires", "CABA",
+  "Catamarca", "Chaco", "Chubut", "Córdoba", "Cordoba", "Corrientes",
+  "Entre Ríos", "Entre Rios", "Formosa", "Jujuy", "La Pampa", "La Rioja",
+  "Mendoza", "Misiones", "Neuquén", "Neuquen", "Río Negro", "Rio Negro",
+  "Salta", "San Juan", "San Luis", "Santa Cruz", "Santa Fe",
+  "Santiago del Estero", "Tierra del Fuego", "Tucumán", "Tucuman",
+]);
+
+// Áreas Digip conocidas (case insensitive)
+const DIGIP_AREAS = new Set([
+  "almacen", "almacén", "despacho", "preparacion", "preparación",
+  "picking", "dock", "recepcion", "recepción",
+]);
+
+/** Auto-detecta el destino de drill segun el contenido de la fila.
+ *  Devuelve un href de Next.js o null si no hay match. */
+function autoDrillHref(r: Row): string | null {
+  const cat = (r.category || "").trim();
+  const extra = r.extra || {};
+
+  // 1. SKU en extra (campo explicito)
+  const sku = extra.sku;
+  if (typeof sku === "string" && sku.trim()) {
+    return `/dashboard/productos/${encodeURIComponent(sku.trim())}`;
+  }
+  // 2. Customer con customer_id
+  const cid = extra.customer_id ?? extra.customerId;
+  if (typeof cid === "number" && cid > 0) {
+    return `/dashboard/customer/${cid}`;
+  }
+  // 3. Provincia argentina
+  if (AR_PROVINCES.has(cat)) {
+    return `/dashboard/mapa?province=${encodeURIComponent(cat)}`;
+  }
+  // 4. Area Digip (stock)
+  if (DIGIP_AREAS.has(cat.toLowerCase())) {
+    return `/dashboard/stock-heatmap?area=${encodeURIComponent(cat)}`;
+  }
+  // 5. Lote
+  if (extra.lote || /^(lote|batch)[-\s]?\d+/i.test(cat)) {
+    const loteName = (extra.lote as string) || cat;
+    return `/dashboard/lotes?lote=${encodeURIComponent(loteName)}`;
+  }
+  // 6. Brand (filtro en productos)
+  if (extra.brand && typeof extra.brand === "string") {
+    return `/dashboard/productos?marca=${encodeURIComponent(extra.brand)}`;
+  }
+  // 7. Hint generico de tipo
+  const kind = (extra.kind as string) || (extra.type as string) || "";
+  if (kind === "brand" || kind === "marca") {
+    return `/dashboard/productos?marca=${encodeURIComponent(cat)}`;
+  }
+  if (kind === "category" || kind === "categoria") {
+    return `/dashboard/productos?categoria=${encodeURIComponent(cat)}`;
+  }
+  return null;
+}
 
 export function CategoryTable({
   data,
@@ -22,6 +83,7 @@ export function CategoryTable({
   onRowClick,
   enrichSku = true,
   skuUnit = "unistore",
+  autoDrill = true,
 }: {
   data: Row[];
   caption?: string;
@@ -33,7 +95,22 @@ export function CategoryTable({
   /** Si una fila tiene `extra.sku`, traer y mostrar el thumbnail del producto. Default true. */
   enrichSku?: boolean;
   skuUnit?: "unistore" | "unidrop";
+  /** Auto-detecta drill por contenido de la fila (provincia/SKU/customer/area/etc).
+   *  Aplica solo si onRowClick NO se pasa explicitamente. Default true. */
+  autoDrill?: boolean;
 }) {
+  const router = useRouter();
+  // Helper para decidir el handler final de click por fila.
+  // Prioridad: onRowClick explicito > autoDrill href > nada
+  const handleRowClick = (r: Row) => {
+    if (onRowClick) { onRowClick(r); return; }
+    if (autoDrill) {
+      const href = autoDrillHref(r);
+      if (href) router.push(href);
+    }
+  };
+  // Una fila es "interactiva" si tiene onRowClick custom o autoDrill match
+  const isInteractive = (r: Row) => !!onRowClick || (autoDrill && autoDrillHref(r) !== null);
   const max = Math.max(0, ...data.map((d) => d.value));
   const fmt = (v: number, f?: string) => {
     const ff = f ?? formatter;
@@ -72,13 +149,14 @@ export function CategoryTable({
           const enrich = sku ? enrichments[sku] : undefined;
           const img = enrich?.image_url;
           const ean = enrich?.ean;
+          const interactive = isInteractive(r);
           return (
             <div
               key={`m-${r.category}-${i}`}
-              onClick={onRowClick ? () => onRowClick(r) : undefined}
+              onClick={interactive ? () => handleRowClick(r) : undefined}
               className={
                 "border border-border rounded-lg p-3 bg-soft/30 " +
-                (onRowClick ? "cursor-pointer hover:bg-soft active:bg-soft transition" : "")
+                (interactive ? "cursor-pointer hover:bg-soft active:bg-soft transition" : "")
               }
             >
               <div className="flex items-start gap-3 mb-1.5">
@@ -170,13 +248,14 @@ export function CategoryTable({
               const enrich = sku ? enrichments[sku] : undefined;
               const img = enrich?.image_url;
               const ean = enrich?.ean;
+              const interactive = isInteractive(r);
               return (
                 <tr
                   key={`${r.category}-${i}`}
-                  onClick={onRowClick ? () => onRowClick(r) : undefined}
+                  onClick={interactive ? () => handleRowClick(r) : undefined}
                   className={
-                    "border-t border-border hover:bg-soft transition " +
-                    (onRowClick ? "cursor-pointer" : "")
+                    "border-t border-border hover:bg-soft transition group " +
+                    (interactive ? "cursor-pointer" : "")
                   }
                 >
                   <td className="pl-2 py-2 text-text-muted text-xs font-mono">{i + 1}</td>
@@ -228,7 +307,15 @@ export function CategoryTable({
                     );
                   })}
                   <td className="py-2 pr-2 text-right tabular-nums">
-                    <div className="font-semibold text-text">{fmt(r.value)}</div>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <span className="font-semibold text-text">{fmt(r.value)}</span>
+                      {interactive && (
+                        <ChevronRight
+                          size={12}
+                          className="text-text-muted opacity-0 group-hover:opacity-100 transition flex-shrink-0"
+                        />
+                      )}
+                    </div>
                     {showProgress && (
                       <div className="h-1 bg-soft rounded-full mt-1 overflow-hidden">
                         <div
