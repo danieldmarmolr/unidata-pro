@@ -78,13 +78,32 @@ def _exec(engine: Engine, sql: str, params: dict | None) -> list[Any]:
         return c.execute(text(sql), params or {}).all()
 
 
+def _is_schema_err(exc: BaseException) -> bool:
+    """Detecta errores de schema (tabla/columna inexistente). Estas queries
+    suelen estar protegidas por try/except a proposito porque el schema
+    varia entre ambientes (Unistore tiene meli_orders pero Unidrop no, etc).
+    Las degradamos a DEBUG para no ensuciar logs con warnings esperados."""
+    s = str(exc).lower()
+    return (
+        "undefinedtable" in s
+        or "undefinedcolumn" in s
+        or "does not exist" in s
+        or "ambiguouscolumn" in s
+        or "ambiguous" in s and "column" in s
+    )
+
+
 def q(engine: Engine, sql: str, params: dict | None = None) -> list[Any] | None:
     """Ejecuta y devuelve filas. Si falla por conexion caida, reintenta una vez."""
     try:
         return _exec(engine, sql, params)
     except (OperationalError, DBAPIError) as e:
         if not _is_connection_err(e):
-            log.warning("Query failed (no-retry): %s :: %s", e, sql.strip().splitlines()[0][:80])
+            if _is_schema_err(e):
+                # Schema mismatch esperado en queries defensivas
+                log.debug("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
+            else:
+                log.warning("Query failed (no-retry): %s :: %s", e, sql.strip().splitlines()[0][:80])
             return None
         unit = _engine_for(engine)
         log.warning("Connection lost (%s), forzando reset y reintentando", unit or "?")
@@ -102,8 +121,13 @@ def q(engine: Engine, sql: str, params: dict | None = None) -> list[Any] | None:
                 return None
         return None
     except Exception as e:
-        log.warning("Query failed: %s :: %s", e, sql.strip().splitlines()[0][:80])
+        if _is_schema_err(e):
+            log.debug("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
+        else:
+            log.warning("Query failed: %s :: %s", e, sql.strip().splitlines()[0][:80])
         return None
+
+
 
 
 def scalar(engine: Engine, sql: str, params: dict | None = None) -> Any:
@@ -130,6 +154,13 @@ def list_columns(engine: Engine, schema: str, table: str) -> set[str]:
     cols = {r[0] for r in rows}
     _COLUMN_CACHE[key] = cols
     return cols
+
+
+def table_exists(engine: Engine, schema: str, table: str) -> bool:
+    """Chequea si una tabla existe en el schema dado.
+    Cache via list_columns - 0 columnas = tabla inexistente."""
+    cols = list_columns(engine, schema, table)
+    return len(cols) > 0
 
 
 def col_or_null(engine: Engine, schema: str, table: str, alias: str, candidates: list[str]) -> str:

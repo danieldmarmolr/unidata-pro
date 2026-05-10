@@ -16,7 +16,7 @@ import logging
 from urllib.parse import quote
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar
+from app.services._utils import q, scalar, table_exists
 
 log = logging.getLogger("unidata.story")
 
@@ -130,27 +130,28 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story sku TN unistore fail: %s", e)
 
-    # 2b) Lider MELI Unistore
-    try:
-        rows = q(uni, """
-            SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
-            FROM meli.meli_order_items mi
-            JOIN meli.meli_orders mo ON mo.id = mi.order_id
-            WHERE mo.date_created::date = CURRENT_DATE
-              AND mo.status IN ('paid','confirmed','shipped','delivered')
-              AND mi.seller_sku IS NOT NULL
-              AND mi.seller_sku NOT ILIKE '%PVA%'
-            GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
-        """) or []
-        if rows:
-            sku, name, units = rows[0]
-            blurbs.append(_leader_blurb(
-                "MELI Unistore", "meli_unistore", sku, name, int(units or 0),
-                "/api/drilldowns/orders/paid?period=today&channel=meli",
-                f"top_meli_unistore_{today_iso}.csv",
-            ))
-    except Exception as e:
-        log.warning("story sku MELI unistore fail: %s", e)
+    # 2b) Lider MELI Unistore - solo si meli_order_items existe en este schema
+    if table_exists(uni, "meli", "meli_order_items"):
+        try:
+            rows = q(uni, """
+                SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
+                FROM meli.meli_order_items mi
+                JOIN meli.meli_orders mo ON mo.id = mi.order_id
+                WHERE mo.date_created::date = CURRENT_DATE
+                  AND mo.status IN ('paid','confirmed','shipped','delivered')
+                  AND mi.seller_sku IS NOT NULL
+                  AND mi.seller_sku NOT ILIKE '%PVA%'
+                GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
+            """) or []
+            if rows:
+                sku, name, units = rows[0]
+                blurbs.append(_leader_blurb(
+                    "MELI Unistore", "meli_unistore", sku, name, int(units or 0),
+                    "/api/drilldowns/orders/paid?period=today&channel=meli",
+                    f"top_meli_unistore_{today_iso}.csv",
+                ))
+        except Exception as e:
+            log.debug("story sku MELI unistore fail: %s", e)
 
     # 2c) Lider TN Unidrop (si existe la tabla — try/except absorbe el error)
     try:
@@ -172,9 +173,10 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story sku TN unidrop fail (probable: schema no existe): %s", e)
 
-    # 2d) Lider MELI Unidrop
-    try:
-        rows = q(drop, """
+    # 2d) Lider MELI Unidrop - solo si la tabla existe en este schema
+    if table_exists(drop, "meli", "meli_order_items"):
+        try:
+            rows = q(drop, """
             SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
             FROM meli.meli_order_items mi
             JOIN meli.meli_orders mo ON mo.id = mi.order_id
@@ -182,16 +184,16 @@ def today_story() -> dict:
               AND mo.status IN ('paid','confirmed','shipped','delivered')
               AND mi.seller_sku IS NOT NULL
             GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
-        """) or []
-        if rows:
-            sku, name, units = rows[0]
-            blurbs.append(_leader_blurb(
-                "MELI Unidrop", "meli_unidrop", sku, name, int(units or 0),
-                "/api/drilldowns/orders/paid?period=today&unit=unidrop&channel=meli",
-                f"top_meli_unidrop_{today_iso}.csv",
-            ))
-    except Exception as e:
-        log.warning("story sku MELI unidrop fail: %s", e)
+            """) or []
+            if rows:
+                sku, name, units = rows[0]
+                blurbs.append(_leader_blurb(
+                    "MELI Unidrop", "meli_unidrop", sku, name, int(units or 0),
+                    "/api/drilldowns/orders/paid?period=today&unit=unidrop&channel=meli",
+                    f"top_meli_unidrop_{today_iso}.csv",
+                ))
+        except Exception as e:
+            log.debug("story sku MELI unidrop fail: %s", e)
 
     # ============================================================
     # 3) Provincia con mas actividad hoy

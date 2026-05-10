@@ -99,7 +99,7 @@ def orders_by_product(unit: str, product_id: str, period: str = "30d", from_iso:
     )
 
 
-def orders_by_province(unit: str, province: str, period: str = "30d") -> dict:
+def orders_by_province(unit: str, province: str, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     """Listado de orders TN paid en una provincia."""
     if unit != "unistore":
         return _serialize([], [])

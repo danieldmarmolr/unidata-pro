@@ -1,0 +1,127 @@
+Issue Type,Summary,Description,Status,Priority,Story Points,Epic Link,Components,Labels
+Epic,UD-1 Autenticacion seguridad y permisos,Login JWT + roles + 2FA + audit,Done,High,26,,Backend;Frontend,seguridad
+Story,Login JWT + bcrypt + roles,Implementar auth con JWT bcrypt y roles (admin/gerencia/analista/lector/user),Done,High,5,UD-1,Backend,auth
+Story,Self-registration con dominio @unistore.ar,Registro automatico para emails del dominio corporativo,Done,Medium,3,UD-1,Backend,auth
+Story,Set-initial-password flow,Flow para users creados por admin sin password,Done,Medium,2,UD-1,Backend,auth
+Story,Rate limiting anti brute-force,Slowapi con 10/min login y 5/min register,Done,High,2,UD-1,Backend,security
+Story,2FA TOTP backend,Endpoints setup/enable/disable con pyotp,Done,High,5,UD-1,Backend,2fa
+Story,2FA TOTP UI con QR,Pagina /account con QR escaneable + codigo manual,Done,High,5,UD-1,Frontend,2fa
+Story,Admin CRUD users,Crear/editar/desactivar/cambiar password,Done,Medium,3,UD-1,Backend;Frontend,admin
+Story,Audit log de SQL libre,Tabla query_runs registra ejecuciones,Done,Low,1,UD-1,Backend,audit
+Epic,UD-2 Dashboard gerencial,KPIs ejecutivos + comparador HOY + salud por unidad,Done,High,28,,Frontend;Backend,dashboard
+Story,Pagina /dashboard con KPIs ejecutivos,Vista cross-unidad principal,Done,High,5,UD-2,Frontend,dashboard
+Story,Comparador HOY vs 7d/30d/365d,Bloques contextuales (default y CS),Done,High,5,UD-2,Frontend;Backend,dashboard
+Story,Salud por unidad de negocio,Cards Unistore/Unidrop/Unidev con KPIs,Done,High,3,UD-2,Frontend,dashboard
+Story,Cards de Salud clickeables,Drilldowns en cada KPI de salud,Done,High,3,UD-2,Frontend,drilldown
+Story,Chart Tendencia 12 meses,TN + ML + Unidrop por mes,Done,Medium,3,UD-2,Frontend,charts
+Story,Donut Mix de revenue,Revenue distribution del mes,Done,Medium,2,UD-2,Frontend,charts
+Story,Top 15 productos cross-canal,TN + ML combinados con thumbnails,Done,Medium,3,UD-2,Backend;Frontend,products
+Story,Lifecycle de customers Unistore,Distribucion Nuevo/2da/Convertido/Recurrente,Done,Medium,2,UD-2,Frontend,cs
+Story,Alertas operativas + Salud integraciones,Panel de alertas y health-check,Done,Medium,2,UD-2,Frontend,monitoring
+Epic,UD-3 Customer Success Cohortes RFM,Drill por estado y RFM + Posible churn,Done,High,32,,Frontend;Backend,cs
+Story,/dashboard/cs con KPIs,Cancelaciones refunds repeat purchase,Done,High,5,UD-3,Frontend,cs
+Story,Tabla Estados clickeable a modal,Drill por Nuevo/2da/Recurrente/etc,Done,High,3,UD-3,Frontend,drilldown
+Story,Tabla RFM clickeable a modal,Drill por Champions/Loyal/At Risk/etc,Done,High,3,UD-3,Frontend,drilldown
+Story,Comparador HOY contextual CS,Customers nuevos/recurrentes/cancelaciones/refunds,Done,High,5,UD-3,Backend;Frontend,cs
+Story,/dashboard/cohortes selector unit,Unistore vs Unidrop dropshippers,Done,High,5,UD-3,Backend;Frontend,cohorts
+Story,Estado Posible churn,Gap actual mayor a 1.5x avg,Done,High,5,UD-3,Backend,cs
+Story,Estado Perdidos,Mas de 365 dias sin compras,Done,Medium,2,UD-3,Backend,cs
+Story,Banner alertas con cards Posible churn + Perdidos,Click navega a drilldown,Done,Medium,2,UD-3,Frontend,cs
+Story,/dashboard/rfm 11 segmentos,Champions Loyal At Risk Lost etc,Done,Medium,2,UD-3,Backend;Frontend,rfm
+Epic,UD-4 Productos EAN Lotes Stock,Vista 360 EAN destacado + thumbnails universales,Done,High,24,,Frontend;Backend,products
+Story,/dashboard/productos lista,Filtros y buscador SKU/EAN,Done,High,5,UD-4,Frontend,products
+Story,/dashboard/productos/[sku] vista 360,Revenue customers devoluciones por SKU,Done,High,5,UD-4,Frontend,products
+Story,EAN como Codigo de barras oficial,Card destacado en producto 360,Done,High,2,UD-4,Frontend,ean
+Story,Thumbnails SKU automaticos en CategoryTable,Imagenes en TODA la app via enrich,Done,High,3,UD-4,Frontend,ux
+Story,/dashboard/costos importacion,Excel uploader + calculo costos USD/ARS,Done,Medium,5,UD-4,Backend;Frontend,costs
+Story,/dashboard/lotes,Consumo markup cobertura de pago,Done,Medium,3,UD-4,Frontend,lotes
+Story,/dashboard/stock-heatmap,SKU x area de deposito,Done,Low,1,UD-4,Frontend,stock
+Epic,UD-5 Ventas Marketing Mapa,Dashboards ventas + marketing + mapa Argentina,Done,High,22,,Frontend;Backend,sales
+Story,/dashboard/ventas,KPIs por unit y canal,Done,High,5,UD-5,Frontend,sales
+Story,/dashboard/marketing,LTV repeat purchase top customers,Done,High,5,UD-5,Frontend,marketing
+Story,/dashboard/mapa choropleth Argentina,Reescrito con d3-geo fitSize,Done,High,5,UD-5,Frontend,maps
+Story,Mapa estilo gubernamental,Halo pais hover glow tooltip flotante,Done,Medium,3,UD-5,Frontend,maps
+Story,Mapa drilldown por provincia,Top SKUs/clientes/ciudades,Done,Medium,2,UD-5,Frontend,drilldown
+Story,/dashboard/customer/[id] vista 360,Cliente final Unistore con etiquetas claras,Done,Medium,2,UD-5,Frontend,customers
+Epic,UD-6 Logistica Envios Pipeline,Funnel TN-Digip-Despacho + carriers + pipeline 5 steps,Done,High,26,,Frontend;Backend,logistics
+Story,/dashboard/logistica funnel,TN-Digip-Despacho-Fulfillment,Done,High,5,UD-6,Frontend,logistics
+Story,OrderStatusPipeline 5 steps,Recibida-Pagada-Empaquetada-Enviada-Recibida,Done,High,5,UD-6,Frontend,orders
+Story,Deteccion empaquetada via Digip,EXISTS en DespachoPedido,Done,Medium,3,UD-6,Backend,orders
+Story,OrderDetailModal TN admin-style,Items address timeline,Done,High,5,UD-6,Frontend,orders
+Story,/dashboard/envios-unistore por canal,OCA/Correo/Unifast/Retiro/Moto/Andreani/Personalizado,Done,High,5,UD-6,Frontend;Backend,shipping
+Story,Deteccion canal via shippingOption + trackingCompany,col_or_null helper,Done,Medium,3,UD-6,Backend,shipping
+Epic,UD-7 Unidrop Dropshippers Suscripciones,Vista 360 propia + segmentacion canal MELI/TN/ambos,Done,High,38,,Frontend;Backend,unidrop
+Story,/dashboard/dropshippers listado,Filtros plan riesgo actividad canal,Done,High,5,UD-7,Frontend,unidrop
+Story,/dashboard/dropshipper/[id] vista 360 propia,No mezclar con Customer Unistore,Done,High,5,UD-7,Backend;Frontend,unidrop
+Story,Segmentacion canal MELI/TN/Ambos/Sin operar,4 cards clickeables,Done,High,5,UD-7,Frontend,unidrop
+Story,KPIs separados MELI vs TN,Cards y vista 360 distinguidos,Done,Medium,3,UD-7,Frontend,unidrop
+Story,Filtros KPIs sobre universo no subset,Bug fix stats globales primero,Done,High,3,UD-7,Backend,unidrop
+Story,/dashboard/saas SaaS metrics,MRR usuarios activos churn funnel,Done,High,5,UD-7,Frontend,unidrop
+Story,/dashboard/pagos Talo,PaymentTransaction y deudas,Done,Medium,3,UD-7,Frontend,unidrop
+Story,/dashboard/subscriptions-meli,Planes intents activas,Done,Medium,3,UD-7,Frontend,unidrop
+Story,/dashboard/envios Unidrop,OCA + LightData,Done,Medium,3,UD-7,Frontend,unidrop
+Story,/dashboard/envios-meli MELI por modo,FULL Cross Flex Pickup con deteccion dinamica,Done,Medium,3,UD-7,Frontend;Backend,shipping
+Epic,UD-8 Devoluciones Unidev,Casos por modelo de negocio,Done,Medium,8,,Frontend,unidev
+Story,/dashboard/devoluciones,Casos por modelo de negocio,Done,Medium,5,UD-8,Frontend,unidev
+Story,KPIs gerencial Devoluciones clickeables,Drill abiertas/resueltas/monto,Done,Medium,3,UD-8,Frontend,unidev
+Epic,UD-9 Drilldown universal UX,Modal generico + badges + ocultar columnas redundantes,Done,High,30,,Frontend,ux
+Story,DrillDownModal generico,CSV export filtros buscador,Done,High,5,UD-9,Frontend,drilldown
+Story,Drilldowns universales,cliente provincia SKU lote categoria marca proveedor ciudad,Done,High,5,UD-9,Frontend,drilldown
+Story,Badge VIP en filas mayor a 300k,Diseno dorado consistente,Done,Medium,2,UD-9,Frontend,ux
+Story,Filas Unidrop reconocidas via _unit,No abrir Customer Unistore para users Unidrop,Done,Medium,3,UD-9,Frontend;Backend,unidrop
+Story,OrderStatusPipeline en celda payment,Pipeline cuando hay shipping,Done,Medium,3,UD-9,Frontend,orders
+Story,ShippingMethodBadge coloreado,Badge por carrier en columna Envio,Done,Medium,2,UD-9,Frontend,shipping
+Story,Ocultar columnas redundantes,shipping si hay payment / metodo si hay canal,Done,Medium,2,UD-9,Frontend,ux
+Story,/dashboard/explore alineado al modal,Mismo CellRenderer y filtros,Done,Medium,3,UD-9,Frontend,explorer
+Story,Cmd+K busqueda global,SkuSearchBox modal con shortcut,Done,Medium,3,UD-9,Frontend,search
+Story,Filtro de fecha global en TODAS las paginas,Topbar selector,Done,Medium,2,UD-9,Frontend,ux
+Epic,UD-10 Datos Catalogo SQL libre,Explorador de schemas + SQL workbench,Done,Medium,16,,Frontend;Backend,data
+Story,/dashboard/catalog ER,Schemas tablas columnas por unidad,Done,Medium,5,UD-10,Frontend,data
+Story,/dashboard/sources explorador,Tablas con preview,Done,Medium,3,UD-10,Frontend,data
+Story,/dashboard/sql workbench read-only,Por unidad con safety check,Done,High,5,UD-10,Frontend;Backend,sql
+Story,/dashboard/audit log,Quien corrio que query,Done,Medium,3,UD-10,Frontend,audit
+Epic,UD-11 Reportes Storytelling,PDF mensual + blurbs auto del dia,Done,Medium,14,,Backend;Frontend,reports
+Story,Reporte mensual ejecutivo PDF,Descargable con reportlab,Done,High,8,UD-11,Backend,reports
+Story,Storytelling del dia en home,Blurbs auto-generados,Done,Medium,5,UD-11,Backend,storytelling
+Story,Blurbs clickeables a drilldowns,Navigation o modal,Done,Low,1,UD-11,Frontend,storytelling
+Epic,UD-12 Mobile UX polish,Drawer hamburger cards-mobile bottom-sheet,Done,Medium,14,,Frontend,mobile
+Story,Sidebar drawer + hamburger button,Mobile navigation,Done,Medium,3,UD-12,Frontend,mobile
+Story,Topbar responsive,Hide controls en sm,Done,Low,2,UD-12,Frontend,mobile
+Story,Cards-mobile en CategoryTable,Render diferente desktop vs mobile,Done,Medium,3,UD-12,Frontend,mobile
+Story,DrillDownModal bottom-sheet en mobile,items-end vs items-center,Done,Medium,3,UD-12,Frontend,mobile
+Story,Identidad visual Unistore consistente,Palette violeta + Inter,Done,Medium,3,UD-12,Frontend,branding
+Epic,UD-13 Infraestructura DevOps,Deploy Railway + auto-deploy + backup script,Done,High,12,,DevOps,infra
+Story,Deploy backend + frontend monorepo Railway,path-as-root flag,Done,High,5,UD-13,DevOps,railway
+Story,Auto-deploy desde main,Webhook GitHub,Done,Medium,2,UD-13,DevOps,railway
+Story,Backup script Supabase a S3,boto3 condicional con purge 30d,Done,High,3,UD-13,Backend,backup
+Story,Documentacion BACKUP_README.md,3 opciones de activacion documentadas,Done,Medium,1,UD-13,Docs,backup
+Story,Endpoint admin /backup/run,Trigger manual desde UI,Done,Medium,1,UD-13,Backend,backup
+Epic,UD-14 Bug fixes criticos,11 bugs cerrados,Done,High,18,,All,bugs
+Bug,TZ Argentina server UTC mostraba +1 dia,Fix con app/utils/tz.py + Postgres SET TIMEZONE,Done,Critical,3,UD-14,Backend,bug
+Bug,LIMIT 1000 hardcoded recortaba dropshippers,Fix default 10000 cap 20000,Done,High,2,UD-14,Backend,bug
+Bug,KPIs caian a 0 al filtrar por riesgo,Fix stats globales antes de filtros,Done,High,2,UD-14,Backend,bug
+Bug,TiendaNubeCredential.userId no existe,Fix cruce store_id,Done,High,2,UD-14,Backend,bug
+Bug,Tile lotes duplicado bloqueaba 4 deploys,Eliminado duplicado,Done,Medium,1,UD-14,Frontend,bug
+Bug,Cohortes mezclaba dropshippers Unidrop con Unistore,Fix _unit flag en filas,Done,Medium,2,UD-14,Frontend,bug
+Bug,Top productos cross vacio por meli_order_id col inexistente,Fix mi.order_id,Done,Medium,2,UD-14,Backend,bug
+Bug,Provincia Unidrop salia vacia,Fix col_or_null en User,Done,Medium,1,UD-14,Backend,bug
+Bug,Mapa scale incorrecto solo Tucuman visible,Reescrito con d3-geo fitSize,Done,High,2,UD-14,Frontend,bug
+Bug,Deploy backend silenciosamente fallando,Fix path-as-root flag railway,Done,High,1,UD-14,DevOps,bug
+Bug,OneDrive sync rompia .next builds,Workaround rm -rf .next,Done,Low,0.5,UD-14,DevOps,bug
+Story,Configurar bucket S3 + IAM user,Para activar backup auto,To Do,High,2,UD-13,DevOps,backup
+Story,Activar cron schedule Railway,0 6 * * * con backup_supabase,To Do,High,1,UD-13,DevOps,backup
+Story,Permisos granulares por feature PERM-01..06,Extiende roles actuales,To Do,Medium,8,UD-1,Backend,permissions
+Story,OneDrive auto-sync de reportes Excel,Microsoft Graph API,To Do,Medium,13,UD-11,Backend,integration
+Story,Heatmap stock cross-DB,Cruzar Unistore + Unidrop,To Do,Medium,5,UD-4,Backend,stock
+Story,Aprobar dominios en Claude extension,Mapeo en vivo de Unidrop,To Do,Low,1,,DevOps,docs
+Story,Notificaciones in-app header bell,Tabla notifications + dropdown,To Do,Medium,5,,Frontend;Backend,notifications
+Story,Slack/Email alertas operativas,Webhook deuda alta churn,To Do,Medium,8,,Backend,notifications
+Story,Comparador HOY contextual Productos/Ventas/Logistica,Extender today_snapshot,To Do,Medium,8,UD-2,Backend,dashboard
+Story,RFM scoring para dropshippers Unidrop,Hoy redirige a cohortes,To Do,Low,5,UD-3,Backend,rfm
+Story,Forecasting de ventas por SKU,Linear regression simple,To Do,Low,13,,Backend,forecasting
+Story,Dashboard cohorts retention visual matriz,Tabla actual ya hace tracking,To Do,Low,5,UD-3,Frontend,cs
+Story,Multi-tenant varios grupos,Reorg arquitectura,To Do,Low,21,,All,architecture
+Story,Vista mobile dedicada PWA,Actualmente responsive,To Do,Low,13,,Frontend,mobile
+Story,API publica con OAuth,Para integraciones externas,To Do,Low,13,,Backend,api
+Story,Dark mode,Tokens ya soportan,To Do,Low,3,,Frontend,theme
+Story,Internacionalizacion EN/PT,Hoy hardcoded ES,To Do,Low,8,,Frontend,i18n

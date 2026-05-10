@@ -25,8 +25,10 @@ def province_orders(
     province: str,
     _: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
-    return svc.orders_by_province("unistore", province, period)
+    return svc.orders_by_province("unistore", province, period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/customers/{customer_id}/orders")

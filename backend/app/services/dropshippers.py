@@ -490,7 +490,7 @@ def dropshipper_detail(
             COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
             COALESCE(AVG(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
         FROM mercado_libre_dev."OrderMercadoLibre" o
-        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
             SELECT "orderId", SUM("totalAmount")::float AS gmv
             FROM mercado_libre_dev."PaymentMercadoLibre"
@@ -585,8 +585,8 @@ def dropshipper_detail(
     pub = q(eng, """
         SELECT
             COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE "status" = 'active')::int AS activas,
-            MAX("createdAt")::text AS ultima
+            COUNT(*) FILTER (WHERE pum."status" = 'active')::int AS activas,
+            MAX(pum."createdAt")::text AS ultima
         FROM mercado_libre_dev."PublicationUserMercadoLibre" pum
         INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = pum."mlAccountId"
         WHERE mla."userId" = :uid
@@ -605,7 +605,7 @@ def dropshipper_detail(
                COALESCE(SUM(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
                COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit
         FROM mercado_libre_dev."OrderMercadoLibre" o
-        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
             SELECT "orderId", SUM("totalAmount")::float AS gmv
             FROM mercado_libre_dev."PaymentMercadoLibre"
@@ -630,7 +630,7 @@ def dropshipper_detail(
                COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
                COALESCE(o."shipping_cost",0)::float AS shipping_cost
         FROM mercado_libre_dev."OrderMercadoLibre" o
-        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
             SELECT "orderId", SUM("totalAmount")::float AS gmv
             FROM mercado_libre_dev."PaymentMercadoLibre"

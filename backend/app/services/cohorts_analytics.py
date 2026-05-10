@@ -259,21 +259,21 @@ def _cohorts_overview_unidrop(period: str, from_iso: str | None, to_iso: str | N
                  COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
                  -- Ordenes ML pagadas
                  (SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" o
-                  INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+                  INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
                   WHERE mla."userId" = u.id AND o."status" = 'paid')::int AS ordenes_ml,
                  -- Ordenes TN pagadas
                  (SELECT COUNT(*) FROM public.tienda_nube_orders WHERE user_id = u.id AND payment_status::text = 'paid')::int AS ordenes_tn,
                  -- Ultima venta (entre ML y TN)
                  GREATEST(
                    COALESCE((SELECT MAX("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
                              WHERE mla."userId" = u.id AND o."status" = 'paid'), 'epoch'::timestamp),
                    COALESCE((SELECT MAX(created_at) FROM public.tienda_nube_orders WHERE user_id = u.id AND payment_status::text = 'paid'), 'epoch'::timestamp)
                  ) AS ultima_venta,
                  -- Primera venta
                  LEAST(
                    COALESCE((SELECT MIN("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = o."mercadoLibreUserAccountId"
+                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
                              WHERE mla."userId" = u.id AND o."status" = 'paid'), 'infinity'::timestamp),
                    COALESCE((SELECT MIN(created_at) FROM public.tienda_nube_orders WHERE user_id = u.id AND payment_status::text = 'paid'), 'infinity'::timestamp)
                  ) AS primera_venta
