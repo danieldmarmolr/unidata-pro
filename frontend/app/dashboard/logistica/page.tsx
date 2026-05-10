@@ -83,7 +83,12 @@ export default function LogisticaPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit={unit} />
+        <TodayPanel
+          compact={period !== "today"}
+          unit={unit}
+          context="logistica"
+          title="Comparador HOY · Logistica"
+        />
 
         {/* Buscador SKU / EAN — pensado para scaneo en deposito */}
         {unit === "unistore" && (

@@ -302,6 +302,18 @@ from app.services import rfm_analytics as rfm_svc
 from app.services import stock_heatmap as stock_svc
 from app.services import envios_unistore as envios_uni_svc
 from app.services import envios_meli_unidrop as envios_meli_svc
+from app.services import notifications as notif_svc
+
+
+@router.get("/notifications")
+def get_notifications(_: Annotated[str, Depends(current_user)]) -> dict:
+    """Notificaciones in-app derivadas de business rules en runtime.
+    Sin tabla de notifications - se calculan por request con cache de 60s."""
+    cache_key = "notifications-all"
+    @cached(_cache, key=lambda: cache_key)
+    def _b() -> dict:
+        return notif_svc.get_notifications()
+    return _b()
 
 
 @router.get("/envios-meli-unidrop")
@@ -420,7 +432,7 @@ def get_lote_detail(
 def get_today(
     _: Annotated[str, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop", "all"], Query()] = "all",
-    context: Annotated[Literal["default", "cs"], Query()] = "default",
+    context: Annotated[Literal["default", "cs", "productos", "logistica"], Query()] = "default",
 ) -> dict:
     """Comparador HOY. Si unit=unistore o unidrop, muestra solo bloques de esa unidad.
     Default 'all' = vista cross-unidad (Gerencial).

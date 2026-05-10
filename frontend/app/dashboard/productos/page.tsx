@@ -71,7 +71,12 @@ export default function ProductosPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit="unistore" />
+        <TodayPanel
+          compact={period !== "today"}
+          unit="unistore"
+          context="productos"
+          title="Comparador HOY · Productos"
+        />
 
         {/* Buscador SKU / EAN */}
         <div className="mb-6 bg-gradient-to-r from-primary/5 to-accent/5 border border-primary/20 rounded-xl p-4">

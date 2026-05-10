@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, RefreshCcw, CalendarRange, Calendar, Search, X } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { getUser, type AuthUser } from "@/lib/api";
+import { Bell, RefreshCcw, CalendarRange, Calendar, Search, X, AlertCircle, AlertTriangle, Info, RotateCcw, CalendarClock, Wallet, ExternalLink } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, getUser, type AuthUser } from "@/lib/api";
 import { useGlobalFilters, type Period } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { SkuSearchBox } from "@/components/sku-search-box";
+import { DrillDownModal } from "@/components/drilldown-modal";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "HOY" },
@@ -232,12 +234,7 @@ export function Topbar({
           >
             <RefreshCcw size={15} />
           </button>
-          <button
-            title="Notificaciones"
-            className="hidden sm:grid w-9 h-9 place-items-center rounded-lg border border-border bg-surface text-text-muted hover:text-primary hover:border-primary/40 transition"
-          >
-            <Bell size={15} />
-          </button>
+          <NotificationBell />
           <div className="ml-1 sm:ml-2 flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-soft border border-border">
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-primary text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
               {initial}
@@ -251,6 +248,202 @@ export function Topbar({
       </header>
 
       <GlobalSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+    </>
+  );
+}
+
+// ============================================================
+// Notification bell con dropdown en vivo
+// ============================================================
+type NotifItem = {
+  id: string;
+  severity: "error" | "warning" | "info";
+  icon: string;
+  title: string;
+  body: string;
+  href?: string;
+  drill?: { endpoint: string; title: string; filename: string };
+  count: number;
+};
+type NotifResp = {
+  items: NotifItem[];
+  total: number;
+  errors: number;
+  warnings: number;
+  infos: number;
+  generated_at: string;
+};
+
+const ICON_MAP: Record<string, any> = {
+  alert: AlertTriangle,
+  x: AlertCircle,
+  rotate: RotateCcw,
+  calendar: CalendarClock,
+  wallet: Wallet,
+};
+
+function NotificationBell() {
+  const [open, setOpen] = useState(false);
+  const [drill, setDrill] = useState<{ endpoint: string; title: string; filename: string } | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const { data } = useQuery<NotifResp>({
+    queryKey: ["notifications"],
+    queryFn: () => api<NotifResp>("/api/dashboards/notifications"),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) {
+      document.addEventListener("mousedown", onClick);
+      return () => document.removeEventListener("mousedown", onClick);
+    }
+  }, [open]);
+
+  const total = data?.total ?? 0;
+  const hasError = (data?.errors ?? 0) > 0;
+  const hasWarn = (data?.warnings ?? 0) > 0;
+
+  return (
+    <>
+      <div className="relative" ref={ref}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          title={`${total} notificaciones`}
+          className={cn(
+            "hidden sm:grid relative w-9 h-9 place-items-center rounded-lg border bg-surface transition",
+            total > 0
+              ? hasError
+                ? "border-rose-300 text-rose-600 hover:bg-rose-50"
+                : hasWarn
+                ? "border-amber-300 text-amber-700 hover:bg-amber-50"
+                : "border-blue-300 text-blue-700 hover:bg-blue-50"
+              : "border-border text-text-muted hover:text-primary hover:border-primary/40",
+          )}
+        >
+          <Bell size={15} />
+          {total > 0 && (
+            <span
+              className={cn(
+                "absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center text-white",
+                hasError ? "bg-rose-500" : hasWarn ? "bg-amber-500" : "bg-blue-500",
+              )}
+            >
+              {total > 99 ? "99+" : total}
+            </span>
+          )}
+        </button>
+
+        {open && (
+          <div className="absolute right-0 top-full mt-2 z-50 bg-surface border border-border rounded-xl shadow-xl w-[380px] max-w-[calc(100vw-32px)]">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+              <div>
+                <div className="text-sm font-bold text-text">Notificaciones</div>
+                <div className="text-[11px] text-text-muted">
+                  {total === 0 ? "Sin alertas activas" : `${total} alertas activas`}
+                </div>
+              </div>
+              <button onClick={() => setOpen(false)} className="text-text-muted hover:text-text">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="max-h-[60vh] overflow-y-auto">
+              {!data ? (
+                <div className="p-6 text-center text-text-muted text-xs">Cargando...</div>
+              ) : data.items.length === 0 ? (
+                <div className="p-8 text-center">
+                  <div className="text-4xl mb-2">✓</div>
+                  <div className="text-sm font-semibold text-emerald-700">Todo en orden</div>
+                  <div className="text-xs text-text-muted mt-1">Sin alertas operativas</div>
+                </div>
+              ) : (
+                <div>
+                  {data.items.map((n) => {
+                    const Icon = ICON_MAP[n.icon] ?? Info;
+                    const sevColor =
+                      n.severity === "error"
+                        ? "bg-rose-50 border-rose-200 text-rose-700"
+                        : n.severity === "warning"
+                        ? "bg-amber-50 border-amber-200 text-amber-700"
+                        : "bg-blue-50 border-blue-200 text-blue-700";
+                    const action = (
+                      <>
+                        <div className="flex items-start gap-3">
+                          <div className={cn("w-8 h-8 rounded-lg border flex items-center justify-center flex-shrink-0", sevColor)}>
+                            <Icon size={14} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-bold text-text">{n.title}</div>
+                            <div className="text-[11px] text-text-muted mt-0.5 line-clamp-2">{n.body}</div>
+                            <div className="flex items-center gap-2 mt-1.5">
+                              {n.drill && (
+                                <button
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setDrill(n.drill!);
+                                    setOpen(false);
+                                  }}
+                                  className="text-[10px] font-bold text-primary hover:underline"
+                                >
+                                  Ver detalle
+                                </button>
+                              )}
+                              {n.href && (
+                                <span className="text-[10px] text-text-muted inline-flex items-center gap-0.5">
+                                  <ExternalLink size={9} /> Ir a la pagina
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    );
+                    if (n.href) {
+                      return (
+                        <Link
+                          key={n.id}
+                          href={n.href}
+                          onClick={() => setOpen(false)}
+                          className="block px-4 py-3 border-b border-border last:border-0 hover:bg-soft transition"
+                        >
+                          {action}
+                        </Link>
+                      );
+                    }
+                    return (
+                      <div key={n.id} className="px-4 py-3 border-b border-border last:border-0">
+                        {action}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {data && data.total > 0 && (
+              <div className="px-4 py-2 border-t border-border bg-soft text-[10px] text-text-muted text-center">
+                Refresca cada 60s · derivadas de business rules en runtime
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {drill && (
+        <DrillDownModal
+          title={drill.title}
+          subtitle="Drilldown desde notificaciones"
+          endpoint={drill.endpoint}
+          filename={drill.filename}
+          onClose={() => setDrill(null)}
+        />
+      )}
     </>
   );
 }

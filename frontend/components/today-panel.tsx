@@ -37,9 +37,11 @@ export function TodayPanel({
   unit?: "unistore" | "unidrop";
   /** Cambia los bloques segun la pagina origen.
    *  - default: GMV / ordenes / ticket / devoluciones (gerencial / ventas)
-   *  - cs: customers nuevos / recurrentes / cancelaciones / refunds (Customer Success)
+   *  - cs: customers nuevos / recurrentes / cancelaciones / refunds
+   *  - productos: SKUs vendidos / unidades / stock critico
+   *  - logistica: ordenes a despachar / despachos Digip / atascados
    */
-  context?: "default" | "cs";
+  context?: "default" | "cs" | "productos" | "logistica";
 }) {
   const scope = unit ?? "all";
   const ctx = context ?? "default";

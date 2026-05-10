@@ -55,11 +55,16 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
 
     context: cambia qué bloques se muestran segun la pagina:
     - None / 'gerencial' / 'ventas' (default): GMV, Ordenes, Ticket promedio, Devoluciones
-    - 'cs' (Customer Success): Customers nuevos, Recurrentes que volvieron,
-      Customers en riesgo activos, Cancelaciones, Refunds
+    - 'cs' (Customer Success): Customers nuevos, Recurrentes que volvieron, Cancelaciones, Refunds
+    - 'productos': Top SKU del dia, productos nuevos vendidos, stock critico hoy
+    - 'logistica': Pedidos atascados, despachos del dia, fulfillment rate
     """
     if context == "cs":
         return _today_snapshot_cs(unit)
+    if context == "productos":
+        return _today_snapshot_productos(unit)
+    if context == "logistica":
+        return _today_snapshot_logistica(unit)
 
     show_unistore = unit in (None, "unistore")
     show_unidrop = unit in (None, "unidrop")
@@ -272,6 +277,150 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
     return {
         "level": "today",
         "context": "cs",
+        "today_date": today_ar().isoformat(),
+        "blocks": blocks,
+        "generated_at": now_ar().isoformat(),
+    }
+
+
+def _today_snapshot_productos(unit: str | None = None) -> dict:
+    """HOY contextual para Productos: SKUs vendidos hoy, productos nuevos
+    activos, alertas de stock critico que dispararon."""
+    blocks: list[dict] = []
+    try:
+        uni = get_engine("unistore")
+
+        # Distintos SKUs vendidos hoy (paid)
+        def skus_vendidos(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COUNT(DISTINCT oi.sku) FROM tienda_nube."OrderItem" oi
+                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+                WHERE o."paymentStatus" = 'paid'
+                  AND o."createdAt"::date = (CURRENT_DATE - CAST(:d AS integer))
+                  AND oi.sku IS NOT NULL
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "SKUs distintos vendidos",
+            {k: skus_vendidos(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Productos unicos con al menos una venta paid del dia",
+        ))
+
+        # Unidades vendidas
+        def unidades(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COALESCE(SUM(oi.quantity),0) FROM tienda_nube."OrderItem" oi
+                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+                WHERE o."paymentStatus" = 'paid'
+                  AND o."createdAt"::date = (CURRENT_DATE - CAST(:d AS integer))
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Unidades vendidas",
+            {k: unidades(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Suma de quantity de OrderItem paid del dia",
+        ))
+
+        # SKUs en stock critico (<= 5 unidades)
+        def stock_critico(days_back: int) -> float:
+            # No depende del dia - es estado actual
+            if days_back == 0:
+                return int(scalar(uni, """
+                    SELECT COUNT(DISTINCT "articuloCodigo")
+                    FROM digip."StockDetalle"
+                    GROUP BY "articuloCodigo"
+                    HAVING SUM(unidades) BETWEEN 1 AND 5
+                """) or 0)
+            return 0
+
+        # No mostramos comparativo - es snapshot actual
+        sc = stock_critico(0)
+        if sc:
+            blocks.append({
+                "label": "SKUs en stock critico",
+                "prefix": "",
+                "suffix": "",
+                "hint": "Stock entre 1 y 5 unidades · necesita reposicion",
+                "today": sc,
+                "anchors": [
+                    {"key": "w_ago", "label": "estado", "value": sc, "delta_pct": None},
+                    {"key": "m_ago", "label": "actual", "value": sc, "delta_pct": None},
+                    {"key": "y_ago", "label": "snapshot", "value": sc, "delta_pct": None},
+                ],
+            })
+    except Exception as e:
+        log.warning("today productos snap fail: %s", e)
+
+    return {
+        "level": "today",
+        "context": "productos",
+        "today_date": today_ar().isoformat(),
+        "blocks": blocks,
+        "generated_at": now_ar().isoformat(),
+    }
+
+
+def _today_snapshot_logistica(unit: str | None = None) -> dict:
+    """HOY contextual para Logistica: pedidos atascados, despachos del dia,
+    fulfillment del dia."""
+    blocks: list[dict] = []
+    try:
+        uni = get_engine("unistore")
+
+        # Pedidos creados hoy
+        def created(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COUNT(*) FROM tienda_nube."Order"
+                WHERE "createdAt"::date = (CURRENT_DATE - CAST(:d AS integer))
+                  AND "paymentStatus" = 'paid'
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Ordenes pagadas (a despachar)",
+            {k: created(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Pagadas el dia - entran al funnel de logistica",
+        ))
+
+        # Despachos hoy
+        def despachados(days_back: int) -> float:
+            return int(scalar(uni, """
+                SELECT COUNT(DISTINCT dp."pedidoCodigo")
+                FROM digip."DespachoPedido" dp
+                WHERE dp.fecha::date = (CURRENT_DATE - CAST(:d AS integer))
+            """, {"d": days_back}) or 0)
+
+        blocks.append(_kpi_block(
+            "Despachos Digip",
+            {k: despachados(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Pedidos despachados fisicamente del deposito",
+        ))
+
+        # Pedidos atascados (estado actual, no comparativo dia)
+        stuck = int(scalar(uni, """
+            SELECT COUNT(*) FROM tienda_nube."Order"
+            WHERE "paymentStatus" = 'paid'
+              AND "shippingStatus" IN ('unpacked','unshipped','partially_packed','partially_fulfilled')
+              AND "createdAt" < NOW() - INTERVAL '5 days'
+        """) or 0)
+        if stuck > 0:
+            blocks.append({
+                "label": "Pedidos atascados (>5d)",
+                "prefix": "",
+                "suffix": "",
+                "hint": "Paid sin fulfillment hace mas de 5 dias",
+                "today": stuck,
+                "anchors": [
+                    {"key": "w_ago", "label": "estado", "value": stuck, "delta_pct": None},
+                    {"key": "m_ago", "label": "actual", "value": stuck, "delta_pct": None},
+                    {"key": "y_ago", "label": "snapshot", "value": stuck, "delta_pct": None},
+                ],
+            })
+    except Exception as e:
+        log.warning("today logistica snap fail: %s", e)
+
+    return {
+        "level": "today",
+        "context": "logistica",
         "today_date": today_ar().isoformat(),
         "blocks": blocks,
         "generated_at": now_ar().isoformat(),
