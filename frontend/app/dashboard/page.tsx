@@ -297,6 +297,10 @@ export default function ExecutiveDashboardPage() {
           </div>
         )}
 
+        {/* Clientes VIP - cards por tier */}
+        <VipKpiSection />
+
+
         {/* Revenue chart + Revenue mix donut */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
           <div className="xl:col-span-2">
@@ -382,6 +386,132 @@ export default function ExecutiveDashboardPage() {
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+// ============================================================
+// Clientes VIP — KPIs cross-unidad clickeables
+// ============================================================
+type VipOverview = {
+  total_vips: number;
+  tiers: {
+    gold: { count: number; lifetime_total: number };
+    silver: { count: number; lifetime_total: number };
+    bronze: { count: number; lifetime_total: number };
+  };
+  lifetime_total: number;
+  rules: Record<string, number>;
+};
+
+function VipKpiSection() {
+  const [drillTier, setDrillTier] = useState<"all" | "gold" | "silver" | "bronze" | null>(null);
+  const { data, isLoading } = useQuery<VipOverview>({
+    queryKey: ["vip-overview"],
+    queryFn: () => api<VipOverview>("/api/dashboards/customers-vip/overview"),
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading || !data) {
+    return (
+      <div className="mb-6">
+        <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3">Clientes VIP</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-28 bg-surface border border-border rounded-xl animate-pulse" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const cards = [
+    {
+      label: "Total VIPs",
+      count: data.total_vips,
+      lifetime: data.lifetime_total,
+      tier: "all" as const,
+      icon: "★",
+      bg: "from-violet-500 to-fuchsia-600",
+      border: "border-violet-300",
+      hint: "Lifetime ≥ $300k OR orden ≥ $300k OR (4+ ord & ticket avg ≥ $75k)",
+    },
+    {
+      label: "VIP Gold",
+      count: data.tiers.gold.count,
+      lifetime: data.tiers.gold.lifetime_total,
+      tier: "gold" as const,
+      icon: "👑",
+      bg: "from-yellow-400 to-amber-500",
+      border: "border-amber-300",
+      hint: "Lifetime > $5M · top 1%",
+    },
+    {
+      label: "VIP Silver",
+      count: data.tiers.silver.count,
+      lifetime: data.tiers.silver.lifetime_total,
+      tier: "silver" as const,
+      icon: "💎",
+      bg: "from-slate-400 to-zinc-500",
+      border: "border-slate-300",
+      hint: "Lifetime $1M–$5M",
+    },
+    {
+      label: "VIP Bronze",
+      count: data.tiers.bronze.count,
+      lifetime: data.tiers.bronze.lifetime_total,
+      tier: "bronze" as const,
+      icon: "⭐",
+      bg: "from-orange-400 to-amber-500",
+      border: "border-amber-300",
+      hint: "Lifetime $300k–$1M",
+    },
+  ];
+
+  return (
+    <>
+      <div className="mb-6">
+        <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3 flex items-center gap-2">
+          Clientes VIP
+          <span className="text-[10px] font-normal text-text-muted">
+            · regla multi-criterio · click para drilldown
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {cards.map((c) => (
+            <button
+              key={c.tier}
+              onClick={() => setDrillTier(c.tier)}
+              className={`bg-surface border-2 ${c.border} rounded-xl p-4 hover:shadow-lg transition text-left group`}
+            >
+              <div className="flex items-start justify-between mb-2">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{c.label}</div>
+                <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${c.bg} text-white flex items-center justify-center shadow-md text-lg`}>
+                  {c.icon}
+                </div>
+              </div>
+              <div className="text-3xl font-extrabold text-text tabular-nums">{formatNumber(c.count)}</div>
+              <div className="text-[11px] text-text-muted mt-0.5">
+                Lifetime total: <span className="font-bold text-text">{formatCurrency(c.lifetime)}</span>
+              </div>
+              <div className="text-[9px] text-text-muted mt-2 line-clamp-2">{c.hint}</div>
+              <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-primary font-semibold opacity-0 group-hover:opacity-100 transition">
+                Ver clientes →
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {drillTier && (
+        <DrillDownModal
+          title={drillTier === "all" ? "Todos los clientes VIP" : `Clientes VIP · ${drillTier.toUpperCase()}`}
+          subtitle="Click un cliente para abrir su perfil 360 · CSV exportable"
+          endpoint={`/api/dashboards/customers-vip?tier=${drillTier}`}
+          filename={`vip_${drillTier}.csv`}
+          onClose={() => setDrillTier(null)}
+        />
+      )}
     </>
   );
 }

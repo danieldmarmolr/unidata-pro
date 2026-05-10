@@ -303,6 +303,35 @@ from app.services import stock_heatmap as stock_svc
 from app.services import envios_unistore as envios_uni_svc
 from app.services import envios_meli_unidrop as envios_meli_svc
 from app.services import notifications as notif_svc
+from app.services import customer_vip as vip_svc
+
+
+@router.get("/customers-vip")
+def get_customers_vip(
+    _: Annotated[str, Depends(current_user)],
+    tier: Annotated[Literal["all", "gold", "silver", "bronze"], Query()] = "all",
+) -> dict:
+    """Lista de clientes Unistore VIP con tier y razon. Drilldown compatible.
+
+    Reglas: cliente VIP si lifetime >= 300k OR orden_max >= 300k OR
+    (>=4 ordenes Y ticket promedio >= 75k). Tiers: bronze 300k-1M /
+    silver 1M-5M / gold > 5M lifetime."""
+    return vip_svc.list_vip_customers(tier)
+
+
+@router.get("/customers-vip/overview")
+def get_customers_vip_overview(_: Annotated[str, Depends(current_user)]) -> dict:
+    """KPI summary: count + lifetime por tier para cards gerenciales."""
+    return vip_svc.vip_overview()
+
+
+@router.get("/customers/{customer_id}/vip-status")
+def get_customer_vip_status(
+    customer_id: int,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Status VIP de un customer especifico (para mostrar en perfil 360)."""
+    return vip_svc.get_customer_vip_status(customer_id)
 
 
 @router.get("/notifications")

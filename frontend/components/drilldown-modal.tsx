@@ -456,7 +456,38 @@ export function DrillDownModal({
                 <span>{formatNumber(data.row_count)} resultados</span>
                 {data.row_count >= 200 && <span className="text-warn">(top 200)</span>}
                 {(() => {
-                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado)$/i.test(c));
+                  // Si la fila tiene columna 'tier', contar por tier
+                  const tierIdx = data.columns.findIndex((c) => /^tier$/i.test(c));
+                  if (tierIdx >= 0) {
+                    const counts = { gold: 0, silver: 0, bronze: 0 };
+                    for (const row of data.rows) {
+                      const t = String(row[tierIdx] ?? "").toLowerCase();
+                      if (t in counts) counts[t as keyof typeof counts]++;
+                    }
+                    const total = counts.gold + counts.silver + counts.bronze;
+                    if (total === 0) return null;
+                    return (
+                      <span className="inline-flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider">
+                        {counts.gold > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-yellow-100 to-amber-200 text-amber-900 border border-amber-300">
+                            <span>👑</span> {counts.gold} Gold
+                          </span>
+                        )}
+                        {counts.silver > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-slate-100 to-zinc-200 text-slate-800 border border-slate-300">
+                            <span>💎</span> {counts.silver} Silver
+                          </span>
+                        )}
+                        {counts.bronze > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-orange-100 to-amber-100 text-amber-900 border border-amber-300">
+                            <span>⭐</span> {counts.bronze} Bronze
+                          </span>
+                        )}
+                      </span>
+                    );
+                  }
+                  // Fallback: contar por monto >= 300k
+                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado|lifetime|facturacion(_total)?)$/i.test(c));
                   if (totalIdx < 0) return null;
                   const vips = data.rows.filter((r) => Number(r[totalIdx]) >= 300000);
                   if (vips.length === 0) return null;
@@ -546,38 +577,49 @@ export function DrillDownModal({
               </thead>
               <tbody>
                 {data.rows.map((r, i) => {
-                  // Detectar fila VIP: total > $300.000 (umbral de "Cliente VIP")
-                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado)$/i.test(c));
+                  // Si la fila tiene columna 'tier' (drilldown VIP), usar ese.
+                  // Sino fallback a la heuristica VIP por monto >= 300k.
+                  const tierIdx = data.columns.findIndex((c) => /^tier$/i.test(c));
+                  const tierVal = tierIdx >= 0 ? String(r[tierIdx] ?? "").toLowerCase() : "";
+                  const totalIdx = data.columns.findIndex((c) => /^(total|amount|revenue|gmv|monto|cobrado|lifetime|facturacion(_total)?)$/i.test(c));
                   const totalVal = totalIdx >= 0 ? Number(r[totalIdx]) : NaN;
-                  const isVip = !Number.isNaN(totalVal) && totalVal >= 300000;
+                  const isVip = !!tierVal || (!Number.isNaN(totalVal) && totalVal >= 300000);
+
+                  // Visual por tier (gold > silver > bronze) con fallback amber para "compra alta"
+                  const vipVisual = (() => {
+                    if (tierVal === "gold")   return { icon: "👑", bg: "from-yellow-400 to-amber-500", row: "from-yellow-50 via-amber-50 to-transparent border-amber-300", label: "VIP Gold" };
+                    if (tierVal === "silver") return { icon: "💎", bg: "from-slate-400 to-zinc-500",   row: "from-slate-50 via-zinc-50 to-transparent border-slate-300", label: "VIP Silver" };
+                    if (tierVal === "bronze") return { icon: "⭐", bg: "from-orange-400 to-amber-500", row: "from-orange-50 via-amber-50 to-transparent border-amber-300", label: "VIP Bronze" };
+                    // Fallback: solo "compra alta"
+                    return { icon: "★", bg: "from-amber-400 to-orange-500", row: "from-amber-50/80 via-amber-50/40 to-transparent border-amber-200", label: `Compra alta: ${formatCurrency(totalVal)}` };
+                  })();
 
                   return (
                     <tr
                       key={i}
                       className={
                         isVip
-                          ? "border-t border-amber-200 bg-gradient-to-r from-amber-50/80 via-amber-50/40 to-transparent hover:from-amber-100/80 hover:via-amber-50/60 transition relative"
+                          ? `border-t bg-gradient-to-r ${vipVisual.row} hover:brightness-95 transition relative`
                           : "border-t border-border hover:bg-soft transition"
                       }
-                      title={isVip ? `Compra alta: ${formatCurrency(totalVal)} (VIP)` : undefined}
+                      title={isVip ? vipVisual.label : undefined}
                     >
                       {r.map((v, j) => {
                         const col = data.columns[j];
                         if (isHiddenColumn(col)) return null;
-                        // En la primera celda visible mostrar un badge VIP
                         const isFirstVisible = j === 0;
                         return (
                           <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
                             <div className="inline-flex items-center gap-1.5">
                               {isFirstVisible && isVip && (
                                 <span
-                                  className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-sm shadow-amber-500/30 flex-shrink-0"
-                                  title={`Compra VIP: ${formatCurrency(totalVal)}`}
+                                  className={`inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-br ${vipVisual.bg} text-white shadow-sm flex-shrink-0`}
+                                  title={vipVisual.label}
                                 >
-                                  <span className="text-[8px] font-extrabold">★</span>
+                                  <span className="text-[10px]">{vipVisual.icon}</span>
                                 </span>
                               )}
-                              <span className={isFirstVisible && isVip ? "" : ""}>
+                              <span>
                                 <CellRenderer col={col} v={v} row={r} columns={data.columns} />
                               </span>
                             </div>

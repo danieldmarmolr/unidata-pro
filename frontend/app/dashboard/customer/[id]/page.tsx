@@ -206,6 +206,9 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  </div>
  )}
 
+ {/* Card VIP destacada cuando aplica */}
+ <VipStatusCard customerId={Number(id)} />
+
  {data?.customer_info && (
  <div className="bg-surface border border-border rounded-xl p-5 mb-6">
  <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm items-center">
@@ -359,5 +362,53 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
  <OrderDetailModal orderId={orderDetailId} onClose={() => setOrderDetailId(null)} />
  </>
+ );
+}
+
+// VIP status card mostrada arriba del perfil cuando el cliente cumple alguna regla VIP
+type VipStatus = {
+ is_vip: boolean;
+ tier: "gold" | "silver" | "bronze" | null;
+ reasons: string[];
+ lifetime: number;
+ max_order: number;
+ paid_orders: number;
+ avg_ticket: number;
+};
+
+function VipStatusCard({ customerId }: { customerId: number }) {
+ const { data } = useQuery<VipStatus>({
+  queryKey: ["customer-vip", customerId],
+  queryFn: () => api(`/api/dashboards/customers/${customerId}/vip-status`),
+  staleTime: 5 * 60_000,
+ });
+ if (!data || !data.is_vip || !data.tier) return null;
+ const tierMeta = {
+  gold: { icon: "👑", label: "VIP Gold", bg: "from-yellow-100 via-amber-100 to-yellow-50", border: "border-amber-400", color: "text-amber-900" },
+  silver: { icon: "💎", label: "VIP Silver", bg: "from-slate-100 via-zinc-100 to-slate-50", border: "border-slate-400", color: "text-slate-800" },
+  bronze: { icon: "⭐", label: "VIP Bronze", bg: "from-orange-100 via-amber-100 to-orange-50", border: "border-amber-400", color: "text-amber-900" },
+ }[data.tier];
+ return (
+  <div className={`bg-gradient-to-r ${tierMeta.bg} border-2 ${tierMeta.border} rounded-2xl p-5 mb-6 shadow-md`}>
+   <div className="flex items-center gap-4 flex-wrap">
+    <div className="text-5xl flex-shrink-0">{tierMeta.icon}</div>
+    <div className="flex-1 min-w-0">
+     <div className={`text-xs font-bold uppercase tracking-wider ${tierMeta.color}`}>Cliente {tierMeta.label}</div>
+     <div className="text-2xl font-extrabold text-text mt-0.5">
+      Lifetime ${data.lifetime.toLocaleString("es-AR")}
+     </div>
+     <div className="text-xs text-text-muted mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+      <span><strong>{data.paid_orders}</strong> órdenes pagadas</span>
+      <span>Ticket prom: <strong>${data.avg_ticket.toLocaleString("es-AR")}</strong></span>
+      <span>Orden máx: <strong>${data.max_order.toLocaleString("es-AR")}</strong></span>
+     </div>
+     {data.reasons.length > 0 && (
+      <div className="text-[11px] text-text-muted mt-2">
+       <span className="font-bold">Razón VIP:</span> {data.reasons.join(" · ")}
+      </div>
+     )}
+    </div>
+   </div>
+  </div>
  );
 }
