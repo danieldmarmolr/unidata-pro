@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, createContext, useContext } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import {
   TrendingUp, TrendingDown, Sparkles, AlertTriangle, ShoppingBag,
   Zap, Snowflake, Activity, Layers, Network, RotateCcw,
+  ImageOff, Info,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
@@ -13,6 +14,7 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 
 type Tab =
   | "abc" | "matrix" | "abc-margen"
@@ -21,12 +23,55 @@ type Tab =
   | "trends" | "lifecycle" | "elasticity" | "returns"
   | "forecast";
 
+type Unit = "unistore" | "unidrop";
+type ProductType = "all" | "products" | "services";
+
+// Helper: SKUs que empiezan con PVA son servicios (planes Meli, etc.).
+// Tambien hay otros patrones de servicio definidos en backend (sku_rules.py)
+// pero PVA es el dominante y el que el usuario nos pidio separar.
+export function isServiceSku(sku: string): boolean {
+  if (!sku) return false;
+  return /^PVA/i.test(sku.trim());
+}
+
+// Context para que las secciones hijas accedan a unit/type sin prop drilling
+type AnalyticsCtx = { unit: Unit; productType: ProductType };
+const AnalyticsContext = createContext<AnalyticsCtx>({ unit: "unistore", productType: "all" });
+
+/** Aplica el filtro Producto/Servicio a una lista de SKUs. */
+function applyTypeFilter<T extends { sku?: string }>(items: T[], type: ProductType): T[] {
+  if (type === "all") return items;
+  if (type === "products") return items.filter((s) => !isServiceSku(s.sku ?? ""));
+  return items.filter((s) => isServiceSku(s.sku ?? ""));
+}
+
+/** Componente reusable: descripción explicativa de un análisis. */
+function AnalysisIntro({ title, what, how }: { title: string; what: string; how: string }) {
+  return (
+    <div className="bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 rounded-xl p-4 mb-4 flex items-start gap-3">
+      <Info size={16} className="text-violet-600 shrink-0 mt-0.5" />
+      <div className="flex-1 text-xs">
+        <div className="font-bold text-violet-900 mb-0.5">{title}</div>
+        <div className="text-violet-800/90 leading-relaxed">
+          <strong>Qué es:</strong> {what}
+        </div>
+        <div className="text-violet-800/90 mt-1 leading-relaxed">
+          <strong>Cómo aprovecharlo:</strong> {how}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProductAnalyticsPage() {
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
   const [tab, setTab] = useState<Tab>("abc");
+  const [unit, setUnit] = useState<Unit>("unistore");
+  const [productType, setProductType] = useState<ProductType>("all");
+  const qsWithUnit = `${_qs}&unit=${unit}`;
 
   return (
     <>
@@ -36,6 +81,34 @@ export default function ProductAnalyticsPage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        {/* Filtros maestros: unidad de negocio + tipo de SKU */}
+        <div className="mb-4 flex items-center gap-3 flex-wrap bg-surface border border-border rounded-xl px-4 py-3">
+          <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Unidad</span>
+          <Segmented<Unit>
+            value={unit}
+            onChange={setUnit}
+            options={[
+              { value: "unistore", label: "Unistore" },
+              { value: "unidrop", label: "Unidrop" },
+            ]}
+          />
+          <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold ml-4">Tipo</span>
+          <Segmented<ProductType>
+            value={productType}
+            onChange={setProductType}
+            options={[
+              { value: "all", label: "Todos" },
+              { value: "products", label: "Productos físicos" },
+              { value: "services", label: "Servicios (PVA*)" },
+            ]}
+          />
+          <span className="text-[10px] text-text-muted ml-auto">
+            {unit === "unidrop" && (
+              <span className="text-amber-700">⚠ Soporte Unidrop en analytics avanzados pendiente — algunas vistas pueden seguir mostrando Unistore</span>
+            )}
+          </span>
+        </div>
+
         {/* Navigation: agrupada en 5 categorias */}
         <div className="mb-4 space-y-2">
           <TabGroup
@@ -94,20 +167,22 @@ export default function ProductAnalyticsPage() {
           />
         </div>
 
-        {tab === "abc" && <AbcSection qs={_qs} />}
-        {tab === "abc-margen" && <AbcMargenSection qs={_qs} />}
-        {tab === "matrix" && <AbcXyzSection qs={_qs} />}
-        {tab === "rotation" && <RotationSection />}
-        {tab === "stockout" && <StockoutSection />}
-        {tab === "simulator" && <SimulatorSection />}
-        {tab === "cross-sell" && <CrossSellSection qs={_qs} />}
-        {tab === "affinity" && <AffinitySection />}
-        {tab === "cannibalization" && <CannibalizationSection />}
-        {tab === "trends" && <TrendsSection />}
-        {tab === "lifecycle" && <LifecycleSection />}
-        {tab === "elasticity" && <ElasticitySection />}
-        {tab === "forecast" && <ForecastSection />}
-        {tab === "returns" && <ReturnsSection />}
+        <AnalyticsContext.Provider value={{ unit, productType }}>
+          {tab === "abc" && <AbcSection qs={qsWithUnit} />}
+          {tab === "abc-margen" && <AbcMargenSection qs={qsWithUnit} />}
+          {tab === "matrix" && <AbcXyzSection qs={qsWithUnit} />}
+          {tab === "rotation" && <RotationSection />}
+          {tab === "stockout" && <StockoutSection />}
+          {tab === "simulator" && <SimulatorSection />}
+          {tab === "cross-sell" && <CrossSellSection qs={qsWithUnit} />}
+          {tab === "affinity" && <AffinitySection />}
+          {tab === "cannibalization" && <CannibalizationSection />}
+          {tab === "trends" && <TrendsSection />}
+          {tab === "lifecycle" && <LifecycleSection />}
+          {tab === "elasticity" && <ElasticitySection />}
+          {tab === "forecast" && <ForecastSection />}
+          {tab === "returns" && <ReturnsSection />}
+        </AnalyticsContext.Provider>
       </div>
     </>
   );
@@ -163,6 +238,7 @@ type AbcResp = {
 };
 
 function AbcSection({ qs }: { qs: string }) {
+  const ctx = useContext(AnalyticsContext);
   const [filter, setFilter] = useState<"all" | "A" | "B" | "C">("all");
   const { data, isLoading } = useQuery<AbcResp>({
     queryKey: ["product-abc", qs],
@@ -172,10 +248,22 @@ function AbcSection({ qs }: { qs: string }) {
 
   if (isLoading || !data) return <SectionLoader />;
 
-  const visible = filter === "all" ? data.skus : data.skus.filter((s) => s.clase === filter);
+  // Aplico SIEMPRE el filtro Producto/Servicio antes de filtrar por clase A/B/C
+  const skusByType = applyTypeFilter(data.skus, ctx.productType);
+  const visible = filter === "all" ? skusByType : skusByType.filter((s) => s.clase === filter);
+
+  // Enriquecimiento con thumbnails (primeros 80 SKUs visibles para no spamear)
+  const skuList = visible.slice(0, 80).map((s) => s.sku).filter(Boolean);
+  const enriched = useSkuEnrichment("unistore", skuList);
+  const enrichMap = enriched.data ?? {};
 
   return (
     <>
+      <AnalysisIntro
+        title="ABC (análisis de Pareto)"
+        what="Clasifica tus SKUs según cuánto contribuyen al revenue. Clase A son el 20% que genera el 80% del negocio. Clase B son importantes pero secundarios. Clase C es cola larga: muchos SKUs que aportan poco."
+        how="Foco operativo: garantizar stock 24/7 de los Clase A, monitorear Clase B con regla normal de reposición, y revisar Clase C buscando candidatos a discontinuar o convertir en combo con un Clase A. Click en una tarjeta para filtrar el ranking."
+      />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         {(["A", "B", "C"] as const).map((c) => {
           const cls = data.classes[c];
@@ -250,13 +338,37 @@ function AbcSection({ qs }: { qs: string }) {
                     </span>
                   </td>
                   <td className="px-3 py-1.5">
-                    <Link
-                      href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
-                      className="text-primary hover:underline font-medium"
-                    >
-                      {s.nombre}
-                    </Link>
-                    <div className="text-[10px] text-text-muted/70 font-mono">{s.sku}{s.ean ? ` · EAN ${s.ean}` : ""}</div>
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-10 h-10 rounded-md bg-white border border-border flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
+                        {enrichMap[s.sku]?.image_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={enrichMap[s.sku].image_url!}
+                            alt={s.nombre}
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                          />
+                        ) : (
+                          <ImageOff size={14} className="text-text-muted/40" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
+                          className="text-primary hover:underline font-medium block truncate max-w-[360px]"
+                          title={s.nombre}
+                        >
+                          {s.nombre}
+                          {isServiceSku(s.sku) && (
+                            <span className="ml-1.5 inline-block text-[9px] font-bold px-1 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200 align-middle">
+                              SERVICIO
+                            </span>
+                          )}
+                        </Link>
+                        <div className="text-[10px] text-text-muted/70 font-mono">{s.sku}{s.ean ? ` · EAN ${s.ean}` : ""}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-3 py-1.5 text-right tabular-nums font-bold">{formatCurrency(s.revenue)}</td>
                   <td className="px-3 py-1.5 text-right tabular-nums">{s.pct_revenue}%</td>
