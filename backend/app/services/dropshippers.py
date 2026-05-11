@@ -559,6 +559,8 @@ def dropshipper_detail(
         user["canal"] = "sin_canal"
 
     # KPIs de pagos Talo (PaymentIntent / CustomerPaymentAccount)
+    # Total/deuda no se filtran por periodo (son estado actual).
+    # pagado_total_period y splits TN/ML SI se filtran por periodo.
     pagos = q(eng, """
         SELECT
             COUNT(*)::int AS total_intents,
@@ -566,11 +568,36 @@ def dropshipper_detail(
             COALESCE(SUM(pi."paidAmount") FILTER (WHERE pi."status"='PROCESSED'),0)::float AS pagado_total,
             COALESCE(SUM(pi."pendingAmount") FILTER (WHERE pi."status"<>'PROCESSED'),0)::float AS deuda_pendiente,
             COUNT(*) FILTER (WHERE pi."status"<>'PROCESSED' AND COALESCE(pi."pendingAmount",0) > 0)::int AS pagos_con_deuda,
-            MAX(pi."createdAt") FILTER (WHERE pi."status"='PROCESSED')::text AS ultimo_pago
+            MAX(pi."createdAt") FILTER (WHERE pi."status"='PROCESSED')::text AS ultimo_pago,
+            -- Splits por origen (period filtered, status=PROCESSED)
+            COALESCE(SUM(pi."paidAmount") FILTER (
+                WHERE pi."status"='PROCESSED'
+                  AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                  AND COALESCE(array_length(pi."orderIds",1),0) > 0
+            ),0)::float AS pagado_tn_period,
+            COALESCE(SUM(pi."paidAmount") FILTER (
+                WHERE pi."status"='PROCESSED'
+                  AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                  AND COALESCE(array_length(pi."mlOrderIds",1),0) > 0
+            ),0)::float AS pagado_ml_period,
+            COALESCE(SUM(pi."paidAmount") FILTER (
+                WHERE pi."status"='PROCESSED'
+                  AND pi."createdAt" >= NOW() - make_interval(days => :d)
+            ),0)::float AS pagado_total_period,
+            COUNT(*) FILTER (
+                WHERE pi."status"='PROCESSED'
+                  AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                  AND COALESCE(array_length(pi."orderIds",1),0) > 0
+            )::int AS pagos_tn_period_count,
+            COUNT(*) FILTER (
+                WHERE pi."status"='PROCESSED'
+                  AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                  AND COALESCE(array_length(pi."mlOrderIds",1),0) > 0
+            )::int AS pagos_ml_period_count
         FROM public."PaymentIntent" pi
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
         WHERE cpa."userId" = :uid
-    """, {"uid": int(user_id)}) or [(0, 0, 0, 0, 0, None)]
+    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, 0, 0, None, 0, 0, 0, 0, 0)]
     pg = pagos[0]
     pagos_kpi = {
         "total_intents": int(pg[0] or 0),
@@ -579,7 +606,39 @@ def dropshipper_detail(
         "deuda_pendiente": float(pg[3] or 0),
         "pagos_con_deuda": int(pg[4] or 0),
         "ultimo_pago": pg[5],
+        # Nuevo: ventas pagadas a Unidrop dentro del periodo, desglosadas por origen.
+        "pagado_tn_period": float(pg[6] or 0),
+        "pagado_ml_period": float(pg[7] or 0),
+        "pagado_total_period": float(pg[8] or 0),
+        "pagos_tn_period_count": int(pg[9] or 0),
+        "pagos_ml_period_count": int(pg[10] or 0),
     }
+
+    # Suscripciones pagadas en el periodo (PaymentTransactionSubscription).
+    # El plan al momento del pago no se persiste, asi que tageamos con el
+    # plan actual del dropshipper como referencia.
+    subs_rows = q(eng, """
+        SELECT pts.id,
+               pts."taloTransactionId",
+               pts.amount::float,
+               pts.currency,
+               pts."transactionTimestamp"::text
+        FROM public."PaymentTransactionSubscription" pts
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pts."customerAccountId"
+        WHERE cpa."userId" = :uid
+          AND pts."transactionTimestamp" >= NOW() - make_interval(days => :d)
+        ORDER BY pts."transactionTimestamp" DESC NULLS LAST
+        LIMIT 50
+    """, {"uid": int(user_id), "d": int(days)}) or []
+    suscripciones_pagadas = [{
+        "id": int(r[0]) if r[0] else None,
+        "talo_transaction_id": r[1] or "",
+        "amount": round(float(r[2] or 0), 2),
+        "currency": r[3] or "ARS",
+        "fecha": r[4],
+        "plan": user.get("plan") or "",
+    } for r in subs_rows]
+    suscripciones_total = round(sum(s["amount"] for s in suscripciones_pagadas), 2)
 
     # Publicaciones
     pub = q(eng, """
@@ -693,6 +752,12 @@ def dropshipper_detail(
         "ultimos_pagos": pagos_list,
         # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
         "top_clientes_finales": top_clientes_finales,
+        # Suscripciones pagadas (PaymentTransactionSubscription) en periodo
+        "suscripciones": {
+            "total_pagado": suscripciones_total,
+            "cantidad": len(suscripciones_pagadas),
+            "items": suscripciones_pagadas,
+        },
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 

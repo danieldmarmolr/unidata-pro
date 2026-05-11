@@ -86,6 +86,16 @@ type DropshipperDetail = {
     deuda_pendiente: number;
     pagos_con_deuda: number;
     ultimo_pago: string | null;
+    pagado_tn_period?: number;
+    pagado_ml_period?: number;
+    pagado_total_period?: number;
+    pagos_tn_period_count?: number;
+    pagos_ml_period_count?: number;
+  };
+  suscripciones?: {
+    total_pagado: number;
+    cantidad: number;
+    items: { id: number; talo_transaction_id: string; amount: number; currency: string; fecha: string | null; plan: string }[];
   };
   publicaciones: { totales: number; activas: number; ultima: string | null };
   monthly: { mes: string; ordenes: number; gmv: number; profit: number }[];
@@ -350,6 +360,85 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
                   hint="Suma costos de envío MELI" />
         </div>
+
+        {/* Ventas pagadas a Unidrop (PaymentIntent) - desglose TN/ML + suscripciones */}
+        {(pg.pagado_total_period !== undefined && (pg.pagado_total_period > 0 || (data.suscripciones?.total_pagado ?? 0) > 0)) && (
+          <div className="bg-violet-50/50 border-2 border-violet-200 rounded-xl p-4 sm:p-5 mb-5">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-violet-900">
+                  <span className="inline-block px-2 py-0.5 rounded bg-violet-200 text-violet-900 text-[10px] font-extrabold uppercase tracking-wider mr-2">UNIDROP</span>
+                  Ventas pagadas a Unidrop (en periodo)
+                </h3>
+                <p className="text-[11px] text-violet-700/80">
+                  PaymentIntent PROCESSED · separado por origen (TN / ML) · suscripcion aparte
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <KpiBox
+                icon={DollarSign}
+                label="Pagado total (periodo)"
+                value={formatCurrency(pg.pagado_total_period ?? 0)}
+                accent="primary"
+                hint={`${(pg.pagos_tn_period_count ?? 0) + (pg.pagos_ml_period_count ?? 0)} intents PROCESSED`}
+              />
+              <KpiBox
+                icon={ShoppingBag}
+                label="Pagado por ventas TN"
+                value={formatCurrency(pg.pagado_tn_period ?? 0)}
+                accent="emerald"
+                hint={`${pg.pagos_tn_period_count ?? 0} intents con orderIds`}
+              />
+              <KpiBox
+                icon={Award}
+                label="Pagado por ventas ML"
+                value={formatCurrency(pg.pagado_ml_period ?? 0)}
+                accent="amber"
+                hint={`${pg.pagos_ml_period_count ?? 0} intents con mlOrderIds`}
+              />
+              <KpiBox
+                icon={CreditCard}
+                label={`Suscripcion ${u.plan || ""}`.trim()}
+                value={formatCurrency(data.suscripciones?.total_pagado ?? 0)}
+                accent="rose"
+                hint={`${data.suscripciones?.cantidad ?? 0} pagos de suscripcion (Talo)`}
+              />
+            </div>
+
+            {(data.suscripciones?.items?.length ?? 0) > 0 && (
+              <div className="mt-4 bg-surface border border-violet-200 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 border-b border-violet-200 text-[11px] font-bold text-violet-900">
+                  Pagos de suscripcion en el periodo
+                </div>
+                <div className="overflow-x-auto max-h-[240px] overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-violet-50 text-violet-900 text-[10px] uppercase tracking-wider sticky top-0">
+                      <tr>
+                        <th className="text-left px-3 py-2">Talo Tx</th>
+                        <th className="text-left px-2 py-2">Plan</th>
+                        <th className="text-left px-2 py-2">Fecha</th>
+                        <th className="text-right px-2 py-2">Monto</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.suscripciones!.items.map((s) => (
+                        <tr key={s.id} className="border-t border-violet-100">
+                          <td className="px-3 py-1.5 font-mono text-text-muted">{s.talo_transaction_id}</td>
+                          <td className="px-2 py-1.5">{s.plan}</td>
+                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(s.fecha)}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-violet-700">
+                            {formatCurrency(s.amount)} {s.currency !== "ARS" ? s.currency : ""}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* KPIs TIENDA NUBE - solo si vende por TN */}
         {data.ventas_tn && (data.ventas_tn.ventas_pagadas > 0 || data.ventas_tn.tiendas_conectadas > 0) && (
