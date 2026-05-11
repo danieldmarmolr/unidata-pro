@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building, Share2 } from "lucide-react";
+import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building, Share2, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
@@ -15,7 +15,12 @@ type Result = {
   row_count: number;
 };
 
-const CURRENCY_HINT = /total|amount|subtotal|revenue|commission|costo|precio|gmv|cobrado|monto/i;
+// Una columna se considera "moneda $" si su NOMBRE incluye cualquiera de estos
+// tokens. Cubre todas las columnas $ que aparecen en los drilldowns:
+// totales/revenue/gmv/facturacion + ticket promedio + max order/orden mas alta
+// + LTV + comisiones + acreditado + monto pagado/esperado + paid/pending +
+// saldo/deuda + profit/ganancia/margen/rentabilidad + costos + precio + valor.
+const CURRENCY_HINT = /total|amount|subtotal|revenue|commission|comision|costo|precio|gmv|cobrado|monto|ticket|ltv|max_order|orden_max|orden_mas|paid|pending|saldo|deuda|profit|ganancia|margen|rentabilidad|facturacion|acreditado|gasto|spend|cobranza|lifetime|valor_compra|valor_max|valor_min|ars$|usd$/i;
 const NUMBER_HINT = /^(qty|cantidad|unidades|ordenes|orders|n|count|days|dias)$/i;
 const PHONE_HINT = /^(phone|telefono|tel|whatsapp|celular)$/i;
 const EMAIL_HINT = /^(email|mail|correo)$/i;
@@ -487,6 +492,49 @@ export function DrillDownModal({
     staleTime: 60_000,
   });
 
+  // Sort por columna (click en el header). Indice de columna (data.columns) +
+  // direccion. Se resetea cuando cambia el endpoint para no mantener un sort
+  // que apunta a otra grilla.
+  const [sortBy, setSortBy] = useState<number | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  useEffect(() => {
+    setSortBy(null);
+    setSortDir("desc");
+  }, [endpoint]);
+
+  const toggleSort = (idx: number) => {
+    if (sortBy === idx) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(idx);
+      setSortDir("desc");
+    }
+  };
+
+  // Filas ordenadas. Si no hay sort, devuelve las originales sin tocar.
+  const sortedRows = useMemo(() => {
+    if (!data || sortBy === null) return data?.rows ?? [];
+    const arr = [...data.rows];
+    const dir = sortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      const va = a[sortBy];
+      const vb = b[sortBy];
+      const aNull = va === null || va === undefined || va === "";
+      const bNull = vb === null || vb === undefined || vb === "";
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      const na = Number(va);
+      const nb = Number(vb);
+      if (!Number.isNaN(na) && !Number.isNaN(nb) && typeof va !== "string" && typeof vb !== "string") {
+        return (na - nb) * dir;
+      }
+      // Strings con numeros adentro -> comparacion natural
+      return String(va).localeCompare(String(vb), "es", { numeric: true }) * dir;
+    });
+    return arr;
+  }, [data, sortBy, sortDir]);
+
   if (!endpoint) return null;
 
   return (
@@ -637,14 +685,32 @@ export function DrillDownModal({
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                 <tr>
-                  {data.columns.map((c) => {
+                  {data.columns.map((c, idx) => {
                     if (isHiddenColumn(c)) return null;
-                    return <th key={c} className="text-left px-3 py-2 whitespace-nowrap">{labelFor(c)}</th>;
+                    const active = sortBy === idx;
+                    return (
+                      <th key={c} className="text-left px-3 py-2 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(idx)}
+                          className={
+                            "inline-flex items-center gap-1 transition " +
+                            (active ? "text-primary" : "hover:text-text")
+                          }
+                          title={`Ordenar por ${labelFor(c)}`}
+                        >
+                          {labelFor(c)}
+                          {active
+                            ? (sortDir === "asc" ? <ChevronUp size={10} /> : <ChevronDown size={10} />)
+                            : <ArrowUpDown size={9} className="opacity-30" />}
+                        </button>
+                      </th>
+                    );
                   })}
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((r, i) => {
+                {sortedRows.map((r, i) => {
                   // Si la fila tiene columna 'tier' (drilldown VIP), usar ese.
                   // Sino fallback a la heuristica VIP por monto >= 300k.
                   const tierIdx = data.columns.findIndex((c) => /^tier$/i.test(c));
