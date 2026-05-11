@@ -373,6 +373,22 @@ from app.services import sku_optimizer as sku_opt_svc
 from app.services import rfm_flows as rfm_flows_svc
 from app.services import forecast_batch as forecast_svc
 from app.services import cancel_nlp as cancel_nlp_svc
+from app.services import sku_omnichannel as sku_omni_svc
+
+
+@router.get("/sku-omnichannel/{sku}")
+def get_sku_omnichannel(
+    sku: str,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Vista 360 de un SKU en los 4 canales del grupo:
+    Unistore TN, Unistore MELI (Fox Electronics), Unidrop TN, Unidrop MELI.
+    UNIDATA orquesta las consultas a las 2 bases con sus 4 esquemas distintos."""
+    key = f"sku-omnichannel-{sku}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku_omni_svc.sku_omnichannel(sku)
+    return _b()
 
 
 @router.get("/sku-optimizer")

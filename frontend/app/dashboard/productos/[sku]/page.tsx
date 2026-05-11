@@ -11,6 +11,7 @@ import { DailyRevenueChart } from "@/components/sparkline";
 import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { ExportButtons } from "@/components/export-buttons";
+import { SkuOmnichannel } from "@/components/sku-omnichannel";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -230,6 +231,9 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
               ))
             : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
         </div>
+
+        {/* Vista omnicanal del SKU: 4 fuentes (Unistore TN/MELI + Unidrop TN/MELI) */}
+        <SkuOmnichannel sku={sku} />
 
         {data?.cost_info && data.cost_info.cost_ars && (
           <div className="bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/30 rounded-xl px-5 py-4 mb-6 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
