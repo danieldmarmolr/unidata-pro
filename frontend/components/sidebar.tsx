@@ -203,8 +203,10 @@ export function Sidebar({
       <aside
         className={cn(
           "bg-gradient-to-b from-[#21093a] to-[#4e1e7a] text-white flex flex-col",
-          // Desktop: estatico ancho 64
-          "lg:static lg:w-64 lg:translate-x-0 lg:shrink-0",
+          // Desktop: estatico ancho 64, h-screen explicito para que el morado
+          // llene SIEMPRE el viewport completo (a veces el flex stretch fallaba
+          // en builds prod cuando algun child rompia el contrato de altura).
+          "lg:static lg:w-64 lg:translate-x-0 lg:shrink-0 lg:h-screen",
           // Mobile: drawer fijo desde izquierda
           "fixed top-0 left-0 h-screen w-[280px] z-50 transform transition-transform duration-300 ease-out shadow-2xl",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",

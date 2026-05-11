@@ -15,6 +15,7 @@ import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
+import { ExportButtons } from "@/components/export-buttons";
 
 type Tab =
   | "abc" | "matrix" | "abc-margen"
@@ -305,11 +306,29 @@ function AbcSection({ qs }: { qs: string }) {
           <div>
             <h3 className="text-sm font-bold text-text">
               Ranking ABC {filter !== "all" && `· Clase ${filter}`}
+              {ctx.productType === "products" && " · solo productos físicos"}
+              {ctx.productType === "services" && " · solo servicios"}
             </h3>
             <p className="text-[11px] text-text-muted">
               {formatNumber(visible.length)} SKUs · ordenado por revenue descendente · click para abrir
             </p>
           </div>
+          <ExportButtons
+            filename={`abc_${ctx.unit}_${filter === "all" ? "todos" : `clase-${filter}`}${ctx.productType !== "all" ? `_${ctx.productType}` : ""}`}
+            columns={["#", "Clase", "SKU", "Producto", "EAN", "Revenue", "% Rev", "% Acum", "Unidades", "Órdenes"]}
+            rows={visible.map((s) => [
+              s.rank,
+              s.clase,
+              s.sku,
+              s.nombre,
+              s.ean ?? "",
+              s.revenue,
+              s.pct_revenue,
+              s.pct_acum,
+              s.unidades,
+              s.ordenes,
+            ])}
+          />
         </div>
         <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
           <table className="w-full text-xs">

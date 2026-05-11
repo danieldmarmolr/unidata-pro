@@ -192,7 +192,7 @@ export function Topbar({
   const display = user?.name || user?.email?.split("@")[0] || "anonimo";
   return (
     <>
-      <header className="min-h-14 sm:min-h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16 flex-wrap py-2 sm:py-0">
+      <header className="sticky top-0 z-30 min-h-14 sm:min-h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16 flex-wrap py-2 sm:py-0">
         <div className="min-w-0 flex-1">
           <h1 className="text-base sm:text-lg font-bold text-text leading-none truncate">{title}</h1>
           {subtitle && <div className="text-[10px] sm:text-xs text-text-muted mt-1 truncate">{subtitle}</div>}
