@@ -400,12 +400,12 @@ function VipStatusCard({ customerId }: { customerId: number }) {
     <div className="flex-1 min-w-0">
      <div className={`text-xs font-bold uppercase tracking-wider ${tierMeta.color}`}>Cliente {tierMeta.label}</div>
      <div className="text-2xl font-extrabold text-text mt-0.5">
-      Lifetime ${data.lifetime.toLocaleString("es-AR")}
+      Ticket promedio ${data.avg_ticket.toLocaleString("es-AR")}
      </div>
      <div className="text-xs text-text-muted mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-      <span><strong>{data.paid_orders}</strong> órdenes pagadas</span>
-      <span>Ticket prom: <strong>${data.avg_ticket.toLocaleString("es-AR")}</strong></span>
+      <span><strong>{data.paid_orders}</strong> {data.paid_orders === 1 ? "compra" : "compras"} pagadas</span>
       <span>Orden máx: <strong>${data.max_order.toLocaleString("es-AR")}</strong></span>
+      <span>Lifetime: <strong>${data.lifetime.toLocaleString("es-AR")}</strong></span>
      </div>
      {data.reasons.length > 0 && (
       <div className="text-[11px] text-text-muted mt-2">

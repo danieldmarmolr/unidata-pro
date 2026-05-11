@@ -434,7 +434,7 @@ function VipKpiSection() {
       icon: "★",
       bg: "from-violet-500 to-fuchsia-600",
       border: "border-violet-300",
-      hint: "Lifetime ≥ $300k OR orden ≥ $300k OR (4+ ord & ticket avg ≥ $75k)",
+      hint: "Ticket promedio ≥ $300k · cada compra premium",
     },
     {
       label: "VIP Gold",
@@ -444,7 +444,7 @@ function VipKpiSection() {
       icon: "👑",
       bg: "from-yellow-400 to-amber-500",
       border: "border-amber-300",
-      hint: "Lifetime > $5M · top 1%",
+      hint: "Ticket promedio > $1M · VIP elite",
     },
     {
       label: "VIP Silver",
@@ -454,7 +454,7 @@ function VipKpiSection() {
       icon: "💎",
       bg: "from-slate-400 to-zinc-500",
       border: "border-slate-300",
-      hint: "Lifetime $1M–$5M",
+      hint: "Ticket promedio $500k – $1M",
     },
     {
       label: "VIP Bronze",
@@ -464,7 +464,7 @@ function VipKpiSection() {
       icon: "⭐",
       bg: "from-orange-400 to-amber-500",
       border: "border-amber-300",
-      hint: "Lifetime $300k–$1M",
+      hint: "Ticket promedio $300k – $500k",
     },
   ];
 
@@ -474,7 +474,7 @@ function VipKpiSection() {
         <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3 flex items-center gap-2">
           Clientes VIP
           <span className="text-[10px] font-normal text-text-muted">
-            · regla multi-criterio · click para drilldown
+            · ticket promedio ≥ $300k · click para drilldown
           </span>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

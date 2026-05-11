@@ -1,16 +1,19 @@
 """
 Clasificacion de Clientes VIP de Unistore (TN).
 
-Regla multi-criterio: cliente es VIP si cumple al menos UNA condicion:
-  1. facturacion_lifetime >= 300.000           ("Big spender acumulado")
-  2. alguna_orden_individual >= 300.000        ("High ticket")
-  3. (ordenes_pagadas >= 4) AND
-     (ticket_promedio >= 75.000)               ("Recurrente premium")
+Regla simple y estricta: cliente es VIP si su TICKET PROMEDIO PAGADO
+es >= $300.000. Lo que importa es la magnitud de CADA compra, no la
+suma acumulada (un cliente con 10 compras de $50k NO es VIP aunque
+acumule $500k - su comportamiento es de cliente comun, no premium).
 
-Tiers internos por facturacion lifetime:
-  - Bronze: 300k - 1M
-  - Silver: 1M - 5M
-  - Gold:   > 5M  (top 1%)
+  - 1 compra de $400k -> avg $400k -> VIP ✓
+  - 2 compras de $400k + $200k -> avg $300k -> VIP (justo) ✓
+  - 10 compras de $50k -> avg $50k -> NO VIP (LTV $500k pero no premium)
+
+Tiers internos por ticket promedio:
+  - Bronze: avg $300k - $500k    ("VIP estandar")
+  - Silver: avg $500k - $1M      ("VIP premium")
+  - Gold:   avg > $1M            ("VIP elite")
 """
 from __future__ import annotations
 
@@ -22,42 +25,44 @@ from app.services._utils import q
 
 log = logging.getLogger("unidata.customer_vip")
 
-# Umbrales (en pesos argentinos)
-VIP_THRESHOLD = 300_000.0  # umbral base
-HIGH_TICKET_THRESHOLD = 300_000.0  # orden individual
-RECURRENT_MIN_ORDERS = 4
-RECURRENT_MIN_TICKET = 75_000.0  # 75k * 4 = 300k
+# Umbral unico: ticket promedio pagado debe ser >= $300k
+VIP_AVG_TICKET_THRESHOLD = 300_000.0
 
-# Tiers
-TIER_GOLD_MIN = 5_000_000.0
-TIER_SILVER_MIN = 1_000_000.0
-TIER_BRONZE_MIN = 300_000.0
+# Tiers por ticket promedio
+TIER_GOLD_MIN = 1_000_000.0      # avg > $1M
+TIER_SILVER_MIN = 500_000.0      # avg $500k - $1M
+TIER_BRONZE_MIN = 300_000.0      # avg $300k - $500k
 
 
-def _classify_tier(lifetime: float) -> str | None:
-    """Devuelve el tier del VIP segun facturacion lifetime."""
-    if lifetime >= TIER_GOLD_MIN:
+def _classify_tier(avg_ticket: float) -> str | None:
+    """Devuelve el tier del VIP segun ticket promedio pagado."""
+    if avg_ticket >= TIER_GOLD_MIN:
         return "gold"
-    if lifetime >= TIER_SILVER_MIN:
+    if avg_ticket >= TIER_SILVER_MIN:
         return "silver"
-    if lifetime >= TIER_BRONZE_MIN:
+    if avg_ticket >= TIER_BRONZE_MIN:
         return "bronze"
     return None
 
 
 def classify_vip(lifetime: float, max_order: float, paid_orders: int, avg_ticket: float) -> dict:
-    """Recibe metricas del cliente y devuelve {is_vip, tier, reasons[]}."""
+    """Recibe metricas del cliente y devuelve {is_vip, tier, reasons[]}.
+
+    Regla: VIP si avg_ticket >= $300k (cada compra es de $300k+ en promedio).
+    Esto distingue a clientes premium reales de clientes con muchas compras chicas.
+    """
+    is_vip = avg_ticket >= VIP_AVG_TICKET_THRESHOLD
+    tier = _classify_tier(avg_ticket) if is_vip else None
     reasons: list[str] = []
-
-    if lifetime >= VIP_THRESHOLD:
-        reasons.append(f"Lifetime ${int(lifetime):,} >= ${int(VIP_THRESHOLD):,}".replace(",", "."))
-    if max_order >= HIGH_TICKET_THRESHOLD:
-        reasons.append(f"Orden individual ${int(max_order):,} >= ${int(HIGH_TICKET_THRESHOLD):,}".replace(",", "."))
-    if paid_orders >= RECURRENT_MIN_ORDERS and avg_ticket >= RECURRENT_MIN_TICKET:
-        reasons.append(f"Recurrente: {paid_orders} ordenes con ticket promedio ${int(avg_ticket):,}".replace(",", "."))
-
-    is_vip = len(reasons) > 0
-    tier = _classify_tier(lifetime) if is_vip else None
+    if is_vip:
+        if paid_orders == 1:
+            reasons.append(
+                f"Primera compra ${int(max_order):,} >= ${int(VIP_AVG_TICKET_THRESHOLD):,}".replace(",", ".")
+            )
+        else:
+            reasons.append(
+                f"Ticket promedio ${int(avg_ticket):,} en {paid_orders} compras (todas premium)".replace(",", ".")
+            )
 
     return {
         "is_vip": is_vip,
@@ -101,23 +106,14 @@ def list_vip_customers(tier: str = "all") -> dict:
                first_order, last_order,
                EXTRACT(DAY FROM (NOW() - last_order))::int AS recency_dias
         FROM stats
-        WHERE
-            -- Cliente es VIP si cumple alguna de las 3 condiciones
-            lifetime >= :vip_t
-            OR max_order >= :ht_t
-            OR (paid_orders >= :rec_n AND avg_ticket >= :rec_t)
-        ORDER BY lifetime DESC NULLS LAST
+        WHERE avg_ticket >= :avg_t
+        ORDER BY avg_ticket DESC NULLS LAST
         LIMIT 5000
-    """, {
-        "vip_t": VIP_THRESHOLD,
-        "ht_t": HIGH_TICKET_THRESHOLD,
-        "rec_n": RECURRENT_MIN_ORDERS,
-        "rec_t": RECURRENT_MIN_TICKET,
-    }) or []
+    """, {"avg_t": VIP_AVG_TICKET_THRESHOLD}) or []
 
     customers = []
     counts = {"gold": 0, "silver": 0, "bronze": 0}
-    sums = {"gold": 0.0, "silver": 0.0, "bronze": 0.0}
+    sums_lifetime = {"gold": 0.0, "silver": 0.0, "bronze": 0.0}
 
     for r in rows:
         cid, nombre, email, tel, prov, n, lt, mo, at, fo, lo, rec = r
@@ -128,14 +124,14 @@ def list_vip_customers(tier: str = "all") -> dict:
         if tier != "all" and t != tier:
             continue
         counts[t] = counts.get(t, 0) + 1
-        sums[t] = sums.get(t, 0.0) + float(lt or 0)
+        sums_lifetime[t] = sums_lifetime.get(t, 0.0) + float(lt or 0)
         customers.append({
             "customer_id": int(cid or 0),
             "cliente": nombre,
             "tier": t,
+            "ticket_promedio": round(float(at or 0), 2),
             "lifetime": round(float(lt or 0), 2),
             "max_order": round(float(mo or 0), 2),
-            "ticket_promedio": round(float(at or 0), 2),
             "ordenes_pagadas": int(n or 0),
             "primera_compra": fo.isoformat() if fo else None,
             "ultima_compra": lo.isoformat() if lo else None,
@@ -147,8 +143,8 @@ def list_vip_customers(tier: str = "all") -> dict:
         })
 
     cols = [
-        "customer_id", "cliente", "tier", "lifetime", "max_order",
-        "ticket_promedio", "ordenes_pagadas",
+        "customer_id", "cliente", "tier", "ticket_promedio", "lifetime",
+        "max_order", "ordenes_pagadas",
         "primera_compra", "ultima_compra", "recency_dias",
         "email", "telefono", "provincia", "razon",
     ]
@@ -159,18 +155,15 @@ def list_vip_customers(tier: str = "all") -> dict:
         "rows": rows_out,
         "row_count": len(rows_out),
         "tiers": {
-            "gold": {"count": counts["gold"], "lifetime_total": round(sums["gold"], 2)},
-            "silver": {"count": counts["silver"], "lifetime_total": round(sums["silver"], 2)},
-            "bronze": {"count": counts["bronze"], "lifetime_total": round(sums["bronze"], 2)},
+            "gold": {"count": counts["gold"], "lifetime_total": round(sums_lifetime["gold"], 2)},
+            "silver": {"count": counts["silver"], "lifetime_total": round(sums_lifetime["silver"], 2)},
+            "bronze": {"count": counts["bronze"], "lifetime_total": round(sums_lifetime["bronze"], 2)},
         },
         "total_vips": sum(counts.values()),
-        "lifetime_total": round(sum(sums.values()), 2),
+        "lifetime_total": round(sum(sums_lifetime.values()), 2),
         "tier_filter": tier,
         "rules": {
-            "vip_threshold": VIP_THRESHOLD,
-            "high_ticket_threshold": HIGH_TICKET_THRESHOLD,
-            "recurrent_min_orders": RECURRENT_MIN_ORDERS,
-            "recurrent_min_ticket": RECURRENT_MIN_TICKET,
+            "vip_avg_ticket_threshold": VIP_AVG_TICKET_THRESHOLD,
             "tier_gold_min": TIER_GOLD_MIN,
             "tier_silver_min": TIER_SILVER_MIN,
             "tier_bronze_min": TIER_BRONZE_MIN,

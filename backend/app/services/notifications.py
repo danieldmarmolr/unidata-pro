@@ -151,18 +151,18 @@ def get_notifications() -> dict:
                 "count": n,
             })
 
-    # 6. VIP Gold inactivos > 60 dias (Unistore)
+    # 6. VIP Gold inactivos > 60 dias (Unistore) - ticket promedio > $1M
     if uni:
         n = _safe(lambda: int(scalar(uni, """
             SELECT COUNT(*) FROM (
                 SELECT c.id,
-                       SUM(o.total)::float AS lifetime,
+                       AVG(o.total)::float AS avg_ticket,
                        EXTRACT(DAY FROM (NOW() - MAX(o."createdAt")))::int AS recency
                 FROM tienda_nube."Customer" c
                 INNER JOIN tienda_nube."Order" o ON o."customerId" = c.id
                 WHERE o."paymentStatus" = 'paid'
                 GROUP BY c.id
-                HAVING SUM(o.total) >= 5000000
+                HAVING AVG(o.total) >= 1000000
                   AND EXTRACT(DAY FROM (NOW() - MAX(o."createdAt"))) > 60
             ) x
         """) or 0))
@@ -172,7 +172,7 @@ def get_notifications() -> dict:
                 "severity": "error",
                 "icon": "alert",
                 "title": f"{n} VIP Gold inactivos >60d",
-                "body": "Clientes top tier sin comprar hace mas de 60 dias - retencion critica",
+                "body": "Clientes con ticket promedio > $1M sin comprar hace mas de 60 dias",
                 "href": "/dashboard/cs",
                 "drill": {
                     "endpoint": "/api/dashboards/customers-vip?tier=gold",
@@ -182,18 +182,18 @@ def get_notifications() -> dict:
                 "count": n,
             })
 
-    # 7. VIPs Silver+ inactivos > 90 dias
+    # 7. VIPs Silver inactivos > 90 dias - ticket promedio $500k - $1M
     if uni:
         n = _safe(lambda: int(scalar(uni, """
             SELECT COUNT(*) FROM (
                 SELECT c.id,
-                       SUM(o.total)::float AS lifetime,
+                       AVG(o.total)::float AS avg_ticket,
                        EXTRACT(DAY FROM (NOW() - MAX(o."createdAt")))::int AS recency
                 FROM tienda_nube."Customer" c
                 INNER JOIN tienda_nube."Order" o ON o."customerId" = c.id
                 WHERE o."paymentStatus" = 'paid'
                 GROUP BY c.id
-                HAVING SUM(o.total) >= 1000000 AND SUM(o.total) < 5000000
+                HAVING AVG(o.total) >= 500000 AND AVG(o.total) < 1000000
                   AND EXTRACT(DAY FROM (NOW() - MAX(o."createdAt"))) > 90
             ) x
         """) or 0))
@@ -203,7 +203,7 @@ def get_notifications() -> dict:
                 "severity": "warning",
                 "icon": "alert",
                 "title": f"{n} VIP Silver inactivos >90d",
-                "body": "Clientes premium sin comprar hace mas de 90 dias",
+                "body": "Clientes con ticket promedio $500k-$1M sin comprar hace mas de 90 dias",
                 "href": "/dashboard/cs",
                 "drill": {
                     "endpoint": "/api/dashboards/customers-vip?tier=silver",
