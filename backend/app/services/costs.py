@@ -290,24 +290,56 @@ def get_usd_rate(force_refresh: bool = False) -> dict:
 # ============================================================
 
 def cost_for_sku(sku: str, *, in_ars: bool = True) -> dict | None:
-    """Devuelve costo vigente del SKU. Si in_ars=True multiplica por venta USD/ARS."""
+    """Devuelve costo vigente del SKU.
+
+    Importante: el CSV de importacion trae costos TOTALES del lote (no per-unit).
+    Para calcular margen contra unidades vendidas hay que dividir por la cantidad
+    de unidades del lote. Devolvemos ambos valores:
+      - cost_usd / cost_ars: costo TOTAL del lote (lo que aparece en el CSV)
+      - cost_unit_usd / cost_unit_ars: costo POR UNIDAD (lote / cantidad)
+
+    Si cantidad == 0 o None caemos a tratar el cost como per-unit (compatibilidad
+    con lotes mal cargados).
+    """
     rec = costs_db.cost_by_sku(sku)
     if not rec:
         return None
     cur = rec["current"]
-    cost_usd = cur.get("costo_con_iva_usd") or cur.get("costo_total_sin_iva_usd")
+    cost_total_usd = cur.get("costo_con_iva_usd") or cur.get("costo_total_sin_iva_usd")
+    cantidad = cur.get("cantidad") or 0
+    try:
+        cantidad = int(cantidad)
+    except (TypeError, ValueError):
+        cantidad = 0
+
+    # Costo por unidad. Si el lote trae cantidad valida, dividimos.
+    if cost_total_usd and cantidad > 0:
+        cost_unit_usd = cost_total_usd / cantidad
+    else:
+        cost_unit_usd = cost_total_usd  # fallback: ya viene per-unit
+
     out = {
         "sku": sku,
         "lote": cur.get("lote"),
         "fecha_ingreso": cur.get("fecha_ingreso"),
-        "cost_usd": cost_usd,
+        "cantidad_lote": cantidad if cantidad > 0 else None,
+        # Totales del lote (lo que ve el contador)
+        "cost_total_usd": cost_total_usd,
+        # Por unidad (lo que sirve para margen)
+        "cost_unit_usd": cost_unit_usd,
+        # Backwards-compat: 'cost_usd' = per-unit (semantica correcta para margen)
+        "cost_usd": cost_unit_usd,
         "valor_compra_usd": cur.get("valor_max_usd") or cur.get("valor_min_usd"),
     }
-    if in_ars and cost_usd:
+    if in_ars and cost_total_usd:
         try:
             rate = get_usd_rate()
-            out["cost_ars"] = round(cost_usd * rate["venta"], 2)
             out["usd_rate"] = rate["venta"]
+            out["cost_total_ars"] = round(cost_total_usd * rate["venta"], 2)
+            if cost_unit_usd is not None:
+                out["cost_unit_ars"] = round(cost_unit_usd * rate["venta"], 2)
+                # Backwards-compat: 'cost_ars' = per-unit
+                out["cost_ars"] = out["cost_unit_ars"]
         except Exception:
             pass
     return out

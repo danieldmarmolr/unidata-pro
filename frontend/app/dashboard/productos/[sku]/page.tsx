@@ -16,8 +16,13 @@ type CostInfo = {
   sku: string;
   lote: string | null;
   fecha_ingreso: string | null;
-  cost_usd: number | null;
-  cost_ars: number | null;
+  cantidad_lote?: number | null;
+  cost_total_usd?: number | null;
+  cost_unit_usd?: number | null;
+  cost_usd: number | null;       // per-unit (backwards-compat)
+  cost_total_ars?: number | null;
+  cost_unit_ars?: number | null;
+  cost_ars: number | null;       // per-unit (backwards-compat)
   usd_rate: number | null;
   margen_estimado_lifetime?: number;
   margen_pct?: number;
@@ -192,14 +197,20 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             <div>
               <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Lote vigente</div>
               <div className="font-mono font-semibold">{data.cost_info.lote}</div>
+              {data.cost_info.cantidad_lote && (
+                <div className="text-[10px] text-text-muted">{data.cost_info.cantidad_lote.toLocaleString("es-AR")} unid. en lote</div>
+              )}
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Costo importacion (USD)</div>
-              <div className="font-bold">US$ {data.cost_info.cost_usd?.toFixed(2) ?? "—"}</div>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Costo unitario (USD)</div>
+              <div className="font-bold">US$ {(data.cost_info.cost_unit_usd ?? data.cost_info.cost_usd)?.toFixed(2) ?? "—"}</div>
+              {data.cost_info.cost_total_usd && (
+                <div className="text-[10px] text-text-muted">Lote: US$ {data.cost_info.cost_total_usd.toLocaleString("es-AR", { maximumFractionDigits: 2 })}</div>
+              )}
             </div>
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Costo en ARS</div>
-              <div className="font-bold text-primary">$ {data.cost_info.cost_ars.toLocaleString("es-AR")}</div>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Costo unitario (ARS)</div>
+              <div className="font-bold text-primary">$ {(data.cost_info.cost_unit_ars ?? data.cost_info.cost_ars).toLocaleString("es-AR")}</div>
               {data.cost_info.usd_rate && (
                 <div className="text-[10px] text-text-muted">@ USD venta $ {data.cost_info.usd_rate.toFixed(2)} BNA</div>
               )}
@@ -207,7 +218,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             {typeof data.cost_info.margen_estimado_lifetime === "number" && (
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Margen estimado lifetime</div>
-                <div className="font-bold text-emerald-700">
+                <div className={`font-bold ${data.cost_info.margen_estimado_lifetime >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                   $ {data.cost_info.margen_estimado_lifetime.toLocaleString("es-AR")}
                   {typeof data.cost_info.margen_pct === "number" && (
                     <span className="text-xs text-text-muted ml-1">({data.cost_info.margen_pct}%)</span>
