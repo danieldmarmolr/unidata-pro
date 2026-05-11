@@ -100,41 +100,45 @@ export function InteractiveMetricChart({
 
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
-      {/* Header con selectors */}
+      {/* Header con selectors. Si hay solo 1 metrica, no muestra selectors. */}
       <div className="flex items-start justify-between flex-wrap gap-3 mb-4">
         <div className="min-w-0">
           {caption && <div className="text-sm font-bold text-text">{caption}</div>}
           {subtitle && <div className="text-xs text-text-muted mt-0.5">{subtitle}</div>}
         </div>
         <div className="flex items-center gap-2 flex-wrap text-xs">
-          <label className="inline-flex items-center gap-1.5">
-            <span className="text-[10px] uppercase font-bold text-text-muted">Barras</span>
-            <select
-              value={primaryKey}
-              onChange={(e) => setPrimaryKey(e.target.value)}
-              className="px-2 py-1 rounded-md border border-border bg-surface text-text text-xs font-semibold focus:ring-1 focus:ring-primary outline-none"
-            >
-              {metrics.map((m) => (
-                <option key={m.key} value={m.key}>{m.label}</option>
-              ))}
-            </select>
-          </label>
-          <span className="text-text-muted/40">+</span>
-          <label className="inline-flex items-center gap-1.5">
-            <span className="text-[10px] uppercase font-bold text-text-muted">Línea</span>
-            <select
-              value={secondaryKey ?? ""}
-              onChange={(e) => setSecondaryKey(e.target.value || null)}
-              className="px-2 py-1 rounded-md border border-border bg-surface text-text text-xs font-semibold focus:ring-1 focus:ring-primary outline-none"
-            >
-              <option value="">— ninguna —</option>
-              {metrics
-                .filter((m) => m.key !== primaryKey)
-                .map((m) => (
-                  <option key={m.key} value={m.key}>{m.label}</option>
-                ))}
-            </select>
-          </label>
+          {metrics.length > 1 && (
+            <>
+              <label className="inline-flex items-center gap-1.5">
+                <span className="text-[10px] uppercase font-bold text-text-muted">Barras</span>
+                <select
+                  value={primaryKey}
+                  onChange={(e) => setPrimaryKey(e.target.value)}
+                  className="px-2 py-1 rounded-md border border-border bg-surface text-text text-xs font-semibold focus:ring-1 focus:ring-primary outline-none"
+                >
+                  {metrics.map((m) => (
+                    <option key={m.key} value={m.key}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
+              <span className="text-text-muted/40">+</span>
+              <label className="inline-flex items-center gap-1.5">
+                <span className="text-[10px] uppercase font-bold text-text-muted">Línea</span>
+                <select
+                  value={secondaryKey ?? ""}
+                  onChange={(e) => setSecondaryKey(e.target.value || null)}
+                  className="px-2 py-1 rounded-md border border-border bg-surface text-text text-xs font-semibold focus:ring-1 focus:ring-primary outline-none"
+                >
+                  <option value="">— ninguna —</option>
+                  {metrics
+                    .filter((m) => m.key !== primaryKey)
+                    .map((m) => (
+                      <option key={m.key} value={m.key}>{m.label}</option>
+                    ))}
+                </select>
+              </label>
+            </>
+          )}
           {primary && (
             <span className="text-text-muted ml-2 hidden sm:inline">
               Total: <span className="font-bold text-primary">{fmtValue(primaryTotal, primary.kind)}</span>

@@ -13,6 +13,7 @@ import { Funnel } from "@/components/funnel";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { Segmented } from "@/components/segmented";
@@ -144,16 +145,22 @@ export default function LogisticaPage() {
           {isLoading || !data ? (
             <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
           ) : unit === "unistore" ? (
-            <DailyRevenueChart
-              points={data.lead_time_daily ?? []}
+            <InteractiveMetricChart
+              points={(data.lead_time_daily ?? []) as any[]}
+              metrics={[{ key: "value", label: "Lead time (días)", kind: "number", color: "#f59e0b" }]}
+              defaultPrimary="value"
               caption="Lead time Order -> Despacho (60 dias)"
               subtitle="Promedio diario en dias"
+              height={280}
             />
           ) : (
-            <DailyRevenueChart
-              points={data.daily_dispatch ?? []}
+            <InteractiveMetricChart
+              points={(data.daily_dispatch ?? []) as any[]}
+              metrics={[{ key: "value", label: "Despachos", kind: "number", color: "#7a3eae" }]}
+              defaultPrimary="value"
               caption="Despachos diarios (60 dias)"
               subtitle="OCA + LightData combinados"
+              height={280}
             />
           )}
         </div>

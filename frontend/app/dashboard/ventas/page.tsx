@@ -11,6 +11,7 @@ import { RevenueChart } from "@/components/revenue-chart";
 import { DonutChart } from "@/components/donut-chart";
 import { HBarChart } from "@/components/bar-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { TopProductsTable } from "@/components/top-products";
 import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
@@ -121,10 +122,13 @@ export default function VentasPage() {
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
- <DailyRevenueChart
- points={data.daily_revenue}
+ <InteractiveMetricChart
+ points={data.daily_revenue as any[]}
+ metrics={[{ key: "value", label: "Revenue diario", kind: "currency", color: "#7a3eae" }]}
+ defaultPrimary="value"
  caption={`Revenue diario · ultimos ${period}`}
  subtitle="Suma de TN (paid) + ML (paid/confirmed/shipped/delivered)"
+ height={320}
  />
  )}
  </div>

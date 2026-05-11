@@ -11,6 +11,7 @@ import { MultiLineChart } from "@/components/multi-line-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
@@ -178,18 +179,29 @@ export default function MarketingPage() {
         )}
 
         {unit === "unidrop" && dataDrop && (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <DailyRevenueChart
-              points={dataDrop.daily_pixel}
-              caption="Eventos Meta Pixel diarios"
-              subtitle="Conversion tracking de las tiendas"
-            />
-            <DailyRevenueChart
-              points={dataDrop.daily_signups}
-              caption="Nuevos signups diarios"
-              subtitle="Crecimiento de la base de usuarios"
-            />
-          </div>
+          <InteractiveMetricChart
+            points={(() => {
+              const map = new Map<string, any>();
+              for (const p of (dataDrop.daily_pixel || [])) {
+                map.set(p.date, { date: p.date, eventos_pixel: p.value });
+              }
+              for (const p of (dataDrop.daily_signups || [])) {
+                const existing = map.get(p.date) ?? { date: p.date };
+                existing.signups = p.value;
+                map.set(p.date, existing);
+              }
+              return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+            })()}
+            metrics={[
+              { key: "eventos_pixel", label: "Eventos Pixel", kind: "number", color: "#3b82f6" },
+              { key: "signups", label: "Nuevos signups", kind: "number", color: "#10b981" },
+            ]}
+            defaultPrimary="signups"
+            defaultSecondary="eventos_pixel"
+            caption="Crecimiento Unidrop (diario)"
+            subtitle="Barras + línea: comparar señales de adquisición. Subió pixel pero no signups = pixel no está convirtiendo bien"
+            height={320}
+          />
         )}
       </div>
 

@@ -8,6 +8,7 @@ import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { CategoryTable } from "@/components/generic-table";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
@@ -286,18 +287,34 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
               <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
             </>
           ) : (
-            <>
-              <DailyRevenueChart
-                points={data.monthly_revenue.points}
-                caption="Revenue mensual (12m)"
-                subtitle="Ordenes pagas en TN"
+            <div className="xl:col-span-2">
+              <InteractiveMetricChart
+                points={(() => {
+                  // Mergeamos los dos time series en un solo array de puntos
+                  // con ambas metricas accesibles. Asi el chart interactivo
+                  // puede comparar revenue vs unidades en el mismo grafico.
+                  const map = new Map<string, any>();
+                  for (const p of data.monthly_revenue.points) {
+                    map.set(p.date, { date: p.date, revenue: p.value });
+                  }
+                  for (const p of data.monthly_units.points) {
+                    const existing = map.get(p.date) ?? { date: p.date };
+                    existing.units = p.value;
+                    map.set(p.date, existing);
+                  }
+                  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+                })()}
+                metrics={[
+                  { key: "revenue", label: "Revenue", kind: "currency", color: "#7a3eae" },
+                  { key: "units", label: "Unidades", kind: "number", color: "#10b981" },
+                ]}
+                defaultPrimary="revenue"
+                defaultSecondary="units"
+                caption="Evolución mensual del SKU (12m)"
+                subtitle="Click los selectors arriba: Barras = Revenue $ · Línea = Unidades · ideal para ver si las ventas crecen por volumen o por precio"
+                height={320}
               />
-              <DailyRevenueChart
-                points={data.monthly_units.points}
-                caption="Unidades mensuales (12m)"
-                subtitle="Cantidad vendida"
-              />
-            </>
+            </div>
           )}
         </div>
 

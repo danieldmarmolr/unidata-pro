@@ -11,6 +11,7 @@ import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { DailyRevenueChart } from "@/components/sparkline";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
@@ -124,10 +125,28 @@ export default function CustomerSuccessPage() {
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
- <DailyRevenueChart
- points={data.cancel_trend.map((p) => ({ date: p.date, value: p.value }))}
- caption="Tasa de cancelacion mensual (12 meses)"
- subtitle="% de ordenes que terminan en estado cancelled"
+ <InteractiveMetricChart
+ points={(() => {
+   const map = new Map<string, any>();
+   for (const p of (data.cancel_trend || [])) {
+     map.set(p.date, { date: p.date, cancelaciones: p.value });
+   }
+   for (const p of (data.volume_trend || [])) {
+     const existing = map.get(p.date) ?? { date: p.date };
+     existing.volumen = p.value;
+     map.set(p.date, existing);
+   }
+   return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+ })()}
+ metrics={[
+   { key: "cancelaciones", label: "Cancelaciones", kind: "number", color: "#ef4444" },
+   { key: "volumen", label: "Volumen ventas", kind: "currency", color: "#10b981" },
+ ]}
+ defaultPrimary="cancelaciones"
+ defaultSecondary="volumen"
+ caption="Tendencia mensual · Cancelaciones vs Volumen (12m)"
+ subtitle="Cruzar ambas: si las cancelaciones crecen junto al volumen es esperable; si crecen sin que crezca el volumen es alerta"
+ height={320}
  />
  )}
  </div>
@@ -299,10 +318,13 @@ export default function CustomerSuccessPage() {
 
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  {data.acquisition_trend && data.acquisition_trend.length > 0 && (
- <DailyRevenueChart
- points={data.acquisition_trend}
+ <InteractiveMetricChart
+ points={data.acquisition_trend as any[]}
+ metrics={[{ key: "value", label: "Nuevos customers", kind: "number", color: "#7a3eae" }]}
+ defaultPrimary="value"
  caption="Adquisicion mensual (12m)"
  subtitle="Nuevos customers (primera compra) por mes"
+ height={280}
  />
  )}
  {data.cancel_by_province && data.cancel_by_province.length > 0 && (

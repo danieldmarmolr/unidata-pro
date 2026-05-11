@@ -9,6 +9,7 @@ import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
@@ -89,8 +90,12 @@ export default function PagosPage() {
             {isLoading || !data ? (
               <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
             ) : (
-              <DailyRevenueChart
-                points={data.daily_volume}
+              <InteractiveMetricChart
+                points={data.daily_volume as any[]}
+                metrics={[
+                  { key: "value", label: "Volumen procesado", kind: "currency", color: "#7a3eae" },
+                ]}
+                defaultPrimary="value"
                 caption={`Volumen diario procesado · ${period}`}
                 subtitle={`PaymentTransaction de ordenes${channel !== "all" ? ` · canal ${channel.toUpperCase()}` : ""}`}
               />
