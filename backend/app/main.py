@@ -49,7 +49,7 @@ app.add_middleware(
     # subdominio Railway + previews de Vercel + localhost para que un cambio
     # de URL no rompa el front. ALLOWED_ORIGINS sigue siendo la lista
     # whitelisted explicita; este regex es el fallback.
-    allow_origin_regex=r"^https?://(localhost(:\d+)?|.*\.up\.railway\.app|.*\.vercel\.app)$",
+    allow_origin_regex=r"^https?://(localhost(:\d+)?|.*\.up\.railway\.app|.*\.vercel\.app|(.+\.)?unidatacenter\.com\.ar)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
