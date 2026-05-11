@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { StoriesPanel } from "@/components/stories-panel";
 import { getUser, api, type AuthUser } from "@/lib/api";
 import { ArrowUpRight } from "lucide-react";
 import {
@@ -177,6 +178,9 @@ export default function HomePage() {
     <>
       <Topbar title="Inicio" subtitle="Pantalla principal · navegacion rapida segun tu rol · el filtro de fechas aplica a todas las vistas" />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        {/* Stories - cumples + aniversarios del mes */}
+        <StoriesPanel />
+
         {/* Hero + Storytelling */}
         <div className="bg-gradient-to-br from-primary via-accent to-fuchsia-600 text-white rounded-2xl p-8 mb-8 shadow-xl shadow-primary/20 relative overflow-hidden">
           <div className="absolute top-0 right-0 -mt-20 -mr-20 w-80 h-80 bg-white/10 rounded-full blur-3xl" />

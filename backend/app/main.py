@@ -15,10 +15,11 @@ from app.api import auth as auth_api
 from app.api import catalog as catalog_api
 from app.api import costs as costs_api
 from app.api import drilldowns as drilldowns_api
+from app.api import profile as profile_api
 from app.api import queries as queries_api
 from app.api import reports as reports_api
 from app.api import sources as sources_api
-from app.db import users_db
+from app.db import areas_db, users_db
 from app.api.dashboards import executive as executive_api
 from app.api.dashboards import sales as sales_api
 from app.api.dashboards import routers as dashboards_routers
@@ -59,9 +60,11 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup() -> None:
     users_db.init()
+    areas_db.init()
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)
+app.include_router(profile_api.router)
 app.include_router(sources_api.router)
 app.include_router(queries_api.router)
 app.include_router(drilldowns_api.router)
