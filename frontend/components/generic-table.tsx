@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ImageOff, ChevronRight } from "lucide-react";
+import { ImageOff, ChevronRight, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
+import { DrillDownModal } from "@/components/drilldown-modal";
 
 type Row = {
   category: string;
@@ -29,46 +30,84 @@ const DIGIP_AREAS = new Set([
   "picking", "dock", "recepcion", "recepción",
 ]);
 
+// Lifecycle stages de clientes -> drill modal a customers-by-status
+const LIFECYCLE_STAGES = new Set([
+  "Nuevo", "2da compra", "Segunda compra", "Conv. a Recurrente",
+  "Convertido a Recurrente", "Recurrente", "Recuperado",
+  "Sin compras", "Sin compras pagas", "Posible churn", "Perdidos",
+]);
+
+// Segmentos RFM -> drill modal a customers-by-rfm
+const RFM_SEGMENTS = new Set([
+  "Champions", "Fieles", "Loyal", "En riesgo", "At Risk",
+  "Nuevos potenciales", "Perdidos VIP", "Lost", "Standard",
+  "Promising", "About to Sleep", "Need Attention", "Cant Lose",
+  "Hibernating", "Potential Loyalist",
+]);
+
+type AutoDrill =
+  | { kind: "navigate"; href: string }
+  | { kind: "modal"; endpoint: string; title: string; filename: string };
+
 /** Auto-detecta el destino de drill segun el contenido de la fila.
- *  Devuelve un href de Next.js o null si no hay match. */
-function autoDrillHref(r: Row): string | null {
+ *  Devuelve {kind:"navigate", href} para rutas, o {kind:"modal", endpoint}
+ *  para abrir DrillDownModal interno, o null si no hay match. */
+function getAutoDrill(r: Row): AutoDrill | null {
   const cat = (r.category || "").trim();
   const extra = r.extra || {};
 
-  // 1. SKU en extra (campo explicito)
+  // 1. SKU en extra (campo explicito) - navigate
   const sku = extra.sku;
   if (typeof sku === "string" && sku.trim()) {
-    return `/dashboard/productos/${encodeURIComponent(sku.trim())}`;
+    return { kind: "navigate", href: `/dashboard/productos/${encodeURIComponent(sku.trim())}` };
   }
-  // 2. Customer con customer_id
+  // 2. Customer con customer_id - navigate
   const cid = extra.customer_id ?? extra.customerId;
   if (typeof cid === "number" && cid > 0) {
-    return `/dashboard/customer/${cid}`;
+    return { kind: "navigate", href: `/dashboard/customer/${cid}` };
   }
-  // 3. Provincia argentina
+  // 3. Provincia argentina - navigate
   if (AR_PROVINCES.has(cat)) {
-    return `/dashboard/mapa?province=${encodeURIComponent(cat)}`;
+    return { kind: "navigate", href: `/dashboard/mapa?province=${encodeURIComponent(cat)}` };
   }
-  // 4. Area Digip (stock)
+  // 4. Area Digip - navigate
   if (DIGIP_AREAS.has(cat.toLowerCase())) {
-    return `/dashboard/stock-heatmap?area=${encodeURIComponent(cat)}`;
+    return { kind: "navigate", href: `/dashboard/stock-heatmap?area=${encodeURIComponent(cat)}` };
   }
-  // 5. Lote
+  // 5. Lote - navigate
   if (extra.lote || /^(lote|batch)[-\s]?\d+/i.test(cat)) {
     const loteName = (extra.lote as string) || cat;
-    return `/dashboard/lotes?lote=${encodeURIComponent(loteName)}`;
+    return { kind: "navigate", href: `/dashboard/lotes?lote=${encodeURIComponent(loteName)}` };
   }
-  // 6. Brand (filtro en productos)
+  // 6. Brand - navigate
   if (extra.brand && typeof extra.brand === "string") {
-    return `/dashboard/productos?marca=${encodeURIComponent(extra.brand)}`;
+    return { kind: "navigate", href: `/dashboard/productos?marca=${encodeURIComponent(extra.brand)}` };
   }
-  // 7. Hint generico de tipo
+  // 7. Lifecycle stage -> drill MODAL con customers-by-status
+  if (LIFECYCLE_STAGES.has(cat)) {
+    return {
+      kind: "modal",
+      endpoint: `/api/drilldowns/cs/customers-by-status?status=${encodeURIComponent(cat)}`,
+      title: `Clientes en estado: ${cat}`,
+      filename: `lifecycle_${cat.toLowerCase().replace(/\s+/g, "_")}.csv`,
+    };
+  }
+  // 8. RFM segment -> drill MODAL con customers-by-rfm
+  if (RFM_SEGMENTS.has(cat)) {
+    return {
+      kind: "modal",
+      endpoint: `/api/drilldowns/cs/customers-by-rfm?segment=${encodeURIComponent(cat)}`,
+      title: `Clientes RFM: ${cat}`,
+      filename: `rfm_${cat.toLowerCase().replace(/\s+/g, "_")}.csv`,
+    };
+  }
+  // 9. Hint generico
   const kind = (extra.kind as string) || (extra.type as string) || "";
   if (kind === "brand" || kind === "marca") {
-    return `/dashboard/productos?marca=${encodeURIComponent(cat)}`;
+    return { kind: "navigate", href: `/dashboard/productos?marca=${encodeURIComponent(cat)}` };
   }
   if (kind === "category" || kind === "categoria") {
-    return `/dashboard/productos?categoria=${encodeURIComponent(cat)}`;
+    return { kind: "navigate", href: `/dashboard/productos?categoria=${encodeURIComponent(cat)}` };
   }
   return null;
 }
@@ -100,18 +139,69 @@ export function CategoryTable({
   autoDrill?: boolean;
 }) {
   const router = useRouter();
+  const [modal, setModal] = useState<{ endpoint: string; title: string; filename: string } | null>(null);
+  // Sort state: clave = "value" para la columna Valor, o c.key para extras, o "category"
+  const [sortBy, setSortBy] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const toggleSort = (key: string) => {
+    if (sortBy === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(key);
+      setSortDir("desc");
+    }
+  };
+
+  const resolveDrill = (r: Row): AutoDrill | null => {
+    if (!autoDrill) return null;
+    return getAutoDrill(r);
+  };
+
   // Helper para decidir el handler final de click por fila.
-  // Prioridad: onRowClick explicito > autoDrill href > nada
+  // Prioridad: onRowClick explicito > autoDrill (navigate/modal) > nada
   const handleRowClick = (r: Row) => {
     if (onRowClick) { onRowClick(r); return; }
-    if (autoDrill) {
-      const href = autoDrillHref(r);
-      if (href) router.push(href);
+    const drill = resolveDrill(r);
+    if (!drill) return;
+    if (drill.kind === "navigate") {
+      router.push(drill.href);
+    } else {
+      setModal({ endpoint: drill.endpoint, title: drill.title, filename: drill.filename });
     }
   };
   // Una fila es "interactiva" si tiene onRowClick custom o autoDrill match
-  const isInteractive = (r: Row) => !!onRowClick || (autoDrill && autoDrillHref(r) !== null);
-  const max = Math.max(0, ...data.map((d) => d.value));
+  const isInteractive = (r: Row) => !!onRowClick || resolveDrill(r) !== null;
+
+  // Ordenamiento por columna
+  const sortedData = useMemo(() => {
+    if (!sortBy) return data;
+    const arr = [...data];
+    const dir = sortDir === "asc" ? 1 : -1;
+    arr.sort((a, b) => {
+      let va: number | string | null | undefined;
+      let vb: number | string | null | undefined;
+      if (sortBy === "value") {
+        va = a.value; vb = b.value;
+      } else if (sortBy === "category") {
+        va = a.category; vb = b.category;
+      } else {
+        va = a.extra?.[sortBy];
+        vb = b.extra?.[sortBy];
+      }
+      // null/undefined al final
+      const aNull = va === null || va === undefined || va === "";
+      const bNull = vb === null || vb === undefined || vb === "";
+      if (aNull && bNull) return 0;
+      if (aNull) return 1;
+      if (bNull) return -1;
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      return String(va).localeCompare(String(vb), "es", { numeric: true }) * dir;
+    });
+    return arr;
+  }, [data, sortBy, sortDir]);
+
+  const max = Math.max(0, ...sortedData.map((d) => d.value));
   const fmt = (v: number, f?: string) => {
     const ff = f ?? formatter;
     if (ff === "currency") return formatCurrency(v);
@@ -143,7 +233,7 @@ export function CategoryTable({
 
       {/* Mobile: cards */}
       <div className="lg:hidden space-y-2">
-        {data.map((r, i) => {
+        {sortedData.map((r, i) => {
           const pct = max > 0 ? (r.value / max) * 100 : 0;
           const sku = typeof r.extra?.sku === "string" ? (r.extra.sku as string) : null;
           const enrich = sku ? enrichments[sku] : undefined;
@@ -223,7 +313,7 @@ export function CategoryTable({
             </div>
           );
         })}
-        {data.length === 0 && (
+        {sortedData.length === 0 && (
           <div className="py-8 text-center text-text-muted text-sm">Sin datos.</div>
         )}
       </div>
@@ -234,15 +324,48 @@ export function CategoryTable({
           <thead>
             <tr className="text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted">
               <th className="pl-2 py-2 w-8">#</th>
-              <th className="py-2">Categoria</th>
+              <th className="py-2">
+                <button
+                  type="button"
+                  onClick={() => toggleSort("category")}
+                  className="inline-flex items-center gap-1 hover:text-text transition"
+                >
+                  Categoria
+                  {sortBy === "category"
+                    ? (sortDir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
+                    : <ArrowUpDown size={10} className="opacity-30" />}
+                </button>
+              </th>
               {extraColumns.map((c) => (
-                <th key={c.key} className="py-2 text-right pr-3">{c.label}</th>
+                <th key={c.key} className="py-2 text-right pr-3">
+                  <button
+                    type="button"
+                    onClick={() => toggleSort(c.key)}
+                    className="inline-flex items-center gap-1 hover:text-text transition"
+                  >
+                    {c.label}
+                    {sortBy === c.key
+                      ? (sortDir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
+                      : <ArrowUpDown size={10} className="opacity-30" />}
+                  </button>
+                </th>
               ))}
-              <th className="py-2 text-right pr-2 min-w-[160px]">Valor</th>
+              <th className="py-2 text-right pr-2 min-w-[160px]">
+                <button
+                  type="button"
+                  onClick={() => toggleSort("value")}
+                  className="inline-flex items-center gap-1 hover:text-text transition"
+                >
+                  Valor
+                  {sortBy === "value"
+                    ? (sortDir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />)
+                    : <ArrowUpDown size={10} className="opacity-30" />}
+                </button>
+              </th>
             </tr>
           </thead>
           <tbody>
-            {data.map((r, i) => {
+            {sortedData.map((r, i) => {
               const pct = max > 0 ? (r.value / max) * 100 : 0;
               const sku = typeof r.extra?.sku === "string" ? (r.extra.sku as string) : null;
               const enrich = sku ? enrichments[sku] : undefined;
@@ -331,7 +454,7 @@ export function CategoryTable({
                 </tr>
               );
             })}
-            {data.length === 0 && (
+            {sortedData.length === 0 && (
               <tr>
                 <td colSpan={2 + extraColumns.length} className="py-8 text-center text-text-muted text-sm">
                   Sin datos.
@@ -341,6 +464,15 @@ export function CategoryTable({
           </tbody>
         </table>
       </div>
+
+      {modal && (
+        <DrillDownModal
+          title={modal.title}
+          endpoint={modal.endpoint}
+          filename={modal.filename}
+          onClose={() => setModal(null)}
+        />
+      )}
     </div>
   );
 }
