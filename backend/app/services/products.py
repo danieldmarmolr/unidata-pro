@@ -422,32 +422,21 @@ def product_detail(sku: str) -> dict:
     cost_info = None
     try:
         cost_info = costs_svc.cost_for_sku(sku, in_ars=True)
-        if cost_info and cost_info.get("cost_ars") and total_rev and total_units:
-            unit_cost = cost_info["cost_ars"]
-            margen_ars = total_rev - total_units * unit_cost
-            margen_pct = (margen_ars / total_rev * 100) if total_rev > 0 else None
-
-            # Sanity check: si la data del lote tiene cantidad mal cargada,
-            # el "cost_ars per unit" puede salir absurdo (lote completo dividido
-            # por 1). Si el margen negativo supera 500% de revenue Y el lote no
-            # tenia cantidad declarada, NO mostramos el margen para no confundir
-            # al usuario. Senalizamos por que.
-            cantidad_lote = cost_info.get("cantidad_lote")
-            implausible = (
-                margen_pct is not None
-                and margen_pct < -500
-                and (cantidad_lote is None or cantidad_lote <= 1)
+        if cost_info and cost_info.get("legacy_lote"):
+            # Lote viejo importado con parser malo: warning y NO calculamos
+            cost_info["margen_warning"] = cost_info.get("legacy_warning") or (
+                "Lote con data legacy - re-importar CSV VALOR PRODUCTO."
             )
-            if not implausible:
-                cost_info["margen_estimado_lifetime"] = round(margen_ars, 0)
-                if margen_pct is not None:
-                    cost_info["margen_pct"] = round(margen_pct, 1)
-            else:
-                cost_info["margen_warning"] = (
-                    "No se puede calcular margen lifetime confiable: el lote "
-                    "no tiene la cantidad de unidades cargada en el CSV. "
-                    "Editar el lote en /dashboard/costos para corregir."
-                )
+        elif cost_info and cost_info.get("cost_ars") and total_rev and total_units:
+            # Margen = revenue - units_sold * cost_unit_ars_sin_iva
+            # cost_ars ya viene PER UNIT en ARS directamente desde el CSV
+            # (la planilla calcula con TC al momento de importar).
+            unit_cost_ars = cost_info["cost_ars"]
+            margen_ars = total_rev - total_units * unit_cost_ars
+            margen_pct = (margen_ars / total_rev * 100) if total_rev > 0 else None
+            cost_info["margen_estimado_lifetime"] = round(margen_ars, 0)
+            if margen_pct is not None:
+                cost_info["margen_pct"] = round(margen_pct, 1)
     except Exception:
         pass
 

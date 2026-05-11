@@ -30,8 +30,16 @@ type Sku = {
   categoria: string | null;
   sub_categoria: string | null;
   cantidad: number | null;
+  // Campos viejos (legacy, lotes pre-fix)
   costo_total_sin_iva_usd: number | null;
   costo_con_iva_usd: number | null;
+  // Campos nuevos (post-fix del parser)
+  costo_unit_usd_max?: number | null;
+  costo_unit_usd_min?: number | null;
+  costo_unit_ars?: number | null;
+  costo_con_iva_unit_ars?: number | null;
+  rent_neta_lote_ars?: number | null;
+  facturacion_ars?: number | null;
   precio_ars: number | null;
   pct_rentabilidad: number | null;
   lote: string;
@@ -151,11 +159,30 @@ function SkusTab({
     queryFn: () => api(`/api/costs/current?search=${encodeURIComponent(search)}&limit=1000`),
   });
 
-  const fmtCost = (usd: number | null | undefined) => {
-    if (usd === null || usd === undefined) return "—";
-    if (currency === "usd") return `US$ ${usd.toFixed(2)}`;
-    if (rate?.venta) return formatCurrency(usd * rate.venta);
-    return `US$ ${usd.toFixed(2)}`;
+  // Formatea costo unitario: prefiere los campos NUEVOS (semantica correcta).
+  // Devuelve segun la moneda elegida:
+  //   USD -> usa costo_unit_usd_max
+  //   ARS -> usa costo_unit_ars (NO multiplica, ya viene en ARS desde CSV)
+  // Legacy fallback: si solo existe el campo viejo (lote pre-fix), trata
+  // como USD y multiplica por TC del momento.
+  const fmtCostFromSku = (r: Sku, withIva: boolean = false) => {
+    const usd = withIva ? r.costo_unit_usd_max : r.costo_unit_usd_max; // no hay con-iva en USD
+    const ars = withIva ? r.costo_con_iva_unit_ars : r.costo_unit_ars;
+    if (currency === "usd") {
+      if (usd !== null && usd !== undefined) return `US$ ${usd.toFixed(2)}`;
+      // Legacy fallback
+      const legacy = withIva ? r.costo_con_iva_usd : r.costo_total_sin_iva_usd;
+      if (legacy !== null && legacy !== undefined) return `US$ ${legacy.toFixed(2)}`;
+      return "—";
+    }
+    // ARS
+    if (ars !== null && ars !== undefined) return formatCurrency(ars);
+    // Legacy fallback: solo tenemos USD, multiplicar por TC
+    const legacy = withIva ? r.costo_con_iva_usd : r.costo_total_sin_iva_usd;
+    if (legacy !== null && legacy !== undefined && rate?.venta) {
+      return formatCurrency(legacy * rate.venta);
+    }
+    return "—";
   };
 
   return (
@@ -211,8 +238,8 @@ function SkusTab({
                     {r.categoria || "—"}
                     {r.sub_categoria && <div className="text-[10px] text-text-muted">{r.sub_categoria}</div>}
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmtCost(r.costo_con_iva_usd)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-text-muted">{fmtCost(r.costo_total_sin_iva_usd)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums font-semibold">{fmtCostFromSku(r, true)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-text-muted">{fmtCostFromSku(r, false)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">
                     {r.precio_ars ? formatCurrency(r.precio_ars) : "—"}
                   </td>
@@ -240,10 +267,17 @@ type LoteDetail = {
     producto: string | null;
     categoria: string | null;
     cantidad: number | null;
+    // Legacy
     costo_total_sin_iva_usd: number | null;
     costo_con_iva_usd: number | null;
+    // Nuevos (parser corregido)
+    costo_unit_usd_max?: number | null;
+    costo_unit_ars?: number | null;
+    costo_con_iva_unit_ars?: number | null;
     precio_ars: number | null;
     pct_rentabilidad: number | null;
+    rent_neta_lote_ars?: number | null;
+    facturacion_ars?: number | null;
   }>;
 };
 
@@ -256,16 +290,36 @@ function LoteRowExpanded({ loteId }: { loteId: number }) {
   if (isLoading) return <div className="px-6 py-4 text-xs text-text-muted">Cargando SKUs...</div>;
   if (!data?.items?.length) return <div className="px-6 py-4 text-xs text-text-muted">Sin items en el lote.</div>;
 
-  // Total del lote (suma de cantidades y de costo total s/iva)
+  // Totales del lote: ahora desde campos correctos del CSV
   const totalUnidades = data.items.reduce((acc, it) => acc + (it.cantidad ?? 0), 0);
-  const totalUsdSinIva = data.items.reduce((acc, it) => acc + (it.costo_total_sin_iva_usd ?? 0), 0);
+  // Costo total del lote en USD: sum(costo_unit_usd_max * cantidad)
+  const totalUsdLote = data.items.reduce(
+    (acc, it) => acc + ((it.costo_unit_usd_max ?? 0) * (it.cantidad ?? 0)),
+    0,
+  );
+  // Costo total del lote en ARS: sum(costo_unit_ars * cantidad)
+  const totalArsLote = data.items.reduce(
+    (acc, it) => acc + ((it.costo_unit_ars ?? 0) * (it.cantidad ?? 0)),
+    0,
+  );
+  // Facturacion estimada del lote (si todas las unidades se venden al precio sug.)
+  const totalFacturacion = data.items.reduce(
+    (acc, it) => acc + (it.facturacion_ars ?? ((it.precio_ars ?? 0) * (it.cantidad ?? 0))),
+    0,
+  );
+  const totalProfit = data.items.reduce(
+    (acc, it) => acc + (it.rent_neta_lote_ars ?? 0),
+    0,
+  );
 
   return (
     <div className="bg-soft/40 border-t border-border">
       <div className="px-6 py-3 text-[11px] text-text-muted flex items-center gap-4 flex-wrap">
         <span><strong className="text-text">{data.items.length}</strong> SKUs</span>
-        <span><strong className="text-text">{formatNumber(totalUnidades)}</strong> unidades en el lote</span>
-        <span>Costo total s/IVA: <strong className="text-text">US$ {totalUsdSinIva.toLocaleString("es-AR", { maximumFractionDigits: 2 })}</strong></span>
+        <span><strong className="text-text">{formatNumber(totalUnidades)}</strong> unid. en el lote</span>
+        <span>Costo total: <strong className="text-text">US$ {totalUsdLote.toLocaleString("es-AR", { maximumFractionDigits: 0 })}</strong> · {formatCurrency(totalArsLote)}</span>
+        {totalFacturacion > 0 && <span>Facturación esperada: <strong className="text-emerald-700">{formatCurrency(totalFacturacion)}</strong></span>}
+        {totalProfit !== 0 && <span>Ganancia esperada: <strong className={totalProfit >= 0 ? "text-emerald-700" : "text-rose-700"}>{formatCurrency(totalProfit)}</strong></span>}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
@@ -273,20 +327,21 @@ function LoteRowExpanded({ loteId }: { loteId: number }) {
             <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-text-muted">
               <th className="px-4 py-2">SKU</th>
               <th className="px-4 py-2">Producto</th>
-              <th className="px-4 py-2">Categoria</th>
+              <th className="px-4 py-2">Categoría</th>
               <th className="px-4 py-2 text-right">Cant.</th>
-              <th className="px-4 py-2 text-right">Costo total s/IVA (USD)</th>
-              <th className="px-4 py-2 text-right">Costo unit. s/IVA (USD)</th>
-              <th className="px-4 py-2 text-right">Costo c/IVA (USD)</th>
+              <th className="px-4 py-2 text-right">Costo unit. USD</th>
+              <th className="px-4 py-2 text-right">Costo unit. ARS s/IVA</th>
+              <th className="px-4 py-2 text-right">Costo unit. ARS c/IVA</th>
               <th className="px-4 py-2 text-right">Precio sug. ARS</th>
               <th className="px-4 py-2 text-right">% Rent</th>
             </tr>
           </thead>
           <tbody>
             {data.items.map((it) => {
-              const unit = it.cantidad && it.cantidad > 0 && it.costo_total_sin_iva_usd
-                ? it.costo_total_sin_iva_usd / it.cantidad
-                : null;
+              // Backwards-compat: si el lote es viejo solo tiene los _usd legacy
+              const unitUsd = it.costo_unit_usd_max ?? it.costo_total_sin_iva_usd;
+              const unitArs = it.costo_unit_ars;
+              const unitArsConIva = it.costo_con_iva_unit_ars;
               return (
                 <tr key={it.sku} className="border-t border-border/60 hover:bg-white transition">
                   <td className="px-4 py-1.5 font-mono font-semibold">
@@ -297,11 +352,11 @@ function LoteRowExpanded({ loteId }: { loteId: number }) {
                   <td className="px-4 py-1.5 text-text-muted truncate max-w-[260px]" title={it.producto ?? ""}>{it.producto || "—"}</td>
                   <td className="px-4 py-1.5 text-text-muted">{it.categoria || "—"}</td>
                   <td className="px-4 py-1.5 text-right tabular-nums">{it.cantidad ?? "—"}</td>
-                  <td className="px-4 py-1.5 text-right tabular-nums">{it.costo_total_sin_iva_usd?.toLocaleString("es-AR", { maximumFractionDigits: 2 }) ?? "—"}</td>
-                  <td className="px-4 py-1.5 text-right tabular-nums font-semibold text-primary">{unit !== null ? unit.toFixed(2) : "—"}</td>
-                  <td className="px-4 py-1.5 text-right tabular-nums">{it.costo_con_iva_usd?.toLocaleString("es-AR", { maximumFractionDigits: 2 }) ?? "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{unitUsd !== null && unitUsd !== undefined ? `US$ ${unitUsd.toFixed(2)}` : "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums font-semibold text-primary">{unitArs !== null && unitArs !== undefined ? formatCurrency(unitArs) : "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{unitArsConIva !== null && unitArsConIva !== undefined ? formatCurrency(unitArsConIva) : "—"}</td>
                   <td className="px-4 py-1.5 text-right tabular-nums">{it.precio_ars ? formatCurrency(it.precio_ars) : "—"}</td>
-                  <td className="px-4 py-1.5 text-right tabular-nums">{it.pct_rentabilidad !== null ? `${it.pct_rentabilidad.toFixed(0)}%` : "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.pct_rentabilidad !== null && it.pct_rentabilidad !== undefined ? `${it.pct_rentabilidad.toFixed(0)}%` : "—"}</td>
                 </tr>
               );
             })}

@@ -63,11 +63,17 @@ COLS_ITEM = {
     "cantidad": "Cantidad",
     "valor_max_usd": "valor maximo (todo manual salvo combos uqe hay que hacer formula)",
     "valor_min_usd": "valor minimo",
-    "costo_total_sin_iva_usd": "Costo Total S/ IVA Max (USD)",
-    "costo_con_iva_usd": "Costo con IVA",
-    "precio_ars": "Precio ",  # nota: tiene un espacio al final en el Excel
+    # Costos per-unit landed (USD)
+    "costo_unit_usd_max": "Costo Total S/ IVA Max (USD)",
+    "costo_unit_usd_min": "Costo Total S/ IVA Min (USD)2",
+    # Costos per-unit ARS (la planilla calcula con TC al importar)
+    "costo_unit_ars": "Costo Total S/ IVA ",  # nota: trailing space en el Excel
+    "costo_con_iva_unit_ars": "Costo con IVA",
+    "precio_ars": "Precio ",
     "rentabilidad_ars": "Rentabilidad",
     "pct_rentabilidad": "% Rentab",
+    "rent_neta_lote_ars": "Rent, Neta Lote",
+    "facturacion_ars": "Facturacion",
     "alto_m": "Alto (m)",
     "largo_m": "Largo (m)",
     "ancho_m": "Ancho (m)",
@@ -200,6 +206,11 @@ def parse_excel(file_bytes: bytes | IO[bytes]) -> dict:
                 v = v.isoformat()
             raw[h] = v
 
+        costo_unit_usd_max = _to_float(cell(row, "costo_unit_usd_max"))
+        costo_unit_usd_min = _to_float(cell(row, "costo_unit_usd_min"))
+        costo_unit_ars = _to_float(cell(row, "costo_unit_ars"))
+        costo_con_iva_unit_ars = _to_float(cell(row, "costo_con_iva_unit_ars"))
+
         item = {
             "sku": sku,
             "producto": _to_str(cell(row, "producto")),
@@ -209,11 +220,19 @@ def parse_excel(file_bytes: bytes | IO[bytes]) -> dict:
             "cantidad": _to_int(cell(row, "cantidad")),
             "valor_max_usd": _to_float(cell(row, "valor_max_usd")),
             "valor_min_usd": _to_float(cell(row, "valor_min_usd")),
-            "costo_total_sin_iva_usd": _to_float(cell(row, "costo_total_sin_iva_usd")),
-            "costo_con_iva_usd": _to_float(cell(row, "costo_con_iva_usd")),
+            # Costo per-unit corregido (campos nuevos)
+            "costo_unit_usd_max": costo_unit_usd_max,
+            "costo_unit_usd_min": costo_unit_usd_min,
+            "costo_unit_ars": costo_unit_ars,
+            "costo_con_iva_unit_ars": costo_con_iva_unit_ars,
+            # Backwards-compat de campos antiguos
+            "costo_total_sin_iva_usd": costo_unit_usd_max,
+            "costo_con_iva_usd": None,
             "precio_ars": _to_float(cell(row, "precio_ars")),
             "rentabilidad_ars": _to_float(cell(row, "rentabilidad_ars")),
             "pct_rentabilidad": _to_float(cell(row, "pct_rentabilidad")),
+            "rent_neta_lote_ars": _to_float(cell(row, "rent_neta_lote_ars")),
+            "facturacion_ars": _to_float(cell(row, "facturacion_ars")),
             "alto_m": _to_float(cell(row, "alto_m")),
             "largo_m": _to_float(cell(row, "largo_m")),
             "ancho_m": _to_float(cell(row, "ancho_m")),

@@ -17,16 +17,23 @@ type CostInfo = {
   lote: string | null;
   fecha_ingreso: string | null;
   cantidad_lote?: number | null;
-  cost_total_usd?: number | null;
-  cost_unit_usd?: number | null;
-  cost_usd: number | null;       // per-unit (backwards-compat)
-  cost_total_ars?: number | null;
-  cost_unit_ars?: number | null;
-  cost_ars: number | null;       // per-unit (backwards-compat)
+  cost_total_usd?: number | null;   // total del lote (informativo)
+  cost_total_ars?: number | null;   // total del lote ARS
+  cost_unit_usd?: number | null;    // per-unit USD landed
+  cost_unit_ars?: number | null;    // per-unit ARS landed s/IVA
+  cost_con_iva_unit_ars?: number | null; // per-unit ARS con IVA
+  cost_usd: number | null;          // backwards-compat = per-unit USD
+  cost_ars: number | null;          // backwards-compat = per-unit ARS s/IVA
   usd_rate: number | null;
+  precio_ars_sugerido?: number | null;
+  rentabilidad_ars_unit?: number | null;
+  pct_rentabilidad?: number | null;
+  rent_neta_lote_ars?: number | null;
+  facturacion_lote_ars?: number | null;
   margen_estimado_lifetime?: number;
   margen_pct?: number;
   margen_warning?: string;
+  legacy_lote?: boolean;
 } | null;
 
 type Detail = {
