@@ -1,10 +1,12 @@
 """
-Pagos Talo - Unidrop. SOLO pagos de ordenes.
-Las suscripciones MELI viven en services/subscriptions_meli.py.
+Pagos Talo - Unidrop. Procesa pagos de ordenes TN, ordenes MELI y suscripciones.
 
-Cada PaymentTransaction se asocia a un PaymentIntent que tiene orderIds (TN) o
-mlOrderIds (ML). Eso define el canal: la misma unidad de negocio (Unidrop) tiene
-dos canales de venta - TN y MELI.
+Cada PaymentTransaction se asocia a un PaymentIntent que tiene orderIds (TN),
+mlOrderIds (MELI) o ninguno (suscripcion / otros).
+
+Las suscripciones MELI tienen su propia tabla PaymentIntentSubscription y el
+revenue agregado se calcula en services/subscriptions_meli.py - aca solo
+clasificamos el PT en funcion de su PaymentIntent asociado.
 """
 from __future__ import annotations
 
@@ -123,9 +125,9 @@ def pagos_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     rows = q(eng, """
         SELECT
             CASE
-                WHEN pi."mlOrderIds" IS NOT NULL AND array_length(pi."mlOrderIds",1) > 0 THEN 'Mercado Libre'
-                WHEN pi."orderIds" IS NOT NULL AND array_length(pi."orderIds",1) > 0 THEN 'Tienda Nube'
-                ELSE 'Sin canal'
+                WHEN pi."mlOrderIds" IS NOT NULL AND array_length(pi."mlOrderIds",1) > 0 THEN 'Orden MELI'
+                WHEN pi."orderIds" IS NOT NULL AND array_length(pi."orderIds",1) > 0 THEN 'Orden TN'
+                ELSE 'Suscripcion / Otros'
             END AS canal,
             COUNT(*)::int AS n,
             COALESCE(SUM(pt.amount),0)::float AS volumen

@@ -47,7 +47,7 @@ export default function PagosPage() {
     <>
       <Topbar
         title="Pagos Talo · Unidrop"
-        subtitle="Pagos de ordenes (TN + ML) · Las suscripciones MELI viven en su propio dashboard"
+        subtitle="TaloPay procesa pagos de ordenes TN, ordenes MELI y suscripciones · cada PaymentTransaction se clasifica por tipo via su PaymentIntent asociado"
       />
       
       <div className="flex-1 px-8 py-6 overflow-y-auto">
@@ -112,8 +112,8 @@ export default function PagosPage() {
         {!isLoading && data && (
           <div className="mb-6">
             <CategoryTable
-              caption="Volumen por canal (siempre full, no afectado por el filtro)"
-              subtitle="Click no aplica · vista de comparacion total entre TN y MELI"
+              caption="Volumen por tipo de pago"
+              subtitle="TaloPay procesa ordenes TN, ordenes MELI y suscripciones · breakdown completo del periodo"
               data={data.channel_breakdown}
               formatter="currency"
               extraColumns={[{ key: "transacciones", label: "Trans", format: "number" }]}

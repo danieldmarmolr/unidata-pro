@@ -1,6 +1,30 @@
 """
 Tuneles SSH a los bastiones AWS y engines SQLAlchemy por unidad de negocio.
 Auto-recovery: si el tunel se cayo o el engine perdio conexion, se reconectan.
+
+Mapeo de unidades de negocio -> base de datos y schemas:
+
+UNISTORE (engine "unistore" -> RDS unistore_api):
+  - tienda_nube  : ventas TN del retail Unistore
+  - meli         : ventas MELI del retail Unistore
+  - digip        : WMS / logistica (StockDetalle, DespachoPedido, Pedido)
+  - contabilium  : ERP, facturas (SalesOrder, ReceiptItem)
+  - public
+
+UNIDROP (engine "unidrop" -> RDS unidrop_api):
+  - public            : usuarios dropshippers, TaloPay (PaymentTransaction,
+                        PaymentIntent), TiendaNube denormalizada
+                        (tienda_nube_orders) y suscripciones
+                        (PaymentIntentSubscription)
+  - mercado_libre_dev : ventas MELI de Unidrop (OrderMercadoLibre),
+                        suscripciones (SubscriptionMeli,
+                        PaymentTransactionSubscription)
+  - contabillium_dev  : ERP Unidrop (ContabilliumInvoice,
+                        ContabiliumSalesOrder)
+  - cresium
+
+REGLA: cada query usa get_engine("unistore") o get_engine("unidrop") segun
+la unidad. NO se mezclan datos entre unidades.
 """
 from __future__ import annotations
 

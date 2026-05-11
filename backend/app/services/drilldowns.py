@@ -574,7 +574,13 @@ def tn_stock_critico() -> dict:
 # ============================================================
 
 def talo_transactions(period: str = "30d", status: str | None = None, from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    """Pagos Talo enriquecido con orden TN (DROP-DNI-Incremental), DNI y datos del usuario."""
+    """Pagos Talo enriquecido con tipo (TN order / MELI order / Suscripcion u otros),
+    numero de orden (DROP-DNI-Incremental para TN, MELI order id para ML), DNI y datos del usuario.
+
+    Importante: TaloPay procesa multiples flujos UNIDROP — ordenes TN, ordenes MELI y, en algunos
+    casos, suscripciones. Esta query clasifica cada PaymentTransaction en su tipo correcto en
+    lugar de mostrarlo como una transaccion plana sin contexto.
+    """
     eng = get_engine("unidrop")
     days = resolve_window(period, from_iso, to_iso)["days"]
     where = 'pt."createdAt" >= NOW() - make_interval(days => :d)'
@@ -592,9 +598,26 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
                pt.commission::float AS comision,
                pt."creditedAmount"::float AS acreditado,
                COALESCE(pt."taloTransactionId", '') AS talo_id,
-               -- intent + orden TN
+               -- tipo: clasifica el PaymentIntent asociado
+               CASE
+                 WHEN EXISTS (
+                   SELECT 1 FROM public."PaymentIntent" pi
+                   WHERE pi."paymentTransactionId" = pt.id
+                     AND pi."mlOrderIds" IS NOT NULL
+                     AND array_length(pi."mlOrderIds", 1) > 0
+                 ) THEN 'Orden MELI'
+                 WHEN EXISTS (
+                   SELECT 1 FROM public."PaymentIntent" pi
+                   WHERE pi."paymentTransactionId" = pt.id
+                     AND pi."orderIds" IS NOT NULL
+                     AND jsonb_typeof(pi."orderIds"::jsonb) = 'array'
+                     AND jsonb_array_length(pi."orderIds"::jsonb) > 0
+                 ) THEN 'Orden TN'
+                 ELSE 'Suscripcion / Otros'
+               END AS tipo,
+               -- numero de orden TN (formato DROP-DNI-Incremental)
                COALESCE((
-                  SELECT string_agg(o.number, ', ')
+                  SELECT string_agg(COALESCE(o.order_number, o.number::text), ', ')
                   FROM public."PaymentIntent" pi
                   CROSS JOIN LATERAL jsonb_array_elements_text(
                     CASE
@@ -605,6 +628,13 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
                   LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
                   WHERE pi."paymentTransactionId" = pt.id
                ), '') AS orden_numero,
+               -- numero de orden MELI (ml order id de PaymentIntent.mlOrderIds)
+               COALESCE((
+                  SELECT string_agg(mloid::text, ', ')
+                  FROM public."PaymentIntent" pi
+                  CROSS JOIN LATERAL unnest(pi."mlOrderIds") AS mloid
+                  WHERE pi."paymentTransactionId" = pt.id
+               ), '') AS meli_orden_id,
                -- user via tienda_nube_orders.user_id
                COALESCE((
                   SELECT u.id::text
@@ -668,7 +698,8 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
     """, {"d": days}) or []
     return _serialize(rows, [
         "id", "fecha", "status", "monto", "comision", "acreditado",
-        "talo_id", "orden_numero", "user_id", "dni", "email", "telefono",
+        "talo_id", "tipo", "orden_numero", "meli_orden_id",
+        "user_id", "dni", "email", "telefono",
     ])
 
 
