@@ -14,7 +14,7 @@ import { formatCurrency, formatNumber } from "@/lib/utils";
 
 const COLORS = ["#7a3eae", "#a259ff", "#c79bff", "#e0cff3"];
 
-type Datum = { name: string; value: number; extra?: Record<string, number | string | null> | null };
+type Datum = { name: string; value: number; extra?: Record<string, number | string | boolean | null> | null };
 
 export function HBarChart({
   data,

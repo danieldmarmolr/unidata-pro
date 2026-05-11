@@ -35,7 +35,7 @@ export type ExecutiveOverview = {
 export type CategoryValue = {
   category: string;
   value: number;
-  extra?: Record<string, number | string | null> | null;
+  extra?: Record<string, number | string | boolean | null> | null;
 };
 
 export type TopProduct = {

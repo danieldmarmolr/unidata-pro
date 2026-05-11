@@ -296,6 +296,25 @@ def get_dropshipper_detail(
     return dropshippers_svc.dropshipper_detail(user_id, period=period, from_iso=from_iso, to_iso=to_iso)
 
 
+# ============================================================
+# UNIDROP END CONSUMER 360 (compradores finales de los dropshippers)
+# ============================================================
+from app.services import end_consumers_unidrop as ec_unidrop_svc
+
+
+@router.get("/unidrop/end-consumer/{dni}")
+def get_unidrop_end_consumer(
+    dni: str,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Vista 360 del CLIENTE FINAL Unidrop (la persona que compra al dropshipper).
+
+    Pivot por DNI (`tienda_nube_orders.contact_identification`). Agrega ordenes
+    cross-dropshipper para ver el journey completo del comprador.
+    """
+    return ec_unidrop_svc.end_consumer_detail_unidrop(dni)
+
+
 from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc

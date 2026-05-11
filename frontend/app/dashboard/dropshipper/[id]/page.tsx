@@ -23,6 +23,7 @@ import {
   Clock,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { CategoryTable } from "@/components/generic-table";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -105,6 +106,11 @@ type DropshipperDetail = {
     pending: number;
     ml_orders: number;
     tn_orders: number;
+  }[];
+  top_clientes_finales?: {
+    category: string;
+    value: number;
+    extra?: { dni?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
   }[];
   generated_at: string;
 };
@@ -393,6 +399,23 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 hint={data.ventas_tn.ultima_venta?.slice(0, 16) || "—"}
               />
             </div>
+          </div>
+        )}
+
+        {/* Top clientes FINALES (compradores TN del dropshipper) - drill al End Consumer 360 */}
+        {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
+          <div className="mb-5">
+            <CategoryTable
+              caption="Top clientes finales (compradores TN)"
+              subtitle="Personas que le compran a este dropshipper · click para ver el journey del cliente"
+              data={data.top_clientes_finales}
+              formatter="currency"
+              extraColumns={[
+                { key: "ordenes", label: "Órd", format: "number" },
+                { key: "provincia", label: "Provincia", format: "raw" },
+                { key: "dni", label: "DNI", format: "raw" },
+              ]}
+            />
           </div>
         )}
 

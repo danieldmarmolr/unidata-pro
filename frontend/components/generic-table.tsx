@@ -11,7 +11,7 @@ import { DrillDownModal } from "@/components/drilldown-modal";
 type Row = {
   category: string;
   value: number;
-  extra?: Record<string, number | string | null> | null;
+  extra?: Record<string, number | string | boolean | null> | null;
 };
 
 // Lista de provincias argentinas para auto-detection
@@ -61,7 +61,11 @@ function getAutoDrill(r: Row): AutoDrill | null {
   if (typeof sku === "string" && sku.trim()) {
     return { kind: "navigate", href: `/dashboard/productos/${encodeURIComponent(sku.trim())}` };
   }
-  // 2. Customer con customer_id - navigate
+  // 2a. End Consumer Unidrop (DNI + marker unidrop_consumer) - navigate al End Consumer 360
+  if (extra.unidrop_consumer && typeof extra.dni === "string" && extra.dni.trim()) {
+    return { kind: "navigate", href: `/dashboard/unidrop-customer/${encodeURIComponent(extra.dni.trim())}` };
+  }
+  // 2b. Customer Unistore con customer_id - navigate al Customer 360 Unistore
   const cid = extra.customer_id ?? extra.customerId;
   if (typeof cid === "number" && cid > 0) {
     return { kind: "navigate", href: `/dashboard/customer/${cid}` };
@@ -179,8 +183,8 @@ export function CategoryTable({
     const arr = [...data];
     const dir = sortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
-      let va: number | string | null | undefined;
-      let vb: number | string | null | undefined;
+      let va: number | string | boolean | null | undefined;
+      let vb: number | string | boolean | null | undefined;
       if (sortBy === "value") {
         va = a.value; vb = b.value;
       } else if (sortBy === "category") {

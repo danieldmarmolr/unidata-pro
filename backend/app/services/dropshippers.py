@@ -673,6 +673,15 @@ def dropshipper_detail(
         "tn_orders": int(r[6] or 0),
     } for r in last_pagos]
 
+    # Top clientes finales (compradores TN del dropshipper) - drill a End Consumer 360
+    try:
+        from app.services import end_consumers_unidrop as ec_unidrop
+        top_clientes_finales = ec_unidrop.top_end_consumers_for_dropshipper(
+            int(user_id), period_days=int(days), limit=20,
+        )
+    except Exception:
+        top_clientes_finales = []
+
     return {
         "user": user,
         "ventas": ventas_kpi,  # MELI
@@ -682,6 +691,8 @@ def dropshipper_detail(
         "monthly": monthly_series,
         "ultimas_ventas": orders,
         "ultimos_pagos": pagos_list,
+        # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
+        "top_clientes_finales": top_clientes_finales,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
