@@ -70,14 +70,62 @@ def canonical_province(s: str | None) -> str | None:
     return PROVINCES_CANON.get(n) or PROVINCES_CANON.get(n.replace("provincia de ", "").replace("provincia ", ""))
 
 
-def geo_overview(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    """Agregado por provincia: revenue, orders, customers, top_sku."""
+def geo_overview(
+    period: str = "30d",
+    from_iso: str | None = None,
+    to_iso: str | None = None,
+    unit: str = "unistore",
+) -> dict:
+    """Agregado por provincia para una unidad de negocio.
+
+    unit:
+      - unistore -> ventas TN del retail Unistore (tienda_nube.Order + Customer + OrderShippingAddress)
+      - unidrop  -> ventas TN de dropshippers (public.tienda_nube_orders en unidrop_api)
+                    + ventas MELI (mercado_libre_dev.OrderMercadoLibre) si tienen
+                    address. Para MELI no siempre hay provincia, esos quedan en
+                    sin_provincia.
+      - unidev   -> casos de devolucion abiertos por provincia (public.devoluciones
+                    + datos del cliente). Usa engine 'unidev'.
+    """
     win = resolve_window(period, from_iso, to_iso)
     days = win["days"]
-    eng = get_engine("unistore")
-    p = {"days": days}
+    from_ts = win["from_ts"]
+    to_ts = win["to_ts"]
 
-    # --- TN: orders TN paid + provincia desde Customer.billingProvince OR OrderShippingAddress.province ---
+    if unit == "unidrop":
+        return _geo_overview_unidrop(period, days, from_ts, to_ts)
+    if unit == "unidev":
+        return _geo_overview_unidev(period, days, from_ts, to_ts)
+    return _geo_overview_unistore(period, days, from_ts, to_ts)
+
+
+def _aggregate_by_province(rows: list, fields: tuple) -> tuple[list[dict], dict]:
+    """Helper comun: rows -> by_prov dict, sin_prov dict.
+    fields: ('orders', 'revenue', 'customers') o similares.
+    """
+    by_prov: dict[str, dict] = {}
+    sin_prov = {"province": "(sin provincia)", **{f: 0 for f in fields}}
+    for r in rows:
+        cp = canonical_province(r[0])
+        target = sin_prov if not cp else by_prov.setdefault(
+            cp, {"province": cp, **{f: 0 for f in fields}},
+        )
+        for i, f in enumerate(fields, start=1):
+            if f == "revenue":
+                target[f] = float(target.get(f, 0)) + float(r[i] or 0)
+            else:
+                target[f] = int(target.get(f, 0)) + int(r[i] or 0)
+    if "revenue" in fields:
+        for p in by_prov.values():
+            p["revenue"] = round(p["revenue"], 0)
+        sin_prov["revenue"] = round(sin_prov["revenue"], 0)
+    items = list(by_prov.values())
+    items.sort(key=lambda x: x.get("revenue", x.get("orders", 0)), reverse=True)
+    return items, sin_prov
+
+
+def _geo_overview_unistore(period: str, days: int, from_ts, to_ts) -> dict:
+    eng = get_engine("unistore")
     rows = q(eng, """
         SELECT COALESCE(NULLIF(TRIM(c."billingProvince"),''), NULLIF(TRIM(osa.province),''), '(sin provincia)') AS prov,
                COUNT(DISTINCT o.id)::int AS orders,
@@ -86,51 +134,96 @@ def geo_overview(period: str = "30d", from_iso: str | None = None, to_iso: str |
         FROM tienda_nube."Order" o
         LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
         LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
-        WHERE o."createdAt" >= NOW() - make_interval(days => :days)
+        WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
           AND o."paymentStatus" = 'paid'
-        GROUP BY 1
-        ORDER BY 3 DESC NULLS LAST
-    """, p) or []
-
-    by_prov: dict[str, dict] = {}
-    sin_prov = {"province": "(sin provincia)", "orders": 0, "revenue": 0.0, "customers": 0}
-    for r in rows:
-        cp = canonical_province(r[0])
-        if not cp:
-            sin_prov["orders"] += int(r[1] or 0)
-            sin_prov["revenue"] += float(r[2] or 0)
-            sin_prov["customers"] += int(r[3] or 0)
-            continue
-        if cp not in by_prov:
-            by_prov[cp] = {"province": cp, "orders": 0, "revenue": 0.0, "customers": 0}
-        by_prov[cp]["orders"] += int(r[1] or 0)
-        by_prov[cp]["revenue"] += float(r[2] or 0)
-        by_prov[cp]["customers"] += int(r[3] or 0)
-
-    # Round revenue
-    for p_data in by_prov.values():
-        p_data["revenue"] = round(p_data["revenue"], 0)
-
-    items = list(by_prov.values())
-    items.sort(key=lambda x: x["revenue"], reverse=True)
-
-    # KPIs cabecera
-    total_orders = sum(p["orders"] for p in items)
-    total_revenue = sum(p["revenue"] for p in items)
-    total_customers = sum(p["customers"] for p in items)
-
+        GROUP BY 1 ORDER BY 3 DESC NULLS LAST
+    """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+    items, sin_prov = _aggregate_by_province(rows, ("orders", "revenue", "customers"))
+    totals = {
+        "orders": sum(p["orders"] for p in items),
+        "revenue": round(sum(p["revenue"] for p in items), 0),
+        "customers": sum(p["customers"] for p in items),
+        "provinces_with_data": len(items),
+    }
     return {
-        "level": "argentina",
-        "period": period,
+        "level": "argentina", "unit": "unistore", "period": period,
         "window": {"days": days},
-        "totals": {
-            "orders": total_orders,
-            "revenue": round(total_revenue, 0),
-            "customers": total_customers,
-            "provinces_with_data": len(items),
-        },
-        "by_province": items,
-        "sin_provincia": sin_prov,
+        "totals": totals, "by_province": items, "sin_provincia": sin_prov,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+def _geo_overview_unidrop(period: str, days: int, from_ts, to_ts) -> dict:
+    """Ventas dropshippers por provincia del COMPRADOR FINAL.
+    Solo TN (tienda_nube_orders.billing_province) - MELI no tiene provincia en
+    la tabla actual. Si se agrega despues se suma aca.
+    """
+    eng = get_engine("unidrop")
+    rows = q(eng, """
+        SELECT COALESCE(NULLIF(TRIM(billing_province),''), '(sin provincia)') AS prov,
+               COUNT(*)::int AS orders,
+               SUM(total)::float AS revenue,
+               COUNT(DISTINCT contact_identification)::int AS customers
+        FROM public.tienda_nube_orders
+        WHERE payment_status::text = 'paid'
+          AND created_at >= :from_ts AND created_at < :to_ts
+        GROUP BY 1 ORDER BY 3 DESC NULLS LAST
+    """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+    items, sin_prov = _aggregate_by_province(rows, ("orders", "revenue", "customers"))
+    totals = {
+        "orders": sum(p["orders"] for p in items),
+        "revenue": round(sum(p["revenue"] for p in items), 0),
+        "customers": sum(p["customers"] for p in items),
+        "provinces_with_data": len(items),
+    }
+    return {
+        "level": "argentina", "unit": "unidrop", "period": period,
+        "window": {"days": days},
+        "totals": totals, "by_province": items, "sin_provincia": sin_prov,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+def _geo_overview_unidev(period: str, days: int, from_ts, to_ts) -> dict:
+    """Devoluciones Unidev por provincia. Engine unidev, tabla public.devoluciones.
+    Si el engine o tabla no existe, devuelve estructura vacia.
+    """
+    try:
+        eng = get_engine("unidev")
+    except Exception:
+        return {
+            "level": "argentina", "unit": "unidev", "period": period,
+            "window": {"days": days},
+            "totals": {"orders": 0, "revenue": 0, "customers": 0, "provinces_with_data": 0},
+            "by_province": [], "sin_provincia": {"province": "(sin provincia)", "orders": 0, "revenue": 0.0, "customers": 0},
+            "error": "Unidev engine no disponible",
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+    # public.devoluciones tiene fecha_creacion, monto_total_devolver, provincia (si esta)
+    try:
+        rows = q(eng, """
+            SELECT COALESCE(NULLIF(TRIM(provincia),''), '(sin provincia)') AS prov,
+                   COUNT(*)::int AS orders,
+                   COALESCE(SUM(monto_total_devolver),0)::float AS revenue,
+                   COUNT(DISTINCT cliente_id)::int AS customers
+            FROM public.devoluciones
+            WHERE fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+            GROUP BY 1 ORDER BY 3 DESC NULLS LAST
+        """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+    except Exception as e:
+        log.warning("geo unidev fail: %s", e)
+        rows = []
+    items, sin_prov = _aggregate_by_province(rows, ("orders", "revenue", "customers"))
+    totals = {
+        "orders": sum(p["orders"] for p in items),
+        "revenue": round(sum(p["revenue"] for p in items), 0),
+        "customers": sum(p["customers"] for p in items),
+        "provinces_with_data": len(items),
+    }
+    return {
+        "level": "argentina", "unit": "unidev", "period": period,
+        "window": {"days": days},
+        "totals": totals, "by_province": items, "sin_provincia": sin_prov,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 

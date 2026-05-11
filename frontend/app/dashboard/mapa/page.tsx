@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-// (useMemo se usa tambien en ArgentinaMap mas abajo)
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/topbar";
@@ -10,23 +9,14 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { geoMercator, geoPath } from "d3-geo";
 import { X } from "lucide-react";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 import { SkuRow } from "@/components/sku-row";
 
-const TOPO_URL = "/argentina-provinces.json";
-
-// Tipos minimos para el geojson
-type GeoFeature = {
-  type: "Feature";
-  geometry: any;
-  properties: { NAME_1?: string; [k: string]: any };
-};
-type GeoCollection = {
-  type: "FeatureCollection";
-  features: GeoFeature[];
-};
+// Nota: el mapa SVG fue removido temporalmente porque no rendiriza bien en
+// produccion Next 16/Turbopack. La distribucion nacional se muestra como
+// tabla ranking + side panel (Unistore drill). Se reactivara cuando este
+// resuelto el render en dev.
 
 type GeoOverview = {
   totals: { orders: number; revenue: number; customers: number; provinces_with_data: number };
@@ -44,6 +34,7 @@ type ProvinceDetail = {
 };
 
 type Metric = "revenue" | "orders" | "customers";
+type Unit = "unistore" | "unidrop" | "unidev";
 
 // Discrete categorical buckets (5 levels) for clear contrast.
 // El idx 0 ahora tiene mas contraste sobre fondo blanco para que las
@@ -69,46 +60,27 @@ export default function MapaPage() {
   const customTo = useGlobalFilters((s) => s.customTo);
   const router = useRouter();
   const [metric, setMetric] = useState<Metric>("revenue");
+  const [unit, setUnit] = useState<Unit>("unistore");
   const [selectedProvince, setSelectedProvince] = useState<string | null>(null);
-  const [hoverProvince, setHoverProvince] = useState<{ name: string; value: number; x: number; y: number } | null>(null);
-
-  // FIX: fetch manual del geojson en lugar de pasar la URL a Geographies.
-  // En Next.js 16 + Turbopack, react-simple-maps no resuelve la URL por si solo.
-  const [geoData, setGeoData] = useState<GeoCollection | null>(null);
-  const [geoError, setGeoError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancel = false;
-    fetch(TOPO_URL)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((j: GeoCollection) => {
-        if (!cancel) setGeoData(j);
-      })
-      .catch((e) => {
-        if (!cancel) setGeoError(e.message ?? "fallo cargar mapa");
-      });
-    return () => {
-      cancel = true;
-    };
-  }, []);
 
   const qs = periodToQuery(period, customFrom, customTo);
 
   const { data, isLoading } = useQuery<GeoOverview>({
-    queryKey: ["geo", period, customFrom, customTo],
-    queryFn: () => api(`/api/dashboards/geo?${qs}`),
+    queryKey: ["geo", period, customFrom, customTo, unit],
+    queryFn: () => api(`/api/dashboards/geo?${qs}&unit=${unit}`),
     staleTime: 60_000,
   });
 
+  // El drill provincia detail solo existe para Unistore (TN). Para unidrop/
+  // unidev hoy no hay endpoint /geo/province/{p}?unit=... - la tabla ranking
+  // por provincia es la vista principal igual.
   const { data: detail, isLoading: loadingDetail } = useQuery<ProvinceDetail>({
-    queryKey: ["geo-province", selectedProvince, period, customFrom, customTo],
+    queryKey: ["geo-province", selectedProvince, period, customFrom, customTo, unit],
     queryFn: () =>
       api(
         `/api/dashboards/geo/province/${encodeURIComponent(selectedProvince!)}?${qs}`,
       ),
-    enabled: !!selectedProvince,
+    enabled: unit === "unistore" && !!selectedProvince,
     staleTime: 60_000,
   });
 
@@ -141,56 +113,101 @@ export default function MapaPage() {
   return (
     <>
       <Topbar
-        title="Mapa de distribucion"
-        subtitle="Argentina · revenue / ordenes / clientes por provincia · click para drill"
+        title="Distribución por provincia"
+        subtitle="Argentina · revenue / ordenes / clientes · ranking nacional por unidad de negocio"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
-        {/* Filtros */}
+        {/* Filtros: Unidad + Metrica */}
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-          <Segmented<Metric>
-            value={metric}
-            onChange={setMetric}
-            options={[
-              { value: "revenue", label: "Revenue" },
-              { value: "orders", label: "Ordenes" },
-              { value: "customers", label: "Clientes" },
-            ]}
-          />
+          <div className="flex items-center gap-3 flex-wrap">
+            <Segmented<Unit>
+              value={unit}
+              onChange={(u) => {
+                setUnit(u);
+                setSelectedProvince(null);
+              }}
+              options={[
+                { value: "unistore", label: "Unistore (TN retail)" },
+                { value: "unidrop", label: "Unidrop (dropshippers)" },
+                { value: "unidev", label: "Unidev (devoluciones)" },
+              ]}
+            />
+            <Segmented<Metric>
+              value={metric}
+              onChange={setMetric}
+              options={[
+                { value: "revenue", label: unit === "unidev" ? "Monto devuelto" : "Revenue" },
+                { value: "orders", label: unit === "unidev" ? "Casos" : "Ordenes" },
+                { value: "customers", label: "Clientes" },
+              ]}
+            />
+          </div>
           {data && (
             <div className="text-xs text-text-muted">
-              Total {data.totals.provinces_with_data} provincias con datos · {formatNumber(data.totals.orders)} ordenes ·{" "}
-              {formatCurrency(data.totals.revenue)} revenue
+              {data.totals.provinces_with_data} provincias con datos · {formatNumber(data.totals.orders)} {unit === "unidev" ? "casos" : "ordenes"} ·{" "}
+              {formatCurrency(data.totals.revenue)} {unit === "unidev" ? "devuelto" : "revenue"}
             </div>
           )}
         </div>
 
+        {/* Mapa SVG removido temporalmente - se reactiva cuando este resuelto en dev.
+            Mientras tanto: la tabla de ranking + side panel cubren el caso de uso. */}
+
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          {/* MAP */}
-          <div className="xl:col-span-2 bg-surface border border-border rounded-xl p-3">
-            {isLoading || (!geoData && !geoError) ? (
-              <div className="h-[600px] animate-pulse bg-soft rounded" />
-            ) : geoError ? (
-              <div className="h-[600px] flex items-center justify-center text-error text-sm bg-soft rounded">
-                Error cargando mapa: {geoError}
+          {/* RANKING POR PROVINCIA (vista principal) */}
+          <div className="xl:col-span-2 bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-border">
+              <div className="text-sm font-bold text-text">Ranking por provincia</div>
+              <div className="text-xs text-text-muted mt-0.5">
+                {unit === "unistore" && "Click una fila para ver SKUs/clientes top de la provincia"}
+                {unit === "unidrop" && "Ventas de dropshippers TN por provincia del comprador final"}
+                {unit === "unidev" && "Casos de devolución abiertos por provincia"}
+              </div>
+            </div>
+            {isLoading ? (
+              <div className="p-12 text-center text-text-muted text-sm">Cargando...</div>
+            ) : !data || data.by_province.length === 0 ? (
+              <div className="p-12 text-center text-text-muted text-sm">
+                Sin datos para este período/unidad.
               </div>
             ) : (
-              <ArgentinaMap
-                geoData={geoData!}
-                valueByProvince={valueByProvince}
-                maxValue={maxValue}
-                selectedProvince={selectedProvince}
-                onSelect={setSelectedProvince}
-                hoverProvince={hoverProvince}
-                onHover={(h) => setHoverProvince(h)}
-                metric={metric}
-                fmtMetric={fmtMetric}
-              />
+              <div className="p-3">
+                <CategoryTable
+                  caption=""
+                  data={data.by_province.map((p) => ({
+                    category: p.province,
+                    value: p[metric] as number,
+                    extra: { orders: p.orders, customers: p.customers, revenue: p.revenue },
+                  }))}
+                  formatter={metric === "revenue" ? "currency" : "number"}
+                  extraColumns={[
+                    { key: "orders", label: unit === "unidev" ? "Casos" : "Ord", format: "number" },
+                    { key: "customers", label: "Clientes", format: "number" },
+                    ...(metric !== "revenue"
+                      ? [{ key: "revenue", label: unit === "unidev" ? "Monto" : "Revenue", format: "currency" as const }]
+                      : []),
+                  ]}
+                  onRowClick={unit === "unistore" ? (r) => setSelectedProvince(r.category) : undefined}
+                />
+              </div>
             )}
           </div>
 
           {/* SIDE PANEL */}
           <div className="bg-surface border border-border rounded-xl p-5 max-h-[640px] overflow-y-auto">
-            {!selectedProvince ? (
+            {unit !== "unistore" ? (
+              <div className="text-center py-20 text-text-muted text-sm">
+                <div className="text-3xl mb-3">{unit === "unidrop" ? "📦" : "↩️"}</div>
+                <div className="font-semibold text-text mb-1">
+                  {unit === "unidrop" ? "Dropshippers Unidrop" : "Devoluciones Unidev"}
+                </div>
+                <div className="px-4">
+                  El drill por provincia está disponible solo para Unistore por
+                  ahora. El ranking de la izquierda muestra el comportamiento
+                  nacional completo del período seleccionado.
+                </div>
+              </div>
+            ) : !selectedProvince ? (
               <div className="text-center py-20 text-text-muted text-sm">
                 Click en una provincia<br />para ver el detalle
               </div>
@@ -299,218 +316,10 @@ export default function MapaPage() {
           </div>
         </div>
 
-        {/* TABLE BELOW: ranking */}
-        {data && (
-          <div className="mt-6">
-            <CategoryTable
-              caption="Ranking por provincia"
-              subtitle="Click para abrir el detalle"
-              data={data.by_province.map((p) => ({
-                category: p.province,
-                value: p[metric] as number,
-                extra: { orders: p.orders, customers: p.customers, revenue: p.revenue },
-              }))}
-              formatter={metric === "revenue" ? "currency" : "number"}
-              extraColumns={[
-                { key: "orders", label: "Ord", format: "number" },
-                { key: "customers", label: "Clientes", format: "number" },
-                ...(metric !== "revenue" ? [{ key: "revenue", label: "Revenue", format: "currency" as const }] : []),
-              ]}
-              onRowClick={(r) => setSelectedProvince(r.category)}
-            />
-          </div>
-        )}
+        {/* Nota: el ranking principal vive en el bloque grid de arriba.
+            La tabla duplicada que habia aca antes fue removida cuando se
+            quito el mapa SVG roto. */}
       </div>
     </>
-  );
-}
-
-// ============================================================
-// ArgentinaMap: SVG renderizado manualmente con d3-geo + fitSize.
-// Garantiza que el contorno completo del pais llene el canvas, sin
-// depender de scale/center magicos de react-simple-maps que estaban
-// dando problemas en Next 16 / Turbopack.
-// ============================================================
-type Hover = { name: string; value: number; x: number; y: number } | null;
-
-function ArgentinaMap({
-  geoData,
-  valueByProvince,
-  maxValue,
-  selectedProvince,
-  onSelect,
-  hoverProvince,
-  onHover,
-  metric,
-  fmtMetric,
-}: {
-  geoData: GeoCollection;
-  valueByProvince: Map<string, number>;
-  maxValue: number;
-  selectedProvince: string | null;
-  onSelect: (n: string) => void;
-  hoverProvince: Hover;
-  onHover: (h: Hover) => void;
-  metric: Metric;
-  fmtMetric: (v: number) => string;
-}) {
-  // Canvas. Argentina es alta (~33 grados de latitud) y angosta (~20 lon).
-  const W = 600;
-  const H = 820;
-
-  // Proyeccion calculada de forma EXPLICITA - no usamos fitSize() porque
-  // en build de produccion de Next 16 / Turbopack el resultado colapsaba a
-  // un solo rectangulo. Calculamos bounds proyectados con scale=1 y
-  // derivamos scale + translate manualmente.
-  const { pathGen, fc } = useMemo(() => {
-    // Filtramos features con geometria valida para evitar NaN en bounds
-    const fc = {
-      type: "FeatureCollection" as const,
-      features: geoData.features.filter((f) => !!f.geometry),
-    };
-    const baseProj = geoMercator()
-      .scale(1)
-      .translate([0, 0])
-      .center([0, 0]);
-    const basePath = geoPath(baseProj);
-    const [[x0, y0], [x1, y1]] = basePath.bounds(fc as any);
-    const dx = x1 - x0;
-    const dy = y1 - y0;
-    // 0.96 deja un pequeno margen interno
-    const scale = (0.96 * Math.min(W / dx, H / dy)) || 1;
-    const tx = (W - scale * (x1 + x0)) / 2;
-    const ty = (H - scale * (y1 + y0)) / 2;
-    const proj = geoMercator().scale(scale).translate([tx, ty]).center([0, 0]);
-    const path = geoPath(proj);
-    return { pathGen: path, fc };
-  }, [geoData]);
-
-  return (
-    <div
-      className="relative rounded-lg overflow-hidden border border-border"
-      style={{
-        background: "linear-gradient(180deg, #f0f7ff 0%, #d8e8f5 100%)",
-      }}
-      onMouseLeave={() => onHover(null)}
-    >
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{
-          width: "100%",
-          height: "auto",
-          maxHeight: "calc(100vh - 220px)",
-          display: "block",
-        }}
-      >
-        {/* Provincias */}
-        <g>
-          {fc.features.map((f, i) => {
-            const name = f.properties?.NAME_1 ?? "";
-            const value = valueByProvince.get(name) ?? 0;
-            const isSelected = selectedProvince === name;
-            const isHover = hoverProvince?.name === name;
-            const d = pathGen(f as any);
-            if (!d) return null;
-            const fill = isHover
-              ? "#a259ff"
-              : isSelected
-                ? "#5d2d8e"
-                : colorScale(value, maxValue);
-            const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
-            return (
-              <path
-                key={`prov-${i}`}
-                d={d}
-                fill={fill}
-                stroke={stroke}
-                strokeWidth={isSelected ? 1.8 : 0.6}
-                strokeLinejoin="round"
-                style={{ cursor: "pointer", transition: "fill 150ms ease" }}
-                onClick={() => onSelect(name)}
-                onMouseEnter={(e) =>
-                  onHover({ name, value, x: e.clientX, y: e.clientY })
-                }
-                onMouseMove={(e) =>
-                  onHover({ name, value, x: e.clientX, y: e.clientY })
-                }
-              />
-            );
-          })}
-        </g>
-
-        {/* Labels: solo provincias grandes */}
-        <g pointerEvents="none">
-          {fc.features.map((f, i) => {
-            const name = f.properties?.NAME_1 ?? "";
-            const value = valueByProvince.get(name) ?? 0;
-            const bounds = pathGen.bounds(f as any);
-            const w = bounds[1][0] - bounds[0][0];
-            const h = bounds[1][1] - bounds[0][1];
-            if (!Number.isFinite(w) || !Number.isFinite(h) || w < 32 || h < 32) return null;
-            const c = pathGen.centroid(f as any);
-            if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return null;
-            const isDark = value > 0 && value / Math.max(maxValue, 1) > 0.4;
-            const fontSize = Math.min(11, Math.max(8, Math.min(w, h) / 6));
-            return (
-              <text
-                key={`lbl-${i}`}
-                x={c[0]}
-                y={c[1]}
-                textAnchor="middle"
-                style={{
-                  fontFamily: "Inter, system-ui, sans-serif",
-                  fontSize,
-                  fontWeight: 700,
-                  fill: isDark ? "#fff" : "#1f1235",
-                  paintOrder: "stroke",
-                  stroke: isDark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.85)",
-                  strokeWidth: 2.4,
-                  strokeLinejoin: "round",
-                }}
-              >
-                {name}
-              </text>
-            );
-          })}
-        </g>
-      </svg>
-
-      {/* Tooltip flotante */}
-      {hoverProvince && (
-        <div
-          className="fixed z-50 pointer-events-none bg-zinc-900/95 text-white px-3 py-2 rounded-lg shadow-xl text-xs"
-          style={{
-            left: hoverProvince.x + 12,
-            top: hoverProvince.y + 12,
-            maxWidth: 240,
-          }}
-        >
-          <div className="font-bold text-sm">{hoverProvince.name}</div>
-          <div className="text-[10px] uppercase tracking-wider opacity-70 mt-0.5">{metric}</div>
-          <div className="font-bold text-emerald-400">{fmtMetric(hoverProvince.value)}</div>
-          <div className="text-[10px] opacity-60 mt-1">Click para abrir detalle</div>
-        </div>
-      )}
-
-      {/* Legend */}
-      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] shadow-sm">
-        <div className="font-semibold mb-1 text-text-muted uppercase tracking-wider">{metric}</div>
-        <div className="flex items-center gap-2">
-          <span className="text-text-muted">0</span>
-          <div
-            className="w-32 h-2 rounded-full"
-            style={{ background: `linear-gradient(to right, ${SCALE_COLORS[0]}, ${SCALE_COLORS[2]}, ${SCALE_COLORS[4]})` }}
-          />
-          <span className="text-text font-semibold">{maxValue ? fmtMetric(maxValue) : "—"}</span>
-        </div>
-      </div>
-
-      {!selectedProvince && (
-        <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] text-text-muted shadow-sm">
-          Click en una provincia para ver el detalle
-        </div>
-      )}
-    </div>
   );
 }

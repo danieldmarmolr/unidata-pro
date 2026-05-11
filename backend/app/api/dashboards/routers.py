@@ -217,11 +217,15 @@ def get_geo(
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
+    unit: Annotated[Literal["unistore", "unidrop", "unidev"], Query()] = "unistore",
 ) -> dict:
-    key = f"geo:{period}:{from_iso}:{to_iso}"
+    """Distribucion geografica (ranking por provincia) por unidad de negocio.
+    unistore = ventas TN del retail. unidrop = ventas dropshippers TN.
+    unidev = casos de devolucion abiertos."""
+    key = f"geo:{period}:{from_iso}:{to_iso}:{unit}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return geo_svc.geo_overview(period, from_iso=from_iso, to_iso=to_iso)
+        return geo_svc.geo_overview(period, from_iso=from_iso, to_iso=to_iso, unit=unit)
     return _b()
 
 
