@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Crown, AlertTriangle, Users, Truck, Calendar, Package, ShoppingBag, RotateCcw,
-  FileSpreadsheet, FileText, Download, Filter,
+  FileSpreadsheet, FileText, Download, Filter, Eye,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { DrillDownModal } from "@/components/drilldown-modal";
 import { api, getToken } from "@/lib/api";
 
 type ExportItem = {
@@ -51,6 +52,7 @@ const TEAM_COLOR: Record<string, { bg: string; border: string; text: string }> =
 
 export default function ExportsPage() {
   const [team, setTeam] = useState<string>("all");
+  const [preview, setPreview] = useState<{ endpoint: string; title: string; subtitle: string; filename: string } | null>(null);
 
   const { data, isLoading } = useQuery<Catalog>({
     queryKey: ["exports-catalog"],
@@ -165,10 +167,17 @@ export default function ExportsPage() {
             {filtered.map((item) => {
               const Icon = ICON_MAP[item.icon] ?? FileSpreadsheet;
               const meta = TEAM_COLOR[item.team] ?? { bg: "from-zinc-50 to-zinc-100", border: "border-zinc-300", text: "text-zinc-700" };
+              const openPreview = () => setPreview({
+                endpoint: `${item.endpoint}?format=json`,
+                title: `Preview · ${item.label}`,
+                subtitle: `${item.description} · Excel/CSV exportable abajo`,
+                filename: item.id,
+              });
               return (
                 <div
                   key={item.id}
-                  className={`bg-gradient-to-br ${meta.bg} border-2 ${meta.border} rounded-xl p-5 flex flex-col`}
+                  className={`bg-gradient-to-br ${meta.bg} border-2 ${meta.border} rounded-xl p-5 flex flex-col hover:shadow-lg hover:-translate-y-0.5 transition cursor-pointer group`}
+                  onClick={openPreview}
                 >
                   <div className="flex items-start gap-3 mb-3">
                     <div className={`w-11 h-11 rounded-xl bg-white border ${meta.border} flex items-center justify-center shadow-sm ${meta.text}`}>
@@ -178,6 +187,7 @@ export default function ExportsPage() {
                       <div className={`text-xs uppercase tracking-wider font-bold ${meta.text}`}>{item.team}</div>
                       <h3 className="text-base font-bold text-text leading-tight mt-0.5">{item.label}</h3>
                     </div>
+                    <Eye size={14} className="text-text-muted opacity-0 group-hover:opacity-100 transition shrink-0 mt-1" />
                   </div>
 
                   <p className="text-xs text-text-muted mb-3 flex-1">{item.description}</p>
@@ -192,14 +202,22 @@ export default function ExportsPage() {
                   {/* Botones */}
                   <div className="flex gap-2 mt-auto pt-2 border-t border-white/60">
                     <button
-                      onClick={() => downloadExport(item, "xlsx")}
+                      onClick={(e) => { e.stopPropagation(); openPreview(); }}
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border-2 border-primary/30 bg-white/80 text-primary text-xs font-semibold hover:bg-primary/10 transition"
+                      title="Ver preview antes de descargar"
+                    >
+                      <Eye size={13} />
+                      Preview
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); downloadExport(item, "xlsx"); }}
                       className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-xs font-semibold shadow-sm hover:shadow-md transition"
                     >
                       <FileSpreadsheet size={13} />
                       Excel
                     </button>
                     <button
-                      onClick={() => downloadExport(item, "csv")}
+                      onClick={(e) => { e.stopPropagation(); downloadExport(item, "csv"); }}
                       className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-border bg-white/80 text-text text-xs font-semibold hover:border-primary hover:text-primary transition"
                       title="Descargar CSV"
                     >
@@ -221,6 +239,17 @@ export default function ExportsPage() {
           <a href="/dashboard/sql" className="text-primary hover:underline">SQL libre</a> o lo agregamos al catálogo.
         </div>
       </div>
+
+      {/* Preview modal: muestra primeras filas del dataset antes de descargar */}
+      {preview && (
+        <DrillDownModal
+          title={preview.title}
+          subtitle={preview.subtitle}
+          endpoint={preview.endpoint}
+          filename={preview.filename}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </>
   );
 }

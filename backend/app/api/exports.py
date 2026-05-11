@@ -29,7 +29,7 @@ from app.services._utils import q
 router = APIRouter(prefix="/api/exports", tags=["exports"])
 
 
-_Format = Literal["xlsx", "csv"]
+_Format = Literal["xlsx", "csv", "json"]
 
 
 def _respond(
@@ -38,8 +38,25 @@ def _respond(
     filename_base: str,
     format: str = "xlsx",
     title: str | None = None,
-) -> Response:
-    """Empaqueta como xlsx o csv y devuelve Response."""
+):
+    """Empaqueta como xlsx, csv o json y devuelve la Response apropiada.
+    format=json devuelve {columns, rows, row_count} para preview en
+    DrillDownModal antes de descargar."""
+    if format == "json":
+        # Preview: devolver JSON serializable (convertir dates a iso str)
+        out_rows = []
+        for r in rows:
+            out_rows.append([
+                v.isoformat() if hasattr(v, "isoformat") else v
+                for v in r
+            ])
+        return {
+            "columns": columns,
+            "rows": out_rows,
+            "row_count": len(out_rows),
+            "title": title or filename_base,
+            "filename": filename_base,
+        }
     if format == "csv":
         content = export_svc.to_csv_string(columns, rows)
         return Response(

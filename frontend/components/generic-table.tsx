@@ -258,11 +258,11 @@ export function CategoryTable({
                     (interactive ? "cursor-pointer" : "")
                   }
                 >
-                  <td className="pl-2 py-2 text-text-muted text-xs font-mono">{i + 1}</td>
+                  <td className="pl-2 py-2 text-text-muted text-xs font-mono tabular-nums">{i + 1}</td>
                   <td className="py-2 pr-3 font-medium text-text" title={r.category}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5">
                       {sku && (
-                        <div className="w-9 h-9 rounded-md bg-soft border border-border flex items-center justify-center overflow-hidden flex-shrink-0">
+                        <div className="w-10 h-10 rounded-md bg-white border border-border flex items-center justify-center overflow-hidden flex-shrink-0 shadow-sm">
                           {img ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img
@@ -273,18 +273,19 @@ export function CategoryTable({
                               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                             />
                           ) : (
-                            <ImageOff className="w-3 h-3 text-text-muted/40" />
+                            <ImageOff className="w-3.5 h-3.5 text-text-muted/40" />
                           )}
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate max-w-[280px]">{r.category}</div>
+                        <div className="truncate max-w-[320px] leading-tight">{r.category}</div>
                         {sku && (
-                          <div className="text-[10px] text-text-muted/70 mt-0.5 flex items-center gap-1.5 truncate">
+                          <div className="text-[10px] text-text-muted/70 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono">{sku}</span>
                             {ean && (
                               <span
                                 className="font-mono inline-flex items-center gap-0.5 px-1 rounded bg-amber-50 text-amber-800 border border-amber-200/60"
-                                title="EAN - Codigo de barras oficial del producto"
+                                title="EAN - Código de barras oficial del producto"
                               >
                                 <span className="text-[8px] font-bold">EAN</span> {ean}
                               </span>
@@ -296,10 +297,12 @@ export function CategoryTable({
                   </td>
                   {extraColumns.map((c) => {
                     const raw = r.extra?.[c.key];
+                    // Cero o vacio -> em dash más limpio
+                    const isZeroish = raw === null || raw === undefined || raw === "" || raw === 0;
                     return (
                       <td key={c.key} className="py-2 pr-3 text-right tabular-nums text-text-muted text-xs">
-                        {raw === null || raw === undefined
-                          ? "—"
+                        {isZeroish
+                          ? <span className="text-text-muted/30">—</span>
                           : typeof raw === "number"
                             ? fmt(raw, c.format)
                             : String(raw)}
