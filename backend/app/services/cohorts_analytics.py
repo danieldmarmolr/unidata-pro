@@ -251,7 +251,11 @@ def cohorts_overview(
     return {
         "period": period,
         "unit": "unistore",
-        "window": {"days": days},
+        "window": {
+            "days": days,
+            "from_ts": from_ts.isoformat() if hasattr(from_ts, "isoformat") else str(from_ts),
+            "to_ts": to_ts.isoformat() if hasattr(to_ts, "isoformat") else str(to_ts),
+        },
         "totals": {
             "customers": total_customers,
             "ordenes": total_ordenes,
@@ -267,6 +271,7 @@ def cohorts_overview(
             k: sorted(v, key=lambda x: -x.get("facturacion_total", 0))
             for k, v in customers_by_state.items()
         },
+        "_version": "cohortes-v3-from_ts-to_ts",
         "generated_at": now_ar().isoformat(),
     }
 
