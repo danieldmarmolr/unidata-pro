@@ -29,7 +29,17 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
     drop = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
     win_params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"], "days": win["days"]}
-    period_label = period.upper() if period in ("today", "yesterday") else period
+    # Label legible para mostrar en los cards: HOY / AYER / 7d / 30d / 90d / 12m / personalizado
+    _label_map = {
+        "today": "HOY",
+        "yesterday": "AYER",
+        "7d": "7 dias",
+        "30d": "30 dias",
+        "90d": "90 dias",
+        "12m": "12 meses",
+        "custom": "rango",
+    }
+    period_label = _label_map.get(period, period)
 
     # ---------- Cards ----------
     cards: list[dict] = []
@@ -320,7 +330,7 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
           AND "paymentStatus" = 'paid'
     """, win_params) or 0
     cards.append({
-        "label": "AOV Unistore (mes)",
+        "label": f"AOV Unistore ({period_label})",
         "value": round(float(aov_uni), 0),
         "prefix": "$ ",
         "hint": "Ticket promedio TN paid",
@@ -334,10 +344,10 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
     """, win_params) or 0
     cards.append({
-        "label": "% cancelaciones (mes)",
+        "label": f"% cancelaciones ({period_label})",
         "value": round(float(cancel_pct), 1),
         "suffix": "%",
-        "hint": "Sobre todas las orders TN del mes",
+        "hint": f"Sobre todas las orders TN en {period_label}",
     })
 
     # MRR Unidrop real: cobros confirmados de PaymentTransactionSubscription en periodo.
@@ -354,10 +364,10 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
     """, win_params) or 0
     cards.append({
-        "label": "MRR Unidrop (mes)",
+        "label": f"MRR Unidrop ({period_label})",
         "value": round(float(mrr_drop), 0),
         "prefix": "$ ",
-        "hint": f"{int(subs_count_period)} cobros de suscripcion MELI confirmados",
+        "hint": f"{int(subs_count_period)} cobros de suscripcion MELI en {period_label}",
     })
 
     # Devoluciones mes (Unidev)
@@ -379,7 +389,7 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         log.warning("dev metrics fail: %s", e)
 
     cards.append({
-        "label": "Devoluciones (mes)",
+        "label": f"Devoluciones ({period_label})",
         "value": dev_count,
         "hint": f"$ {dev_amount:,.0f} en monto" if dev_amount else "",
     })
@@ -417,8 +427,8 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "label": "Unistore",
         "color": "#7a3eae",
         "metrics": [
-            {"label": "GMV mes", "value": round(gmv_uni, 0), "prefix": "$ ", "delta": round(delta_gmv, 1) if delta_gmv is not None else None},
-            {"label": "Orders mes", "value": int(orders_uni), "delta": round((int(orders_uni)-int(uni_orders_prev))/int(uni_orders_prev)*100,1) if int(uni_orders_prev)>0 else None},
+            {"label": f"GMV {period_label}", "value": round(gmv_uni, 0), "prefix": "$ ", "delta": round(delta_gmv, 1) if delta_gmv is not None else None},
+            {"label": f"Orders {period_label}", "value": int(orders_uni), "delta": round((int(orders_uni)-int(uni_orders_prev))/int(uni_orders_prev)*100,1) if int(uni_orders_prev)>0 else None},
             {"label": "AOV", "value": round(float(aov_uni), 0), "prefix": "$ "},
             {"label": "% cancel", "value": round(float(cancel_pct), 1), "suffix": "%"},
         ],
@@ -438,11 +448,11 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "label": "Unidrop",
         "color": "#a259ff",
         "metrics": [
-            {"label": "GMV TN (dropshippers)", "value": round(float(gmv_drop_tn), 0), "prefix": "$ "},
-            {"label": "GMV ML (dropshippers)", "value": round(float(gmv_drop_ml), 0), "prefix": "$ "},
-            {"label": "MRR suscripciones", "value": round(float(mrr_drop), 0), "prefix": "$ "},
-            {"label": "Suscripciones activas", "value": int(subs_drop)},
-            {"label": "Usuarios nuevos mes", "value": int(new_users_drop)},
+            {"label": f"GMV TN dropshippers ({period_label})", "value": round(float(gmv_drop_tn), 0), "prefix": "$ "},
+            {"label": f"GMV ML dropshippers ({period_label})", "value": round(float(gmv_drop_ml), 0), "prefix": "$ "},
+            {"label": f"Suscripciones MRR ({period_label})", "value": round(float(mrr_drop), 0), "prefix": "$ "},
+            {"label": "Suscripciones activas (hoy)", "value": int(subs_drop)},
+            {"label": f"Usuarios nuevos ({period_label})", "value": int(new_users_drop)},
             {"label": "Vencen <15d", "value": int(expiring_soon)},
         ],
     })
@@ -468,10 +478,10 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "label": "Unidev (Devoluciones)",
         "color": "#ec4899",
         "metrics": [
-            {"label": "Devoluciones mes", "value": dev_count},
-            {"label": "Monto mes", "value": round(dev_amount, 0), "prefix": "$ "},
-            {"label": "Abiertas", "value": dev_open},
-            {"label": "Resueltas mes", "value": dev_resolved},
+            {"label": f"Devoluciones ({period_label})", "value": dev_count},
+            {"label": f"Monto ({period_label})", "value": round(dev_amount, 0), "prefix": "$ "},
+            {"label": "Abiertas (hoy)", "value": dev_open},
+            {"label": f"Resueltas ({period_label})", "value": dev_resolved},
         ],
     })
 

@@ -197,6 +197,15 @@ export default function ExecutiveDashboardPage() {
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
   const isToday = period === "today";
+  const periodLabel: string = ({
+    today: "HOY",
+    yesterday: "AYER",
+    "7d": "7 dias",
+    "30d": "30 dias",
+    "90d": "90 dias",
+    "12m": "12 meses",
+    custom: customFrom && customTo ? `${customFrom} → ${customTo}` : "rango",
+  } as Record<string, string>)[period] || period;
 
   const { data, isLoading, error, refetch, isFetching } = useQuery<ExtendedExec>({
     queryKey: ["dashboards", "executive", period, customFrom, customTo],
@@ -247,8 +256,8 @@ export default function ExecutiveDashboardPage() {
   return (
     <>
       <Topbar
-        title="Dashboard gerencial"
-        subtitle="Vista consolidada del grupo Unistore - Unistore + Unidrop + Unidev"
+        title="Gerencia"
+        subtitle="Vista consolidada del grupo Unistore · Unistore + Unidrop + Unidev · todos los filtros del topbar afectan estos datos"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <div className="flex items-center justify-end mb-4">
@@ -287,7 +296,7 @@ export default function ExecutiveDashboardPage() {
         {data?.unit_health && data.unit_health.length > 0 && (
           <div className="mb-6">
             <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3">
-              Salud por unidad de negocio
+              Salud por unidad de negocio · {periodLabel}
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               {data.unit_health.map((u) => (
@@ -315,7 +324,7 @@ export default function ExecutiveDashboardPage() {
               <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
             ) : (
               <DonutChart
-                caption="Mix de revenue (mes en curso)"
+                caption={`Mix de revenue · ${periodLabel}`}
                 data={(data.revenue_mix ?? []).map((r) => ({ name: r.category, value: r.value }))}
                 height={300}
               />
