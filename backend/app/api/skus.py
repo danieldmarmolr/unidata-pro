@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth.security import current_user
@@ -62,3 +62,23 @@ def lookup_by_ean(
     if not result:
         raise HTTPException(404, f"No se encontro SKU para el EAN: {body.ean}")
     return result
+
+
+@router.get("/{unit}/search")
+def search_skus(
+    unit: str,
+    user: Annotated[dict, Depends(current_user)],
+    q: Annotated[str, Query(min_length=2, max_length=80)] = "",
+    limit: Annotated[int, Query(ge=1, le=30)] = 12,
+) -> list[dict]:
+    """Busqueda parcial / autocomplete de SKUs por texto.
+
+    Matchea SKU (parcial) o nombre de producto. Devuelve lista lista para
+    mostrar en un dropdown con thumbnail + nombre + SKU + EAN.
+
+    Solo Unistore por ahora (digip + tienda_nube). Unidrop / Unidev se
+    pueden agregar cuando lo necesitemos.
+    """
+    if unit != "unistore":
+        raise HTTPException(404, f"Search no disponible para unidad: {unit}")
+    return sku_enrichment.search_skus_partial(q, limit=limit)

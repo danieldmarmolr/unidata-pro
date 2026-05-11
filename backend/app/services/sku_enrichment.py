@@ -192,3 +192,80 @@ def lookup_by_ean(ean: str) -> dict | None:
         "is_service": enriched.get("is_service", False),
         "kind": enriched.get("kind", "product"),
     }
+
+
+def search_skus_partial(query: str, limit: int = 12) -> list[dict]:
+    """Busqueda parcial de SKUs por texto (autocomplete).
+
+    Matchea contra:
+      - tienda_nube.ProductVariant.sku (parcial ILIKE)
+      - tienda_nube.Product.name (parcial ILIKE)
+      - digip.ArticuloUnidadMedidaCodigo.Codigo (EAN parcial, util si tipean
+        parte del codigo de barra)
+
+    Devuelve lista de {sku, name, image_url, ean} listos para mostrar en un
+    dropdown estilo autocomplete.
+    """
+    qstr = (query or "").strip()
+    if not qstr or len(qstr) < 2:
+        return []
+
+    try:
+        eng = get_engine("unistore")
+        with eng.connect() as c:
+            rows = c.execute(text("""
+                WITH matched AS (
+                    SELECT
+                        pv.sku,
+                        p.id AS product_id,
+                        p.name AS product_name,
+                        ROW_NUMBER() OVER (PARTITION BY pv.sku
+                                           ORDER BY pv."updatedAt" DESC NULLS LAST, pv.id DESC) AS rn,
+                        -- Score: prefiero matches por SKU literal sobre name
+                        CASE
+                            WHEN pv.sku ILIKE :exact THEN 100
+                            WHEN pv.sku ILIKE :start THEN 90
+                            WHEN pv.sku ILIKE :pat THEN 80
+                            WHEN p.name ILIKE :pat THEN 50
+                            ELSE 10
+                        END AS score
+                    FROM tienda_nube."ProductVariant" pv
+                    JOIN tienda_nube."Product" p ON p.id = pv."productId"
+                    WHERE pv.sku ILIKE :pat OR p.name ILIKE :pat
+                ),
+                deduped AS (
+                    SELECT sku, product_id, product_name, MAX(score) AS score
+                    FROM matched WHERE rn = 1
+                    GROUP BY sku, product_id, product_name
+                ),
+                first_image AS (
+                    SELECT DISTINCT ON (pi."productId")
+                        pi."productId", pi.src
+                    FROM tienda_nube."ProductImage" pi
+                    ORDER BY pi."productId", pi.position ASC NULLS LAST, pi.id ASC
+                )
+                SELECT d.sku, d.product_name, fi.src AS image_url, d.score
+                FROM deduped d
+                LEFT JOIN first_image fi ON fi."productId" = d.product_id
+                ORDER BY d.score DESC, d.sku ASC
+                LIMIT :lim
+            """), {
+                "pat": f"%{qstr}%",
+                "exact": qstr,
+                "start": f"{qstr}%",
+                "lim": int(limit),
+            }).mappings().all()
+    except Exception as e:
+        logger.warning("search_skus_partial failed: %s", e)
+        return []
+
+    # Enriquecemos con EAN desde digip para los SKUs encontrados
+    skus = [r["sku"] for r in rows]
+    enriched_map = enrich_skus_unistore(skus) if skus else {}
+
+    return [{
+        "sku": r["sku"],
+        "name": r["product_name"] or "",
+        "image_url": r["image_url"],
+        "ean": enriched_map.get(r["sku"], {}).get("ean"),
+    } for r in rows]
