@@ -76,9 +76,9 @@ def today_story() -> dict:
             if delta: body += f", {delta}."
             else: body += "."
             blurbs.append({
-                "type": "gmv",
+                "type": "gmv_unistore",
                 "icon": "💰",
-                "title": "Pulso del dia",
+                "title": "Pulso Unistore",
                 "body": body,
                 "accent": "#7a3eae",
                 "link": {
@@ -90,6 +90,46 @@ def today_story() -> dict:
             })
     except Exception as e:
         log.warning("story gmv fail: %s", e)
+
+    # ============================================================
+    # 1b) GMV Unidrop del dia (TN + MELI sumados sobre tablas Unidrop)
+    # ============================================================
+    try:
+        drop_today = float(scalar(drop, """
+            SELECT
+              COALESCE((SELECT SUM(total) FROM public.tienda_nube_orders
+                        WHERE created_at::date = CURRENT_DATE
+                          AND payment_status = 'paid'), 0)
+            + COALESCE((SELECT SUM("totalAmount") FROM mercado_libre_dev."OrderMercadoLibre"
+                        WHERE "dateCreated"::date = CURRENT_DATE
+                          AND status IN ('paid','confirmed','shipped','delivered')), 0)
+        """) or 0)
+        drop_yest = float(scalar(drop, """
+            SELECT
+              COALESCE((SELECT SUM(total) FROM public.tienda_nube_orders
+                        WHERE created_at::date = CURRENT_DATE - 1
+                          AND payment_status = 'paid'), 0)
+            + COALESCE((SELECT SUM("totalAmount") FROM mercado_libre_dev."OrderMercadoLibre"
+                        WHERE "dateCreated"::date = CURRENT_DATE - 1
+                          AND status IN ('paid','confirmed','shipped','delivered')), 0)
+        """) or 0)
+        if drop_today > 0:
+            delta = _delta_phrase(drop_today, drop_yest)
+            body = f"Unidrop lleva {_fmt_money(drop_today)} en ventas dropshippers hoy"
+            body += f", {delta}." if delta else "."
+            blurbs.append({
+                "type": "gmv_unidrop",
+                "icon": "📦",
+                "title": "Pulso Unidrop",
+                "body": body,
+                "accent": "#0ea5e9",
+                "link": {
+                    "kind": "navigate",
+                    "href": "/dashboard/ventas?unit=unidrop",
+                },
+            })
+    except Exception as e:
+        log.warning("story gmv unidrop fail: %s", e)
 
     # ============================================================
     # 2) SKU lider por canal — uno por canal: TN/MELI Unistore, TN/MELI Unidrop
@@ -364,6 +404,133 @@ def today_story() -> dict:
             })
     except Exception as e:
         log.warning("story dev fail: %s", e)
+
+    # ============================================================
+    # 8) Stock critico Unistore (digip) - SKUs con stock < 5 unidades
+    # ============================================================
+    try:
+        low_stock = int(scalar(uni, """
+            SELECT COUNT(*)::int FROM (
+              SELECT sd."articuloCodigo"
+              FROM digip."StockDetalle" sd
+              GROUP BY sd."articuloCodigo"
+              HAVING SUM(sd.unidades) > 0 AND SUM(sd.unidades) <= 5
+            ) x
+        """) or 0)
+        if low_stock > 0:
+            blurbs.append({
+                "type": "stock_alert",
+                "icon": "⚠️",
+                "title": "Stock critico Unistore",
+                "body": f"Hay {low_stock} {'SKU' if low_stock == 1 else 'SKUs'} con stock bajo (1-5 unidades) en deposito Digip. Revisa reposicion.",
+                "accent": "#dc2626",
+                "link": {
+                    "kind": "navigate",
+                    "href": "/dashboard/stock-heatmap",
+                },
+            })
+    except Exception as e:
+        log.warning("story stock fail: %s", e)
+
+    # ============================================================
+    # 9) Logistica - ordenes pagas y sin despacho hace mas de 5 dias
+    # ============================================================
+    try:
+        stuck = int(scalar(uni, """
+            SELECT COUNT(*)::int
+            FROM tienda_nube."Order" o
+            WHERE o."paymentStatus" = 'paid'
+              AND o.status NOT IN ('cancelled','closed')
+              AND o."createdAt" < NOW() - INTERVAL '5 days'
+              AND NOT EXISTS (
+                SELECT 1 FROM digip."DespachoPedido" dp
+                JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                WHERE pd."orderId" = o.id
+              )
+        """) or 0)
+        if stuck > 0:
+            blurbs.append({
+                "type": "stuck_orders",
+                "icon": "🚚",
+                "title": "Logistica - ordenes atascadas",
+                "body": f"{stuck} {'orden paga' if stuck == 1 else 'ordenes pagas'} sin despacho hace +5 dias. Revisa preparacion en Digip.",
+                "accent": "#f97316",
+                "link": {
+                    "kind": "navigate",
+                    "href": "/dashboard/logistica",
+                },
+            })
+    except Exception as e:
+        log.warning("story stuck fail: %s", e)
+
+    # ============================================================
+    # 10) Facturacion Contabilium del dia (Unistore + Unidrop)
+    # ============================================================
+    try:
+        fact_unistore = float(scalar(uni, """
+            SELECT COALESCE(SUM("Total"),0)::float
+            FROM contabilium."SalesOrder"
+            WHERE "FechaEmision"::date = CURRENT_DATE
+        """) or 0)
+        fact_unidrop = float(scalar(drop, """
+            SELECT COALESCE(SUM(total),0)::float
+            FROM contabillium_dev."ContabilliumInvoice"
+            WHERE "fechaEmision"::date = CURRENT_DATE
+        """) or 0)
+        fact_total = fact_unistore + fact_unidrop
+        if fact_total > 0:
+            parts = []
+            if fact_unistore > 0: parts.append(f"Unistore {_fmt_money(fact_unistore)}")
+            if fact_unidrop > 0: parts.append(f"Unidrop {_fmt_money(fact_unidrop)}")
+            blurbs.append({
+                "type": "finanzas_pulse",
+                "icon": "🧾",
+                "title": "Facturacion hoy",
+                "body": f"Contabilium emitio {_fmt_money(fact_total)} en facturas hoy ({' · '.join(parts)}).",
+                "accent": "#16a34a",
+                "link": {
+                    "kind": "navigate",
+                    "href": "/dashboard/finanzas",
+                },
+            })
+    except Exception as e:
+        log.warning("story finanzas fail: %s", e)
+
+    # ============================================================
+    # 11) Dropshippers Unidrop activos hoy (con orden paga TN o MELI)
+    # ============================================================
+    try:
+        active_drops = int(scalar(drop, """
+            SELECT COUNT(DISTINCT u.id)::int
+            FROM public."User" u
+            WHERE EXISTS (
+              SELECT 1 FROM public.tienda_nube_orders o
+              WHERE o.user_id = u.id
+                AND o.created_at::date = CURRENT_DATE
+                AND o.payment_status = 'paid'
+            ) OR EXISTS (
+              SELECT 1 FROM mercado_libre_dev."OrderMercadoLibre" mo
+              JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                ON mla."mlUserId"::text = mo."sellerId"::text
+              WHERE mla."userId" = u.id
+                AND mo."dateCreated"::date = CURRENT_DATE
+                AND mo.status IN ('paid','confirmed','shipped','delivered')
+            )
+        """) or 0)
+        if active_drops > 0:
+            blurbs.append({
+                "type": "drops_active",
+                "icon": "🛒",
+                "title": "Dropshippers activos",
+                "body": f"{active_drops} {'dropshipper vendio' if active_drops == 1 else 'dropshippers vendieron'} hoy en TN o MELI Unidrop.",
+                "accent": "#8b5cf6",
+                "link": {
+                    "kind": "navigate",
+                    "href": "/dashboard/dropshippers",
+                },
+            })
+    except Exception as e:
+        log.warning("story drops active fail: %s", e)
 
     # Si no hay nada (raro), placeholder
     if not blurbs:
