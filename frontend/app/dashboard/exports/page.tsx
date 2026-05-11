@@ -88,7 +88,6 @@ export default function ExportsPage() {
       <Topbar
         title="Centro de Exportaciones"
         subtitle="Datasets pre-armados para cada equipo · Excel y CSV listos para descargar"
-        hidePeriod
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">

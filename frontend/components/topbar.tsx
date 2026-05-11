@@ -192,22 +192,22 @@ export function Topbar({
   const display = user?.name || user?.email?.split("@")[0] || "anonimo";
   return (
     <>
-      <header className="h-14 sm:h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16">
+      <header className="min-h-14 sm:min-h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16 flex-wrap py-2 sm:py-0">
         <div className="min-w-0 flex-1">
           <h1 className="text-base sm:text-lg font-bold text-text leading-none truncate">{title}</h1>
           {subtitle && <div className="text-[10px] sm:text-xs text-text-muted mt-1 truncate">{subtitle}</div>}
         </div>
-        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0 flex-wrap justify-end">
           {!hidePeriod && (
-            <div className="hidden lg:flex items-center gap-1.5 pr-2 mr-1 border-r border-border">
-              <CalendarRange size={13} className="text-text-muted" />
-              <div className="inline-flex bg-soft border border-border rounded-lg p-0.5">
+            <div className="flex items-center gap-1.5 sm:pr-2 sm:mr-1 sm:border-r sm:border-border order-last sm:order-none w-full sm:w-auto">
+              <CalendarRange size={13} className="text-text-muted hidden sm:block" />
+              <div className="inline-flex bg-soft border border-border rounded-lg p-0.5 flex-wrap sm:flex-nowrap w-full sm:w-auto justify-center">
                 {PERIOD_OPTIONS.map((p) => (
                   <button
                     key={p.value}
                     onClick={() => setPeriod(p.value)}
                     className={cn(
-                      "px-2.5 py-1 text-[11px] font-semibold rounded-md transition whitespace-nowrap",
+                      "px-2 sm:px-2.5 py-1 text-[10px] sm:text-[11px] font-semibold rounded-md transition whitespace-nowrap",
                       period === p.value
                         ? "bg-surface text-primary shadow-sm"
                         : "text-text-muted hover:text-primary",

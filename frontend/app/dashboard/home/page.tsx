@@ -175,7 +175,7 @@ export default function HomePage() {
 
   return (
     <>
-      <Topbar title="Inicio" subtitle="Pantalla principal · navegacion rapida segun tu rol" hidePeriod />
+      <Topbar title="Inicio" subtitle="Pantalla principal · navegacion rapida segun tu rol · el filtro de fechas aplica a todas las vistas" />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         {/* Hero + Storytelling */}
         <div className="bg-gradient-to-br from-primary via-accent to-fuchsia-600 text-white rounded-2xl p-8 mb-8 shadow-xl shadow-primary/20 relative overflow-hidden">
