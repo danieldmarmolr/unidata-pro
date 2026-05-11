@@ -15,6 +15,7 @@ import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { OrderDetailModal } from "@/components/order-detail-modal";
+import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
@@ -347,13 +348,12 @@ export default function CustomerSuccessPage() {
  <table className="w-full text-sm">
  <thead>
  <tr className="text-left text-[10px] font-bold uppercase tracking-wider text-text-muted">
- <th className="py-2">Cliente / Orden</th>
- <th className="py-2">Fecha</th>
- <th className="py-2">Razon</th>
- <th className="py-2">Pago</th>
- <th className="py-2 text-center">Staff</th>
- <th className="py-2">Provincia</th>
- <th className="py-2 text-right pr-2">Monto</th>
+ <th className="px-3 py-2 w-8">#</th>
+ <th className="px-3 py-2">Numero / Cliente</th>
+ <th className="px-3 py-2">Fecha</th>
+ <th className="px-3 py-2">Estado del pedido</th>
+ <th className="px-3 py-2 text-right">Total</th>
+ <th className="px-3 py-2 w-10"></th>
  </tr>
  </thead>
  <tbody>
@@ -361,47 +361,74 @@ export default function CustomerSuccessPage() {
  const e = r.extra ?? {};
  const dias = Number(e.dias_hace ?? 0);
  const isStaff = e.by_staff === "si";
+ const id = Number(e.id ?? 0);
+ // Para Unistore (TN orders) usamos el formato canonico ExpandableOrderRow.
+ // Para Unidrop seguimos con render simple porque las cancelaciones MELI/TN
+ // dropshipper no tienen /api/drilldowns/orders/{id}/detail (esa ruta es TN
+ // Unistore).
+ if (unit === "unistore" && id > 0) {
+ const subtitleParts = [r.category];
+ if (e.razon) subtitleParts.push(`Razón: ${e.razon}`);
+ if (e.provincia) subtitleParts.push(String(e.provincia));
+ if (dias) subtitleParts.push(`hace ${dias}d`);
+ const orderRow: OrderRowData = {
+ id,
+ numero: String(e.orden ?? e.id ?? id),
+ fecha: e.fecha ? String(e.fecha) : null,
+ total: Number(r.value || 0),
+ payment: e.payment ? String(e.payment) : null,
+ shipping: e.shipping ? String(e.shipping) : null,
+ status: "cancelled",
+ empaquetada: false,
+ subtitle: subtitleParts.join(" · "),
+ badge: isStaff
+ ? { label: "STAFF", cls: "bg-red-50 text-error border-red-200" }
+ : null,
+ };
+ return (
+ <ExpandableOrderRow
+ key={i}
+ order={orderRow}
+ idx={i + 1}
+ onOpenDetail={(oid) => setDrillOrderId(oid)}
+ cols={6}
+ />
+ );
+ }
+ // Render simple para Unidrop (sin expand)
  const payment = String(e.payment ?? "");
  const payClass =
  payment === "paid" ? "bg-emerald-50 text-emerald-700 border-emerald-200" :
  payment === "pending" ? "bg-amber-50 text-amber-800 border-amber-200" :
- payment === "voided" || payment === "abandoned" ? "bg-zinc-100 text-zinc-700 border-zinc-300" :
- "bg-soft text-text-muted border-border";
+ "bg-zinc-100 text-zinc-700 border-zinc-300";
  return (
- <tr
- key={i}
- className={"border-t border-border hover:bg-soft transition " + (unit === "unistore" ? "cursor-pointer" : "")}
- onClick={unit === "unistore" ? () => {
- const id = e.id;
- if (typeof id === "number") setDrillOrderId(id);
- } : undefined}
- >
- <td className="py-2 pr-3">
- <div className="font-semibold text-text truncate max-w-[260px]" title={r.category}>{r.category}</div>
- <div className="text-[10px] text-text-muted font-mono">#{e.orden ?? e.id}</div>
+ <tr key={i} className="border-t border-border hover:bg-soft transition">
+ <td className="px-3 py-2 text-text-muted text-xs">{i + 1}</td>
+ <td className="px-3 py-2">
+ <div className="font-mono font-semibold text-primary">#{e.orden ?? e.id}</div>
+ <div className="text-[10px] text-text-muted mt-0.5">
+ {r.category}{e.razon ? ` · ${e.razon}` : ""}{e.provincia ? ` · ${e.provincia}` : ""}{dias ? ` · hace ${dias}d` : ""}
+ </div>
  </td>
- <td className="py-2 pr-3 text-xs">
- <div className="text-text">{e.fecha ?? "—"}</div>
- {!!dias && <div className="text-[10px] text-text-muted">hace {dias}d</div>}
- </td>
- <td className="py-2 pr-3 text-xs text-text-muted">{e.razon ?? "—"}</td>
- <td className="py-2 pr-3">
- {payment ? (
+ <td className="px-3 py-2 text-xs text-text-muted">{e.fecha ?? "—"}</td>
+ <td className="px-3 py-2">
+ <div className="flex items-center gap-1.5">
+ <span className="inline-block text-[10px] px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200 font-semibold">Cancelada</span>
+ {payment && (
  <span className={"inline-block text-[10px] px-2 py-0.5 rounded-full border " + payClass}>{payment}</span>
- ) : "—"}
+ )}
+ {isStaff && (
+ <span className="inline-block text-[10px] px-1.5 py-0.5 rounded-full border bg-red-50 text-error border-red-200 font-bold">STAFF</span>
+ )}
+ </div>
  </td>
- <td className="py-2 pr-3 text-center">
- {isStaff ? (
- <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-50 text-error border border-red-200">SI</span>
- ) : <span className="text-text-muted text-xs">—</span>}
- </td>
- <td className="py-2 pr-3 text-xs text-text-muted">{e.provincia ?? "—"}</td>
- <td className="py-2 pr-2 text-right font-bold tabular-nums">$ {Number(r.value).toLocaleString("es-AR")}</td>
+ <td className="px-3 py-2 text-right font-bold tabular-nums">$ {Number(r.value).toLocaleString("es-AR")}</td>
+ <td className="px-3 py-2" />
  </tr>
  );
  })}
  {!data.recent_cancellations.length && (
- <tr><td colSpan={7} className="py-10 text-center text-text-muted">Sin cancelaciones en el periodo.</td></tr>
+ <tr><td colSpan={6} className="py-10 text-center text-text-muted">Sin cancelaciones en el periodo.</td></tr>
  )}
  </tbody>
  </table>
