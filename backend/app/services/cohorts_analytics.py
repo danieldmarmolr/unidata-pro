@@ -238,9 +238,12 @@ def cohorts_overview(
             "ticket_promedio": round(ticket, 2),
         })
 
-    # Totales (solo de los que tienen actividad en el periodo - excluye
-    # perdidos que no aportan a las ventas del periodo)
-    active_states = [s for s in states_arr if s["key"] not in ("perdidos",)]
+    # Totales: SOLO estados con actividad real en el periodo.
+    # Excluimos 'perdidos' Y 'posible_churn' porque son ALERTAS de retencion:
+    # son customers que existieron antes pero NO compraron en la ventana
+    # seleccionada. Si filtras HOY no tiene sentido incluirlos en los KPIs
+    # de 'clientes en periodo / ordenes / facturacion'.
+    active_states = [s for s in states_arr if s["key"] not in ("perdidos", "posible_churn")]
     total_customers = sum(s["customers"] for s in active_states)
     total_ordenes = sum(s["ordenes"] for s in active_states)
     total_facturacion = sum(s["facturacion"] for s in active_states)
@@ -476,7 +479,9 @@ def _cohorts_overview_unidrop(period: str, from_iso: str | None, to_iso: str | N
             "ticket_promedio": round(ticket, 2),
         })
 
-    active = [s for s in states_arr if s["key"] != "perdidos"]
+    # Mismo criterio que Unistore: excluir 'perdidos' Y 'posible_churn'
+    # de los totales del periodo - son alertas, no actividad real.
+    active = [s for s in states_arr if s["key"] not in ("perdidos", "posible_churn")]
     total_customers = sum(s["customers"] for s in active)
     total_ordenes = sum(s["ordenes"] for s in active)
     total_facturacion = sum(s["facturacion"] for s in active)
