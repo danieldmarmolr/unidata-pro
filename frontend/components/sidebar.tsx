@@ -84,6 +84,7 @@ const ITEMS: NavItem[] = [
     children: [
       { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
       { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
+      { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles    },
       { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
     ],
   },

@@ -62,7 +62,7 @@ export default function LogisticaPage() {
   return (
     <>
       <Topbar
-        title={`Logistica · ${unit === "unistore" ? "Unistore" : "Unidrop"}`}
+        title={`Centro Logístico · ${unit === "unistore" ? "Unistore" : "Unidrop"}`}
         subtitle={
           unit === "unistore"
             ? "Funnel Order TN -> Pedido Digip -> Despacho · stock por area · pedidos atascados"

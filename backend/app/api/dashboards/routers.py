@@ -369,6 +369,18 @@ from app.services import envios_meli_unidrop as envios_meli_svc
 from app.services import notifications as notif_svc
 from app.services import customer_vip as vip_svc
 from app.services import product_analytics as prod_analytics_svc
+from app.services import sku_optimizer as sku_opt_svc
+
+
+@router.get("/sku-optimizer")
+def get_sku_optimizer(_: Annotated[str, Depends(current_user)]) -> dict:
+    """SKU Optimizer: combos + reposicion urgente + liquidar + pricing.
+    Recomendaciones accionables cruzando cross-sell + lifecycle + stock."""
+    key = "sku-optimizer-v1"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku_opt_svc.sku_optimizer_overview()
+    return _b()
 
 
 @router.get("/products/abc")
