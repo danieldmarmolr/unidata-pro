@@ -10,7 +10,8 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { geoMercator, geoPath } from "d3-geo";
+import { ComposableMap, Geographies, Geography } from "react-simple-maps";
+import { geoMercator } from "d3-geo";
 import { X } from "lucide-react";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 import { SkuRow } from "@/components/sku-row";
@@ -354,114 +355,73 @@ function ArgentinaMap({
   metric: Metric;
   fmtMetric: (v: number) => string;
 }) {
-  // Tamano de canvas SVG. La proyeccion fitSize() ajusta automaticamente
-  // para que las geometrias completas del geojson llenen exactamente
-  // este viewBox - no hace falta calcular scale ni center manualmente.
+  // Proyeccion: Mercator ajustada al canvas via fitSize sobre el geojson cargado.
+  // Esto garantiza que la silueta completa de Argentina entre exactamente en
+  // el viewBox sin importar la resolucion del cliente.
   const W = 600;
-  const H = 900;
-
-  const { projection, pathGen } = useMemo(() => {
-    const proj = geoMercator().fitSize([W, H], geoData as any);
-    const path = geoPath(proj);
-    return { projection: proj, pathGen: path };
-  }, [geoData]);
+  const H = 820;
+  const projection = useMemo(
+    () => geoMercator().fitSize([W, H], geoData as any),
+    [geoData],
+  );
 
   return (
     <div
       className="relative rounded-lg overflow-hidden border border-border"
       style={{
-        // Fondo celeste suave estilo gubernamental argentino.
         background: "linear-gradient(180deg, #f0f7ff 0%, #d8e8f5 100%)",
       }}
       onMouseLeave={() => onHover(null)}
     >
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="xMidYMid meet"
-        style={{ width: "100%", height: "auto", maxHeight: "calc(100vh - 220px)", display: "block" }}
+      <ComposableMap
+        projection={projection as any}
+        width={W}
+        height={H}
+        style={{
+          width: "100%",
+          height: "auto",
+          maxHeight: "calc(100vh - 220px)",
+          display: "block",
+        }}
       >
-        {/* Halo del pais: outline general grueso azul oscuro */}
-        <g>
-          {geoData.features.map((f, i) => {
-            const d = pathGen(f as any) ?? "";
-            return (
-              <path
-                key={`halo-${i}`}
-                d={d}
-                fill="transparent"
-                stroke="#1e3a5f"
-                strokeWidth={1.6}
-                strokeLinejoin="round"
-                pointerEvents="none"
-              />
-            );
-          })}
-        </g>
-
-        {/* Provincias coloreadas */}
-        <g>
-          {geoData.features.map((f, i) => {
-            const name = f.properties?.NAME_1 ?? "";
-            const value = valueByProvince.get(name) ?? 0;
-            const isSelected = selectedProvince === name;
-            const isHover = hoverProvince?.name === name;
-            const d = pathGen(f as any) ?? "";
-            const fill = isHover ? "#a259ff" : isSelected ? "#5d2d8e" : colorScale(value, maxValue);
-            const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
-            return (
-              <path
-                key={`prov-${i}`}
-                d={d}
-                fill={fill}
-                stroke={stroke}
-                strokeWidth={isSelected ? 1.8 : 0.6}
-                strokeLinejoin="round"
-                style={{ cursor: "pointer", transition: "fill 150ms ease" }}
-                onClick={() => onSelect(name)}
-                onMouseEnter={(e) => onHover({ name, value, x: e.clientX, y: e.clientY })}
-                onMouseMove={(e) => onHover({ name, value, x: e.clientX, y: e.clientY })}
-              />
-            );
-          })}
-        </g>
-
-        {/* Labels de las provincias mas grandes */}
-        <g pointerEvents="none">
-          {geoData.features.map((f, i) => {
-            const name = f.properties?.NAME_1 ?? "";
-            const value = valueByProvince.get(name) ?? 0;
-            // Solo provincias grandes (area visual > umbral) para no saturar
-            const bounds = pathGen.bounds(f as any);
-            const w = bounds[1][0] - bounds[0][0];
-            const h = bounds[1][1] - bounds[0][1];
-            if (w < 30 || h < 30) return null;
-            const centroid = pathGen.centroid(f as any);
-            if (!Number.isFinite(centroid[0]) || !Number.isFinite(centroid[1])) return null;
-            const isDark = value > 0 && (value / Math.max(maxValue, 1)) > 0.4;
-            const fontSize = Math.min(11, Math.max(7, Math.min(w, h) / 6));
-            return (
-              <text
-                key={`lbl-${i}`}
-                x={centroid[0]}
-                y={centroid[1]}
-                textAnchor="middle"
-                style={{
-                  fontFamily: "Inter, system-ui, sans-serif",
-                  fontSize,
-                  fontWeight: 700,
-                  fill: isDark ? "#fff" : "#1f1235",
-                  paintOrder: "stroke",
-                  stroke: isDark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.85)",
-                  strokeWidth: 2.4,
-                  strokeLinejoin: "round",
-                }}
-              >
-                {name}
-              </text>
-            );
-          })}
-        </g>
-      </svg>
+        <Geographies geography={geoData as any}>
+          {({ geographies }: { geographies: any[] }) =>
+            geographies.map((geo: any) => {
+              const name = geo.properties?.NAME_1 ?? "";
+              const value = valueByProvince.get(name) ?? 0;
+              const isSelected = selectedProvince === name;
+              const isHover = hoverProvince?.name === name;
+              const fill = isHover
+                ? "#a259ff"
+                : isSelected
+                  ? "#5d2d8e"
+                  : colorScale(value, maxValue);
+              const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
+              return (
+                <Geography
+                  key={geo.rsmKey || name}
+                  geography={geo}
+                  fill={fill}
+                  stroke={stroke}
+                  strokeWidth={isSelected ? 1.8 : 0.6}
+                  style={{
+                    default: { outline: "none", cursor: "pointer", transition: "fill 150ms ease" },
+                    hover: { outline: "none", cursor: "pointer", fill: "#a259ff" },
+                    pressed: { outline: "none" },
+                  }}
+                  onClick={() => onSelect(name)}
+                  onMouseEnter={(e: React.MouseEvent) =>
+                    onHover({ name, value, x: e.clientX, y: e.clientY })
+                  }
+                  onMouseMove={(e: React.MouseEvent) =>
+                    onHover({ name, value, x: e.clientX, y: e.clientY })
+                  }
+                />
+              );
+            })
+          }
+        </Geographies>
+      </ComposableMap>
 
       {/* Tooltip flotante */}
       {hoverProvince && (
@@ -493,7 +453,6 @@ function ArgentinaMap({
         </div>
       </div>
 
-      {/* Hint inicial - solo si no hay seleccion */}
       {!selectedProvince && (
         <div className="absolute top-3 left-3 bg-white/95 backdrop-blur-sm border border-border rounded-lg px-3 py-2 text-[10px] text-text-muted shadow-sm">
           Click en una provincia para ver el detalle

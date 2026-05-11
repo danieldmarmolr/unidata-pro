@@ -45,6 +45,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
+    # Railway asigna URLs *.up.railway.app por deploy. Permitimos cualquier
+    # subdominio Railway + previews de Vercel + localhost para que un cambio
+    # de URL no rompa el front. ALLOWED_ORIGINS sigue siendo la lista
+    # whitelisted explicita; este regex es el fallback.
+    allow_origin_regex=r"^https?://(localhost(:\d+)?|.*\.up\.railway\.app|.*\.vercel\.app)$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
