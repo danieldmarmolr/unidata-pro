@@ -9,6 +9,7 @@ import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
@@ -222,11 +223,29 @@ function DashboardView({
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
         ) : (
-          <MultiLineChart
-            series={data.trends}
+          <InteractiveMetricChart
+            points={(() => {
+              const map = new Map<string, any>();
+              for (const s of (data.trends || [])) {
+                for (const p of (s.points || [])) {
+                  const existing = map.get(p.date) ?? { date: p.date };
+                  existing[s.label] = p.value;
+                  map.set(p.date, existing);
+                }
+              }
+              return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+            })()}
+            metrics={(data.trends || []).map((s, i) => ({
+              key: s.label,
+              label: s.label,
+              kind: s.label.toLowerCase().includes("cobrad") ? "currency" as const : "number" as const,
+              color: ["#10b981", "#7a3eae", "#ef4444"][i % 3],
+            }))}
+            defaultPrimary={data.trends?.[0]?.label}
+            defaultSecondary={data.trends?.[1]?.label}
             caption="Volumen mensual (12 meses)"
-            subtitle="Cobrado · Intents creados · Cancelados"
-            formatter="number"
+            subtitle="Cobrado · Intents creados · Cancelados · cambiá entre métricas para detectar tasa de cancelación"
+            height={320}
           />
         )}
       </div>

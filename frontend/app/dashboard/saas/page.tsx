@@ -8,6 +8,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { Funnel } from "@/components/funnel";
 import { DonutChart } from "@/components/donut-chart";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
@@ -118,11 +119,29 @@ export default function SaaSPage() {
           {isLoading || !data ? (
             <div className="bg-surface border border-border rounded-xl p-5 h-[360px] animate-pulse" />
           ) : (
-            <MultiLineChart
-              series={data.trends}
+            <InteractiveMetricChart
+              points={(() => {
+                const map = new Map<string, any>();
+                for (const s of (data.trends || [])) {
+                  for (const p of (s.points || [])) {
+                    const existing = map.get(p.date) ?? { date: p.date };
+                    existing[s.label] = p.value;
+                    map.set(p.date, existing);
+                  }
+                }
+                return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+              })()}
+              metrics={(data.trends || []).map((s, i) => ({
+                key: s.label,
+                label: s.label,
+                kind: "number" as const,
+                color: ["#7a3eae", "#10b981", "#ef4444", "#3b82f6", "#f59e0b"][i % 5],
+              }))}
+              defaultPrimary={data.trends?.[0]?.label}
+              defaultSecondary={data.trends?.[1]?.label}
               caption="Tendencia 12 meses"
-              subtitle="Signups · Suscripciones nuevas · Churn"
-              formatter="number"
+              subtitle="Signups · Suscripciones nuevas · Churn · Cambiá entre métricas en los selectors"
+              height={340}
             />
           )}
         </div>

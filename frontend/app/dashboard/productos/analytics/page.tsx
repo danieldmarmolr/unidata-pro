@@ -169,6 +169,14 @@ export default function ProductAnalyticsPage() {
         </div>
 
         <AnalyticsContext.Provider value={{ unit, productType }}>
+          {/* Intro contextual segun el tab activo - explica que hace y como aprovecharlo */}
+          {ANALYSIS_INTROS[tab] && (
+            <AnalysisIntro
+              title={ANALYSIS_INTROS[tab].title}
+              what={ANALYSIS_INTROS[tab].what}
+              how={ANALYSIS_INTROS[tab].how}
+            />
+          )}
           {tab === "abc" && <AbcSection qs={qsWithUnit} />}
           {tab === "abc-margen" && <AbcMargenSection qs={qsWithUnit} />}
           {tab === "matrix" && <AbcXyzSection qs={qsWithUnit} />}
@@ -260,11 +268,6 @@ function AbcSection({ qs }: { qs: string }) {
 
   return (
     <>
-      <AnalysisIntro
-        title="ABC (análisis de Pareto)"
-        what="Clasifica tus SKUs según cuánto contribuyen al revenue. Clase A son el 20% que genera el 80% del negocio. Clase B son importantes pero secundarios. Clase C es cola larga: muchos SKUs que aportan poco."
-        how="Foco operativo: garantizar stock 24/7 de los Clase A, monitorear Clase B con regla normal de reposición, y revisar Clase C buscando candidatos a discontinuar o convertir en combo con un Clase A. Click en una tarjeta para filtrar el ranking."
-      />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         {(["A", "B", "C"] as const).map((c) => {
           const cls = data.classes[c];
@@ -873,6 +876,82 @@ function ReturnsSection() {
 // ============================================================
 // ABC por Margen
 // ============================================================
+// Descripciones explicativas de cada analisis. Una sola fuente de verdad
+// para que cuando agreguemos un analisis nuevo, basta con agregar la entrada
+// aca. La key debe matchear el `tab` enum del componente padre.
+const ANALYSIS_INTROS: Record<string, { title: string; what: string; how: string }> = {
+  abc: {
+    title: "ABC (análisis de Pareto)",
+    what: "Clasifica tus SKUs según cuánto contribuyen al revenue. Clase A son el 20% que genera el 80% del negocio. Clase B son importantes pero secundarios. Clase C es cola larga: muchos SKUs que aportan poco.",
+    how: "Foco operativo: garantizar stock 24/7 de los Clase A, monitorear Clase B con regla normal de reposición, y revisar Clase C buscando candidatos a discontinuar o convertir en combo con un Clase A.",
+  },
+  "abc-margen": {
+    title: "ABC por margen (no por revenue)",
+    what: "La misma clasificación A/B/C pero priorizando ganancia neta en lugar de facturación. Un SKU puede ser Clase A en revenue pero Clase C en margen si tiene poco markup.",
+    how: "Comparar con la pestaña ABC normal: si un SKU pasa de A en revenue a C en margen, es un producto-señuelo (vende mucho pero no deja). Subir precio o sustituir con un equivalente de mejor margen.",
+  },
+  matrix: {
+    title: "ABC × XYZ (matriz 9-cuadrantes)",
+    what: "Cruza importancia (ABC = revenue) con variabilidad de demanda (XYZ = estabilidad mes a mes). 9 celdas con estrategia de stock distinta cada una.",
+    how: "Foco en celda AX = vital y predecible → stock just-in-time. Celda AZ = vital pero errático → stock de seguridad alto. Celda CZ = irrelevante y volátil → candidatos a discontinuar.",
+  },
+  rotation: {
+    title: "Rotación (Days of Inventory)",
+    what: "Cuántos días de venta tenés en stock por SKU. DoI = stock actual / venta diaria promedio. Bajo = se vende rápido. Alto = obsolescente.",
+    how: "DoI < 7 → urgente reponer. DoI 7-30 → operación normal. DoI > 90 → liquidar o promocionar antes de que pierda valor.",
+  },
+  stockout: {
+    title: "Stockout risk",
+    what: "Predice qué SKUs se van a quebrar pronto basado en ritmo de venta + stock actual. Riesgo = stock_actual / (ventas_30d / 30).",
+    how: "Alta señal para Compras: los SKUs en rojo necesitan PO urgente. Útil para anticipar 1-2 semanas antes del quiebre.",
+  },
+  simulator: {
+    title: "Simulador de stockout",
+    what: "What-if: si un SKU se quiebra X días, cuánto revenue perdés. Calcula sobre ventas históricas + ticket promedio.",
+    how: "Justificar inversión en stock de seguridad. Si un SKU de Clase A queda quebrado 5 días = $X perdido. Si esa cantidad supera el costo de comprar más stock, compensa.",
+  },
+  "cross-sell": {
+    title: "Cross-sell pairs",
+    what: "Pares de SKUs que se compran juntos frecuentemente (en la misma orden). Mide co-ocurrencia: cuántas órdenes contienen ambos productos.",
+    how: "Armar combos comerciales. Si A y B aparecen juntos en el 30% de las órdenes, ofrecer bundle A+B con descuento mueve aún más volumen. También: ubicar B cerca de A en el flujo de checkout / recomendados.",
+  },
+  affinity: {
+    title: "Affinity (lift estadístico)",
+    what: "Lift = P(comprar B | compró A) / P(comprar B). Si lift > 1, comprar A predice comprar B más que el azar. Si lift = 10, comprar A hace 10x más probable que también compre B.",
+    how: "Recomendaciones de producto post-compra: 'a quienes compraron A también compraron B (lift 8x)'. Más confiable que cross-sell simple porque controla por popularidad.",
+  },
+  cannibalization: {
+    title: "Canibalización entre SKUs",
+    what: "Detecta cuándo un SKU nuevo robó ventas a otro SKU del catálogo (en lugar de traer demanda nueva). Compara ventas pre/post launch.",
+    how: "Decidir si discontinuar variantes redundantes. Si lanzaste M25 Black y las ventas de M25 White cayeron en el mismo monto = canibalización pura, no hay growth.",
+  },
+  trends: {
+    title: "Tendencias 30d (momentum)",
+    what: "SKUs con mayor aceleración o desaceleración en los últimos 30 días vs los 30 anteriores. Detecta winners emergentes y losers a punto de morir.",
+    how: "Trending up → invertir más stock + marketing. Trending down → liquidar antes de que pierdan más valor. Anticipar 1 mes la próxima generación de Clase A.",
+  },
+  lifecycle: {
+    title: "Lifecycle por SKU",
+    what: "En qué etapa está cada producto: introducción / crecimiento / madurez / declive. Basado en edad + tendencia de ventas + estabilidad.",
+    how: "Producto en crecimiento → maximizar inversión. En madurez → mantener stock estable. En declive → preparar reemplazo y liquidación gradual.",
+  },
+  elasticity: {
+    title: "Elasticidad-precio",
+    what: "Cuánto cambia el volumen vendido cuando cambiás el precio. Elasticidad negativa: subir precio = menos volumen. Cercana a 0: la demanda no responde al precio (poder de pricing).",
+    how: "SKUs inelásticos (|e| < 1) → subir precio sin perder volumen, capturás margen. Elásticos (|e| > 1) → bajar precio dispara volumen, conviene en SKUs de bajo margen pero alto ticket.",
+  },
+  forecast: {
+    title: "Forecast por SKU (próximos 30-60 días)",
+    what: "Predicción de demanda usando series temporales históricas + estacionalidad. Devuelve unidades estimadas a vender con intervalo de confianza.",
+    how: "Input directo para órdenes de compra: comprar X% por encima del forecast como buffer. Reduce stockouts y a la vez evita sobre-stock.",
+  },
+  returns: {
+    title: "Returns rate por SKU",
+    what: "% de unidades devueltas vs unidades vendidas. Devoluciones registradas en Unidev (esquema separado de Unistore).",
+    how: "SKUs con rate > 5% requieren revisión: calidad, descripción engañosa, talles inconsistentes. Bajar la tasa de devoluciones es ganancia directa (envío + restocking ahorrado).",
+  },
+};
+
 function AbcMargenSection({ qs }: { qs: string }) {
   const { data, isLoading } = useQuery<any>({
     queryKey: ["product-abc-margen", qs],

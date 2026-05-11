@@ -8,6 +8,7 @@ import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
@@ -92,11 +93,29 @@ export default function FinanzasPage() {
           {isLoading || !data ? (
             <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
           ) : (
-            <MultiLineChart
-              series={data.trends}
+            <InteractiveMetricChart
+              points={(() => {
+                const map = new Map<string, any>();
+                for (const s of (data.trends || [])) {
+                  for (const p of (s.points || [])) {
+                    const existing = map.get(p.date) ?? { date: p.date };
+                    existing[s.label] = p.value;
+                    map.set(p.date, existing);
+                  }
+                }
+                return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+              })()}
+              metrics={(data.trends || []).map((s, i) => ({
+                key: s.label,
+                label: s.label,
+                kind: "currency" as const,
+                color: ["#7a3eae", "#10b981", "#f59e0b"][i % 3],
+              }))}
+              defaultPrimary={data.trends?.[0]?.label}
+              defaultSecondary={data.trends?.[1]?.label}
               caption="Facturacion vs Ventas operativas (12 meses)"
-              subtitle="Si la linea de ventas operativas esta arriba, hay revenue sin facturar"
-              formatter="currency"
+              subtitle="Si la línea de ventas operativas está arriba de las barras de facturación = revenue sin facturar (gap a cerrar)"
+              height={320}
             />
           )}
         </div>

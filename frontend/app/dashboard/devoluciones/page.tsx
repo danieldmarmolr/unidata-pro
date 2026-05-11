@@ -9,6 +9,7 @@ import { getCardDrill } from "@/lib/kpi-drill";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
@@ -98,11 +99,29 @@ export default function DevolucionesPage() {
             {isLoading || !data ? (
               <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
             ) : (
-              <MultiLineChart
-                series={data.trends}
+              <InteractiveMetricChart
+                points={(() => {
+                  const map = new Map<string, any>();
+                  for (const s of (data.trends || [])) {
+                    for (const p of (s.points || [])) {
+                      const existing = map.get(p.date) ?? { date: p.date };
+                      existing[s.label] = p.value;
+                      map.set(p.date, existing);
+                    }
+                  }
+                  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+                })()}
+                metrics={(data.trends || []).map((s, i) => ({
+                  key: s.label,
+                  label: s.label,
+                  kind: "number" as const,
+                  color: ["#ef4444", "#10b981"][i % 2],
+                }))}
+                defaultPrimary={data.trends?.[0]?.label}
+                defaultSecondary={data.trends?.[1]?.label}
                 caption="Devoluciones mensuales (12m)"
-                subtitle="Total vs admitidas"
-                formatter="number"
+                subtitle="Total vs admitidas · si la línea de admitidas sube en relación al total, la tasa de admisión está creciendo"
+                height={320}
               />
             )}
           </div>

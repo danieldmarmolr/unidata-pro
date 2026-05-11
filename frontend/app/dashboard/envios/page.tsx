@@ -10,6 +10,7 @@ import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
 import { MultiLineChart } from "@/components/multi-line-chart";
+import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
@@ -95,11 +96,29 @@ export default function EnviosPage() {
           <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse mb-6" />
         ) : (
           <div className="mb-6">
-            <MultiLineChart
-              series={series}
+            <InteractiveMetricChart
+              points={(() => {
+                const map = new Map<string, any>();
+                for (const s of (series || [])) {
+                  for (const p of (s.points || [])) {
+                    const existing = map.get(p.date) ?? { date: p.date };
+                    existing[s.label] = p.value;
+                    map.set(p.date, existing);
+                  }
+                }
+                return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+              })()}
+              metrics={(series || []).map((s, i) => ({
+                key: s.label,
+                label: s.label,
+                kind: "number" as const,
+                color: ["#7a3eae", "#10b981", "#3b82f6", "#f59e0b"][i % 4],
+              }))}
+              defaultPrimary={series?.[0]?.label}
+              defaultSecondary={series?.[1]?.label}
               caption="Volumen diario por courier"
-              subtitle="Comparativa head-to-head"
-              formatter="number"
+              subtitle="Comparativa head-to-head · Cruzá OCA vs LightData para ver si uno crece a costa del otro"
+              height={320}
             />
           </div>
         )}
