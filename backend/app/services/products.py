@@ -204,11 +204,36 @@ def product_detail(sku: str) -> dict:
                COALESCE(MAX(p.brand),'') AS brand,
                BOOL_OR(p.published) AS published,
                MAX(pv.price)::float AS price,
-               MAX(pv.barcode) AS barcode
+               MAX(pv.barcode) AS tn_barcode
         FROM tienda_nube."ProductVariant" pv
         JOIN tienda_nube."Product" p ON p.id = pv."productId"
         WHERE pv.sku = :sku
     """, {"sku": sku}) or []
+
+    # EAN real: SIEMPRE de digip (fuente de verdad GS1).
+    # tienda_nube.ProductVariant.barcode es un campo libre que casi nunca se llena;
+    # el codigo escaneable real vive en digip.ArticuloUnidadMedidaCodigo y se prioriza
+    # EAN-13 sobre EAN-12 / EAN-8. Mismo criterio que sku_enrichment.enrich_skus_unistore.
+    digip_ean = ""
+    try:
+        ean_rows = q(eng, """
+            SELECT c."Codigo"
+            FROM digip."Articulo" a
+            JOIN digip."ArticuloUnidadMedida" u ON u."articuloCodigo" = a."CodigoArticulo"
+            JOIN digip."ArticuloUnidadMedidaCodigo" c ON c."unidadMedidaId" = u.id
+            WHERE a."CodigoArticulo" = :sku
+            ORDER BY CASE WHEN LENGTH(c."Codigo") = 13 THEN 0
+                          WHEN LENGTH(c."Codigo") = 12 THEN 1
+                          WHEN LENGTH(c."Codigo") = 8  THEN 2
+                          ELSE 3 END,
+                     c.id ASC
+            LIMIT 1
+        """, {"sku": sku}) or []
+        if ean_rows and ean_rows[0][0]:
+            digip_ean = str(ean_rows[0][0]).strip()
+    except Exception:
+        # Si digip falla, caemos al barcode de TN
+        pass
     imgs = q(eng, """
         SELECT pi.src
         FROM tienda_nube."ProductImage" pi
@@ -230,7 +255,8 @@ def product_detail(sku: str) -> dict:
             "brand": r[2] or "",
             "published": bool(r[3]) if r[3] is not None else False,
             "price": float(r[4] or 0),
-            "barcode": r[5] or "",
+            # EAN: digip (real) primero, TN.barcode como fallback de ultimo recurso
+            "barcode": digip_ean or (r[5] or ""),
         }
 
     if not product_info:
@@ -244,7 +270,8 @@ def product_detail(sku: str) -> dict:
                 "product_id": int(info2[0][0] or 0),
                 "name": info2[0][1] or "?",
                 "brand": "", "published": None,
-                "price": 0, "barcode": info2[0][2] or "",
+                "price": 0,
+                "barcode": digip_ean or (info2[0][2] or ""),
             }
 
     cards: list[dict] = []
