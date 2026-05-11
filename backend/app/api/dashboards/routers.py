@@ -661,9 +661,14 @@ def get_stock_heatmap(
 def get_rfm(
     _: Annotated[str, Depends(current_user)],
     period_days: Annotated[int, Query(ge=30, le=730)] = 365,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """RFM Segmentation - Champions / Loyal / At Risk / etc.
-    Replica del PowerBI ERP Analytics seccion Customer Success."""
+    unit=unistore: clientes finales TN paid (tienda_nube.Customer/Order).
+    unit=unidrop:  dropshippers (public.User) por ventas combinadas MELI + TN.
+    Devuelve segments + top_by_segment + actions (que hacer con cada segmento)."""
+    if unit == "unidrop":
+        return rfm_svc.rfm_overview_unidrop(period_days=period_days)
     return rfm_svc.rfm_overview(period_days=period_days)
 
 

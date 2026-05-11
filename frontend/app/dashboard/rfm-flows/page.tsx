@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, TrendingUp, TrendingDown, Activity } from "lucide-react";
+import { ArrowRight, TrendingUp, TrendingDown, Activity, Info } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
@@ -20,9 +21,11 @@ type Alert = {
   title: string;
   body: string;
 };
+type SegmentAction = { que_es: string; que_hacer: string };
 type Resp = {
   flows: Flow[];
   segments: Record<string, { label: string; color: string; icon: string; desc: string }>;
+  actions?: Record<string, SegmentAction>;
   alerts: Alert[];
   current_month_start: string;
   previous_month_start: string;
@@ -35,6 +38,7 @@ export default function RfmFlowsPage() {
     queryFn: () => api("/api/dashboards/rfm-flows"),
     staleTime: 10 * 60_000,
   });
+  const [popupKey, setPopupKey] = useState<string | null>(null);
 
   return (
     <>
@@ -127,13 +131,13 @@ export default function RfmFlowsPage() {
                     return (
                       <tr key={i} className={"border-t border-border hover:bg-soft transition " + (isCritical ? "bg-red-50/40" : isWin ? "bg-emerald-50/40" : "")}>
                         <td className="px-4 py-2.5">
-                          <SegmentBadge id={f.from} seg={fromSeg} />
+                          <SegmentBadge id={f.from} seg={fromSeg} onClick={() => setPopupKey(f.from)} />
                         </td>
                         <td className="px-2 py-2.5 text-text-muted">
                           <ArrowRight size={14} />
                         </td>
                         <td className="px-4 py-2.5">
-                          <SegmentBadge id={f.to} seg={toSeg} />
+                          <SegmentBadge id={f.to} seg={toSeg} onClick={() => setPopupKey(f.to)} />
                         </td>
                         <td className="px-4 py-2.5 text-right tabular-nums font-bold">{formatNumber(f.count)}</td>
                         <td className="px-4 py-2.5 text-right tabular-nums text-text-muted">{f.revenue_a > 0 ? formatCurrency(f.revenue_a) : "—"}</td>
@@ -167,12 +171,66 @@ export default function RfmFlowsPage() {
           </div>
         )}
       </div>
+
+      {/* Popup educativo segmento */}
+      {popupKey && data && data.segments[popupKey] && (
+        <SegmentInfoPopup
+          seg={data.segments[popupKey]}
+          action={data.actions?.[popupKey]}
+          onClose={() => setPopupKey(null)}
+        />
+      )}
     </>
   );
 }
 
-function SegmentBadge({ id, seg }: { id: string; seg?: { label: string; color: string; icon: string } }) {
-  // Casos especiales que no estan en SEGMENTS
+function SegmentInfoPopup({
+  seg, action, onClose,
+}: {
+  seg: { label: string; color: string; icon: string; desc: string };
+  action?: SegmentAction;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-surface border-2 rounded-2xl shadow-2xl w-[min(560px,92vw)]"
+        style={{ borderColor: seg.color + "60" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 flex items-start gap-3" style={{ background: `linear-gradient(90deg, ${seg.color}20, transparent)` }}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-2xl shadow-md" style={{ background: `linear-gradient(135deg, ${seg.color}, ${seg.color}dd)` }}>
+            {seg.icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-lg font-extrabold text-text">{seg.label}</div>
+            <div className="text-xs text-text-muted mt-0.5">{seg.desc}</div>
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-text px-2 py-1 rounded">x</button>
+        </div>
+        <div className="px-5 py-4 border-t border-border space-y-3">
+          {action ? (
+            <>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted">Que significa este segmento</div>
+                <div className="text-sm text-text mt-1 leading-relaxed">{action.que_es}</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider font-bold" style={{ color: seg.color }}>Que hacer (accion recomendada)</div>
+                <div className="text-sm text-text mt-1 leading-relaxed">{action.que_hacer}</div>
+              </div>
+            </>
+          ) : (
+            <div className="text-sm text-text-muted italic">Sin descripcion de accion disponible para este segmento todavia.</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SegmentBadge({ id, seg, onClick }: { id: string; seg?: { label: string; color: string; icon: string }; onClick?: () => void }) {
+  // Casos especiales que no estan en SEGMENTS - no clickeables (no tienen accion)
   if (id === "_nuevo") {
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
@@ -185,7 +243,7 @@ function SegmentBadge({ id, seg }: { id: string; seg?: { label: string; color: s
     return (
       <span className="inline-flex items-center gap-1.5 text-xs font-semibold">
         <span className="w-2.5 h-2.5 rounded-full bg-zinc-400" />
-        No compró este mes
+        No compro este mes
       </span>
     );
   }
@@ -193,10 +251,16 @@ function SegmentBadge({ id, seg }: { id: string; seg?: { label: string; color: s
     return <span className="text-xs text-text-muted">{id}</span>;
   }
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs font-semibold" title={seg.label}>
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer hover:bg-soft hover:rounded px-1 py-0.5 transition"
+      title={`${seg.label} — click para ver que hacer`}
+    >
       <span className="w-2.5 h-2.5 rounded-full" style={{ background: seg.color }} />
       <span>{seg.icon}</span>
       {seg.label}
-    </span>
+      <Info size={10} className="opacity-40" />
+    </button>
   );
 }

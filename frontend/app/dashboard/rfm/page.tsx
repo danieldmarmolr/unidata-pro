@@ -41,8 +41,11 @@ type Customer = {
   segment: string;
 };
 
+type SegmentAction = { que_es: string; que_hacer: string };
+
 type RfmResponse = {
   period_days: number;
+  unit?: "unistore" | "unidrop";
   totals: {
     customers: number;
     monetary: number;
@@ -51,6 +54,7 @@ type RfmResponse = {
   };
   segments: Segment[];
   top_by_segment: Record<string, Customer[]>;
+  actions?: Record<string, SegmentAction>;
   generated_at: string;
 };
 
@@ -63,9 +67,8 @@ export default function RfmPage() {
 
   const { data, isLoading, isFetching } = useQuery<RfmResponse>({
     queryKey: ["rfm", period, unit],
-    queryFn: () => api(`/api/dashboards/rfm?period_days=${period}`),
+    queryFn: () => api(`/api/dashboards/rfm?period_days=${period}&unit=${unit}`),
     staleTime: 60_000,
-    enabled: unit === "unistore",
   });
 
   return (
@@ -104,16 +107,13 @@ export default function RfmPage() {
         />
 
         {unit === "unidrop" && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4 text-sm">
-            <div className="font-bold text-amber-900 mb-1">RFM de dropshippers Unidrop</div>
-            <div className="text-amber-800 text-xs">
-              Para análisis de actividad/recurrencia de operadores Unidrop usa{" "}
-              <a href="/dashboard/cohortes?unit=unidrop" className="font-semibold underline">
-                Cohortes (modo Unidrop)
-              </a>
-              . Allí se clasifican por Nuevo/Recurrente/Posible churn/Perdidos en base a sus ventas MELI + TN.
-              <br />
-              El scoring RFM clásico (Recency × Frequency × Monetary con quintiles) está disponible solo para clientes finales Unistore por ahora.
+          <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 mb-4 text-xs leading-relaxed">
+            <div className="font-bold text-violet-900 mb-1">RFM aplicado a dropshippers Unidrop</div>
+            <div className="text-violet-800">
+              <strong>Recency</strong> = dias desde su ultima venta · <strong>Frequency</strong> = total ventas MELI + TN en periodo ·
+              <strong> Monetary</strong> = GMV total (totalAmount MELI + total TN paid).
+              Los segmentos miden cuan saludables son tus dropshippers como clientes de la plataforma.
+              Tocá cualquier card para ver qué hacer con ese segmento.
             </div>
           </div>
         )}
@@ -189,59 +189,109 @@ export default function RfmPage() {
           )}
         </div>
 
-        {/* Drilldown clientes */}
-        {selectedSeg && data && data.top_by_segment[selectedSeg] && (
-          <div className="bg-surface border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h3 className="text-sm font-bold text-text">
-                  Top 10 — {data.segments.find((s) => s.key === selectedSeg)?.label}
-                </h3>
-                <p className="text-[11px] text-text-muted">Ordenados por volumen</p>
-              </div>
-              <button
-                onClick={() => setSelectedSeg(null)}
-                className="text-xs text-text-muted hover:text-text px-2 py-1 rounded border border-border"
-              >
-                Cerrar
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
-                  <tr>
-                    <th className="text-left px-3 py-2.5">Cliente</th>
-                    <th className="text-right px-2 py-2.5">R</th>
-                    <th className="text-right px-2 py-2.5">F</th>
-                    <th className="text-right px-2 py-2.5">M</th>
-                    <th className="text-right px-2 py-2.5">Días desde compra</th>
-                    <th className="text-right px-2 py-2.5">Ordenes</th>
-                    <th className="text-right px-2 py-2.5">Volumen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.top_by_segment[selectedSeg].map((c) => (
-                    <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40 transition">
-                      <td className="px-3 py-2.5">
-                        <Link href={`/dashboard/customer/${c.customer_id}`} className="text-primary hover:underline font-medium">
-                          {c.nombre}
-                        </Link>
-                      </td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-bold text-emerald-600">{c.r_score}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-bold text-blue-600">{c.f_score}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-bold text-amber-600">{c.m_score}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums">{c.recency_days}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums">{c.frequency}</td>
-                      <td className="px-2 py-2.5 text-right tabular-nums font-bold">{formatCurrency(c.monetary)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+        {/* Modal con accion + lista del segmento seleccionado */}
+        {selectedSeg && data && (
+          <SegmentPopup
+            seg={data.segments.find((s) => s.key === selectedSeg)!}
+            action={data.actions?.[selectedSeg]}
+            customers={data.top_by_segment[selectedSeg] ?? []}
+            unit={unit}
+            onClose={() => setSelectedSeg(null)}
+          />
         )}
       </div>
     </>
+  );
+}
+
+function SegmentPopup({
+  seg, action, customers, unit, onClose,
+}: {
+  seg: Segment;
+  action?: SegmentAction;
+  customers: Customer[];
+  unit: Unit;
+  onClose: () => void;
+}) {
+  const labelEntidad = unit === "unidrop" ? "Dropshipper" : "Cliente";
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-surface border-2 rounded-2xl shadow-2xl w-[min(820px,95vw)] max-h-[90vh] overflow-hidden flex flex-col"
+        style={{ borderColor: seg.color + "60" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-5 py-4 flex items-start gap-3" style={{ background: `linear-gradient(90deg, ${seg.color}20, transparent)` }}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center text-white text-2xl shadow-md flex-shrink-0" style={{ background: `linear-gradient(135deg, ${seg.color}, ${seg.color}dd)` }}>
+            {seg.icon}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-lg font-extrabold text-text">{seg.label}</div>
+            <div className="text-xs text-text-muted">{seg.desc}</div>
+            <div className="mt-1.5 text-[11px] text-text-muted">
+              <strong className="text-text">{seg.customers}</strong> {unit === "unidrop" ? "dropshippers" : "clientes"} · <strong className="text-text">{formatCurrency(seg.monetary_total)}</strong> volumen · ticket prom <strong className="text-text">{formatCurrency(seg.ticket_avg)}</strong>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-text px-2 py-1 rounded">✕</button>
+        </div>
+
+        {/* Action explanation */}
+        {action && (
+          <div className="px-5 py-4 border-y border-border bg-soft/30 space-y-2">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted">Que significa este segmento</div>
+              <div className="text-sm text-text mt-1">{action.que_es}</div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold" style={{ color: seg.color }}>Que hacer (accion recomendada)</div>
+              <div className="text-sm text-text mt-1">{action.que_hacer}</div>
+            </div>
+          </div>
+        )}
+
+        {/* Top customers */}
+        <div className="px-5 py-3 border-b border-border">
+          <div className="text-xs font-bold text-text">Top 10 por volumen</div>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          {customers.length === 0 ? (
+            <div className="py-8 text-center text-text-muted text-sm">Sin {unit === "unidrop" ? "dropshippers" : "clientes"} en este segmento</div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                <tr>
+                  <th className="text-left px-4 py-2">{labelEntidad}</th>
+                  <th className="text-right px-2 py-2">R</th>
+                  <th className="text-right px-2 py-2">F</th>
+                  <th className="text-right px-2 py-2">M</th>
+                  <th className="text-right px-2 py-2">Dias</th>
+                  <th className="text-right px-2 py-2">{unit === "unidrop" ? "Ventas" : "Ordenes"}</th>
+                  <th className="text-right px-2 py-2">Volumen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {customers.map((c) => (
+                  <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40">
+                    <td className="px-4 py-2">
+                      <Link href={unit === "unidrop" ? `/dashboard/dropshipper/${c.customer_id}` : `/dashboard/customer/${c.customer_id}`} className="text-primary hover:underline font-medium">
+                        {c.nombre}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums font-bold text-emerald-600">{c.r_score}</td>
+                    <td className="px-2 py-2 text-right tabular-nums font-bold text-blue-600">{c.f_score}</td>
+                    <td className="px-2 py-2 text-right tabular-nums font-bold text-amber-600">{c.m_score}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{c.recency_days}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{c.frequency}</td>
+                    <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(c.monetary)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

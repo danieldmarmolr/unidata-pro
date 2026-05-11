@@ -19,7 +19,7 @@ import logging
 
 from app.db.engines import get_engine
 from app.services._utils import q
-from app.services.rfm_analytics import _classify_segment, _quintile_score, SEGMENTS
+from app.services.rfm_analytics import _classify_segment, _quintile_score, SEGMENTS, SEGMENT_ACTIONS
 
 log = logging.getLogger("unidata.rfm_flows")
 
@@ -171,6 +171,7 @@ def rfm_flows_mom() -> dict:
     return {
         "flows": flows,
         "segments": SEGMENTS,
+        "actions": SEGMENT_ACTIONS,
         "alerts": alerts[:10],
         "current_month_start": (today - dt.timedelta(days=30)).isoformat(),
         "previous_month_start": (today - dt.timedelta(days=60)).isoformat(),

@@ -185,6 +185,7 @@ def rfm_overview(period_days: int = 365) -> dict:
 
     return {
         "period_days": period_days,
+        "unit": "unistore",
         "totals": {
             "customers": total_customers,
             "monetary": round(sum(c["monetary"] for c in customers), 2),
@@ -193,6 +194,7 @@ def rfm_overview(period_days: int = 365) -> dict:
         },
         "segments": seg_arr,
         "top_by_segment": top_by_seg,
+        "actions": SEGMENT_ACTIONS,
         "generated_at": now_ar().isoformat(),
     }
 
@@ -203,5 +205,190 @@ def _empty_response() -> dict:
         "totals": {"customers": 0, "monetary": 0, "frequency": 0, "avg_recency_days": 0},
         "segments": [],
         "top_by_segment": {},
+        "generated_at": now_ar().isoformat(),
+    }
+
+
+# Mensaje accionable por segmento - usado por la UI para los popups educativos
+SEGMENT_ACTIONS: dict[str, dict[str, str]] = {
+    "champions": {
+        "que_es": "Tus mejores clientes/dropshippers. Compran seguido, recientemente y con tickets altos.",
+        "que_hacer": "Atencion premium. Programas de referidos, beta de nuevos productos, descuentos exclusivos por lealtad. NO molestar con campanas masivas.",
+    },
+    "loyal": {
+        "que_es": "Compran frecuentemente y siguen activos. Base solida del negocio.",
+        "que_hacer": "Upsell de productos premium. Mostrarles novedades. Comunicacion consistente sin saturar.",
+    },
+    "potential_loyalist": {
+        "que_es": "Recientes con ticket creciente. Si los cuidas, se vuelven loyal/champions.",
+        "que_hacer": "Onboarding cuidado, recomendaciones personalizadas. Encuestas para entender preferencias.",
+    },
+    "new": {
+        "que_es": "Primera compra reciente. Aun no validaron si van a volver.",
+        "que_hacer": "Email de bienvenida, contenido educativo, descuento en 2da compra. Critico que la primera experiencia sea memorable.",
+    },
+    "promising": {
+        "que_es": "Compraron poco pero con buen ticket. Interes inicial saludable.",
+        "que_hacer": "Re-engagement con productos similares. Caso de uso de un cliente parecido. Push a una 2da compra dentro de 30 dias.",
+    },
+    "need_attention": {
+        "que_es": "Compraban con ritmo pero empezaron a alejarse. Senal temprana de churn.",
+        "que_hacer": "Encuesta de satisfaccion. Promo segmentada. Reactivar via canal alternativo (WhatsApp si era email).",
+    },
+    "about_to_sleep": {
+        "que_es": "Pierden interes. Si no actuas en este mes, se van a hibernating.",
+        "que_hacer": "Reactivacion AGRESIVA con descuento fuerte. Producto nuevo destacado. Si no compran en 30 dias, mover a estrategia de win-back.",
+    },
+    "at_risk": {
+        "que_es": "Eran top y se estan yendo. Tickets altos pero recencia mala.",
+        "que_hacer": "Llamado/email personalizado del CS. Investigar QUE paso (cambio de proveedor, problema con producto). NO es solo precio - hay un quiebre que entender.",
+    },
+    "cant_lose": {
+        "que_es": "Los mejores que dejaron de comprar. Recuperarlos es PRIORIDAD ABSOLUTA.",
+        "que_hacer": "Outreach del management (no solo CS). Oferta personalizada. Entender por que se fueron antes que sea irrecuperable.",
+    },
+    "hibernating": {
+        "que_es": "Compraron una vez o dos hace muchos meses. Casi perdidos.",
+        "que_hacer": "Campana de win-back masiva con descuento agresivo. Si no responden en 60 dias, sacar de listas activas (limpiar la base).",
+    },
+    "lost": {
+        "que_es": "Una compra hace mucho. Probablemente perdidos para siempre.",
+        "que_hacer": "Una ultima campana de bajo costo. Si no convierten, sacar de las listas y archivar. No invertir mas budget aqui.",
+    },
+}
+
+
+def rfm_overview_unidrop(period_days: int = 365) -> dict:
+    """RFM aplicado a DROPSHIPPERS Unidrop (usuarios de public.User que venden con nuestra app).
+
+    Recency  = dias desde su ultima venta (MELI + TN)
+    Frequency = total de ventas en el periodo (MELI count + TN count)
+    Monetary  = GMV total en el periodo (MELI totalAmount + TN total paid)
+    """
+    eng = get_engine("unidrop")
+    today = today_ar()
+
+    rows = q(eng, """
+        WITH ventas AS (
+          SELECT u.id AS customer_id,
+                 COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
+                 -- Frequency: count MELI + TN
+                 (
+                   COALESCE((SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" o
+                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                               ON mla."mlUserId"::text = o."sellerId"::text
+                             WHERE mla."userId" = u.id
+                               AND o."status" IN ('paid','confirmed','shipped','delivered')
+                               AND o."dateCreated" >= NOW() - make_interval(days => :d)), 0)
+                 + COALESCE((SELECT COUNT(*) FROM public.tienda_nube_orders tno
+                             WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
+                               AND tno.created_at >= NOW() - make_interval(days => :d)), 0)
+                 )::int AS frecuencia,
+                 -- Monetary: SUM totalAmount MELI + total TN
+                 (
+                   COALESCE((SELECT SUM(o."totalAmount") FROM mercado_libre_dev."OrderMercadoLibre" o
+                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                               ON mla."mlUserId"::text = o."sellerId"::text
+                             WHERE mla."userId" = u.id
+                               AND o."status" IN ('paid','confirmed','shipped','delivered')
+                               AND o."dateCreated" >= NOW() - make_interval(days => :d)), 0)
+                 + COALESCE((SELECT SUM(tno.total) FROM public.tienda_nube_orders tno
+                             WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
+                               AND tno.created_at >= NOW() - make_interval(days => :d)), 0)
+                 )::float AS monetario,
+                 -- Recency: ultima venta cualquier canal
+                 GREATEST(
+                   COALESCE((SELECT MAX("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
+                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                               ON mla."mlUserId"::text = o."sellerId"::text
+                             WHERE mla."userId" = u.id
+                               AND o."status" IN ('paid','confirmed','shipped','delivered')), 'epoch'::timestamp),
+                   COALESCE((SELECT MAX(created_at) FROM public.tienda_nube_orders
+                             WHERE user_id = u.id AND payment_status::text='paid'), 'epoch'::timestamp)
+                 )::date AS ultima_venta
+          FROM public."User" u
+          WHERE u."subscriptionId" IS NOT NULL
+             OR u."mercadoLibreAccountId" IS NOT NULL
+             OR EXISTS (SELECT 1 FROM public.tienda_nube_orders tno WHERE tno.user_id = u.id)
+        )
+        SELECT customer_id, nombre, frecuencia, monetario, ultima_venta
+        FROM ventas
+        WHERE frecuencia > 0
+    """, {"d": period_days}) or []
+
+    if not rows:
+        return _empty_response()
+
+    customers = []
+    for r in rows:
+        cid, nombre, freq, monto, ultima = r
+        recency_days = (today - ultima).days if ultima else 9999
+        customers.append({
+            "customer_id": int(cid),
+            "nombre": nombre,
+            "recency_days": recency_days,
+            "frequency": int(freq or 0),
+            "monetary": float(monto or 0),
+            "ultima_compra": ultima.isoformat() if ultima else None,
+        })
+
+    rec_sorted = sorted([c["recency_days"] for c in customers])
+    freq_sorted = sorted([c["frequency"] for c in customers])
+    mon_sorted = sorted([c["monetary"] for c in customers])
+
+    seg_counts: dict[str, dict] = {k: {"count": 0, "monetary": 0.0, "frequency": 0, "label": v["label"], "color": v["color"], "icon": v["icon"], "desc": v["desc"]} for k, v in SEGMENTS.items()}
+    customers_by_seg: dict[str, list[dict]] = {k: [] for k in SEGMENTS.keys()}
+
+    for c in customers:
+        # Menos dias = mejor → invertimos manualmente
+        r_score = max(1, min(5, 6 - _quintile_score(c["recency_days"], rec_sorted, True)))
+        f_score = _quintile_score(c["frequency"], freq_sorted, True)
+        m_score = _quintile_score(c["monetary"], mon_sorted, True)
+        seg = _classify_segment(r_score, f_score, m_score)
+        c["r_score"] = r_score
+        c["f_score"] = f_score
+        c["m_score"] = m_score
+        c["segment"] = seg
+        seg_counts[seg]["count"] += 1
+        seg_counts[seg]["monetary"] += c["monetary"]
+        seg_counts[seg]["frequency"] += c["frequency"]
+        customers_by_seg[seg].append(c)
+
+    top_by_seg = {
+        k: sorted(v, key=lambda x: -x["monetary"])[:10]
+        for k, v in customers_by_seg.items() if v
+    }
+
+    seg_arr = []
+    total_customers = len(customers)
+    for key, data in seg_counts.items():
+        if data["count"] == 0:
+            continue
+        seg_arr.append({
+            "key": key,
+            "label": data["label"],
+            "color": data["color"],
+            "icon": data["icon"],
+            "desc": data["desc"],
+            "customers": data["count"],
+            "pct_total": round((data["count"] / total_customers * 100), 2),
+            "monetary_total": round(data["monetary"], 2),
+            "frequency_total": data["frequency"],
+            "ticket_avg": round(data["monetary"] / data["frequency"], 2) if data["frequency"] else 0,
+        })
+    seg_arr.sort(key=lambda x: -x["monetary_total"])
+
+    return {
+        "period_days": period_days,
+        "unit": "unidrop",
+        "totals": {
+            "customers": total_customers,
+            "monetary": round(sum(c["monetary"] for c in customers), 2),
+            "frequency": sum(c["frequency"] for c in customers),
+            "avg_recency_days": round(sum(c["recency_days"] for c in customers) / total_customers, 1),
+        },
+        "segments": seg_arr,
+        "top_by_segment": top_by_seg,
+        "actions": SEGMENT_ACTIONS,
         "generated_at": now_ar().isoformat(),
     }

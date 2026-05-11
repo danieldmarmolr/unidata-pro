@@ -9,8 +9,9 @@ import {
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
-import { DrillDownModal } from "@/components/drilldown-modal";
+import { CohortInlineTable } from "@/components/cohort-inline-table";
 import { api } from "@/lib/api";
+import { X } from "lucide-react";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
@@ -160,6 +161,18 @@ export default function CohortesPage() {
           </div>
         )}
 
+        {/* Tabla inline cuando hay etiqueta seleccionada (aparece arriba de las cards) */}
+        {drillState && (
+          <CohortInlineTable
+            state={drillState.state}
+            stateLabel={drillState.label}
+            color={drillState.color}
+            unit={unit}
+            qs={_qs}
+            onClose={() => setDrillState(null)}
+          />
+        )}
+
         {/* Cards de estados activos (cohortes) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
           {isLoading || !data ? (
@@ -229,20 +242,6 @@ export default function CohortesPage() {
         </div>
       </div>
 
-      {/* Drilldown modal: lista de customers/dropshippers del estado */}
-      {drillState && (
-        <DrillDownModal
-          title={`${drillState.label} · ${labelClientes}`}
-          subtitle={
-            unit === "unistore"
-              ? "Click en un cliente para abrir su perfil 360 Unistore"
-              : "Click en un dropshipper para abrir su vista 360 Unidrop"
-          }
-          endpoint={`/api/dashboards/cohorts/customers?state=${encodeURIComponent(drillState.state)}&unit=${unit}&${_qs}`}
-          filename={`cohort_${drillState.state}_${unit}.csv`}
-          onClose={() => setDrillState(null)}
-        />
-      )}
     </>
   );
 }
