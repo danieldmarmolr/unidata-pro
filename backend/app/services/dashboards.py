@@ -115,7 +115,32 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "hint": f"sobre {int(total_users_drop):,} usuarios totales",
     })
 
-    # Card 5: Volumen procesado por Talo (Unidrop, mes en curso)
+    # GMV Unidrop TN: ventas de los dropshippers en Tienda Nube (cobradas)
+    gmv_drop_tn = _scalar(drop, """
+        SELECT COALESCE(SUM(total), 0)::float
+        FROM public.tienda_nube_orders
+        WHERE created_at >= :from_ts AND created_at < :to_ts
+          AND payment_status::text = 'paid'
+    """, win_params) or 0
+
+    # GMV Unidrop ML: ventas de los dropshippers en Mercado Libre
+    gmv_drop_ml = _scalar(drop, """
+        SELECT COALESCE(SUM("totalAmount"), 0)::float
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "dateCreated" >= :from_ts AND "dateCreated" < :to_ts
+          AND status IN ('paid','confirmed','shipped','delivered')
+    """, win_params) or 0
+
+    gmv_drop = float(gmv_drop_tn) + float(gmv_drop_ml)
+
+    cards.append({
+        "label": f"GMV Unidrop ({period_label})",
+        "value": round(gmv_drop, 0),
+        "prefix": "$ ",
+        "hint": f"TN: {gmv_drop_tn:,.0f}  /  ML: {gmv_drop_ml:,.0f}",
+    })
+
+    # Volumen Talo (informativo, no se usa como revenue principal — es el procesador)
     talo_amount = _scalar(drop, """
         SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransaction"
         WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
@@ -126,12 +151,6 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
             SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransaction"
             WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
         """, win_params) or 0
-    cards.append({
-        "label": f"Volumen pagos Talo ({period_label})",
-        "value": round(float(talo_amount), 0),
-        "prefix": "$ ",
-        "hint": "PaymentTransaction Unidrop",
-    })
 
     # ---------- Series temporales: 12 meses ----------
     revenue_series: list[dict] = []
@@ -161,25 +180,44 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in ml_series],
     })
 
-    drop_orders_series = _q(drop, """
-        SELECT date_trunc('month', "createdAt")::date AS mes,
-               COUNT(*)::float AS orders
+    # Revenue Unidrop TN (no es count - es plata real de los dropshippers)
+    drop_tn_series = _q(drop, """
+        SELECT date_trunc('month', created_at)::date AS mes,
+               COALESCE(SUM(total) FILTER (WHERE payment_status::text='paid'), 0)::float AS gmv
         FROM public.tienda_nube_orders
+        WHERE created_at >= date_trunc('month', NOW() - INTERVAL '11 months')
+        GROUP BY 1 ORDER BY 1
+    """) or []
+    revenue_series.append({
+        "label": "Unidrop - Tienda Nube",
+        "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in drop_tn_series],
+    })
+
+    # Revenue Unidrop ML
+    drop_ml_series = _q(drop, """
+        SELECT date_trunc('month', "dateCreated")::date AS mes,
+               COALESCE(SUM("totalAmount"), 0)::float AS gmv
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "dateCreated" >= date_trunc('month', NOW() - INTERVAL '11 months')
+          AND status IN ('paid','confirmed','shipped','delivered')
+        GROUP BY 1 ORDER BY 1
+    """) or []
+    revenue_series.append({
+        "label": "Unidrop - Mercado Libre",
+        "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in drop_ml_series],
+    })
+
+    # Suscripciones Unidrop (rentabilidad pura - es revenue Unidrop, no GMV de dropshippers)
+    subs_series = _q(drop, """
+        SELECT date_trunc('month', "createdAt")::date AS mes,
+               COALESCE(SUM(amount), 0)::float AS revenue
+        FROM public."PaymentTransactionSubscription"
         WHERE "createdAt" >= date_trunc('month', NOW() - INTERVAL '11 months')
         GROUP BY 1 ORDER BY 1
-    """)
-    if drop_orders_series is None:
-        # fallback: contar por la tabla webhook
-        drop_orders_series = _q(drop, """
-            SELECT date_trunc('month', "createdAt")::date AS mes,
-                   COUNT(*)::float AS orders
-            FROM mercado_libre_dev."WebhookOrder"
-            WHERE "createdAt" >= date_trunc('month', NOW() - INTERVAL '11 months')
-            GROUP BY 1 ORDER BY 1
-        """) or []
+    """) or []
     revenue_series.append({
-        "label": "Unidrop - Ordenes procesadas",
-        "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in drop_orders_series],
+        "label": "Unidrop - Suscripciones MELI",
+        "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in subs_series],
     })
 
     # ---------- Salud de integraciones ----------
@@ -302,18 +340,24 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "hint": "Sobre todas las orders TN del mes",
     })
 
-    # MRR Unidrop estimado (subs activas * 25k aprox por defecto)
-    # mejor: cobros confirmados de PaymentTransactionSubscription mes
+    # MRR Unidrop real: cobros confirmados de PaymentTransactionSubscription en periodo.
+    # Schema correcto: public (NO mercado_libre_dev). Sin filtro de status — todos los
+    # rows en esta tabla son cobros ya procesados por Talo (no hay pending/failed acá).
     mrr_drop = _scalar(drop, """
-        SELECT COALESCE(SUM(amount),0)::float FROM mercado_libre_dev."PaymentTransactionSubscription"
+        SELECT COALESCE(SUM(amount),0)::float
+        FROM public."PaymentTransactionSubscription"
         WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
-          AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
+    """, win_params) or 0
+    subs_count_period = _scalar(drop, """
+        SELECT COUNT(*)::int
+        FROM public."PaymentTransactionSubscription"
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
     """, win_params) or 0
     cards.append({
         "label": "MRR Unidrop (mes)",
         "value": round(float(mrr_drop), 0),
         "prefix": "$ ",
-        "hint": "Cobros de suscripciones MELI",
+        "hint": f"{int(subs_count_period)} cobros de suscripcion MELI confirmados",
     })
 
     # Devoluciones mes (Unidev)
@@ -340,12 +384,18 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "hint": f"$ {dev_amount:,.0f} en monto" if dev_amount else "",
     })
 
-    # ---------- Revenue mix (todas las fuentes) ----------
+    # ---------- Revenue mix por unidad y canal ----------
+    # Talo es procesador, NO revenue propio (ya esta reflejado en gmv_drop_tn + gmv_drop_ml).
+    # Las 5 lineas son las fuentes de plata reales:
+    #   - 2 retail Unistore (TN propia + MELI Fox Electronics)
+    #   - 2 dropship Unidrop (TN dropshippers + MELI dropshippers)
+    #   - 1 suscripcion Unidrop (rentable, separado por concepto)
     revenue_mix = [
-        {"category": "TN orders (Unistore)", "value": round(float(gmv_uni_tn), 0)},
-        {"category": "ML orders (Unistore)", "value": round(float(gmv_uni_ml), 0)},
-        {"category": "Talo pagos (Unidrop)", "value": round(float(talo_amount or 0), 0)},
-        {"category": "Subs MELI (Unidrop)", "value": round(float(mrr_drop), 0)},
+        {"category": "TN Unistore (retail propio)", "value": round(float(gmv_uni_tn), 0)},
+        {"category": "ML Unistore (Fox Electronics)", "value": round(float(gmv_uni_ml), 0)},
+        {"category": "TN Unidrop (dropshippers)", "value": round(float(gmv_drop_tn), 0)},
+        {"category": "ML Unidrop (dropshippers)", "value": round(float(gmv_drop_ml), 0)},
+        {"category": "Suscripciones MELI (Unidrop)", "value": round(float(mrr_drop), 0)},
     ]
 
     # ---------- Health por unidad ----------
@@ -388,8 +438,10 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "label": "Unidrop",
         "color": "#a259ff",
         "metrics": [
+            {"label": "GMV TN (dropshippers)", "value": round(float(gmv_drop_tn), 0), "prefix": "$ "},
+            {"label": "GMV ML (dropshippers)", "value": round(float(gmv_drop_ml), 0), "prefix": "$ "},
+            {"label": "MRR suscripciones", "value": round(float(mrr_drop), 0), "prefix": "$ "},
             {"label": "Suscripciones activas", "value": int(subs_drop)},
-            {"label": "MRR mes", "value": round(float(mrr_drop), 0), "prefix": "$ "},
             {"label": "Usuarios nuevos mes", "value": int(new_users_drop)},
             {"label": "Vencen <15d", "value": int(expiring_soon)},
         ],
