@@ -247,16 +247,16 @@ function AbcSection({ qs }: { qs: string }) {
     staleTime: 60_000,
   });
 
-  if (isLoading || !data) return <SectionLoader />;
-
-  // Aplico SIEMPRE el filtro Producto/Servicio antes de filtrar por clase A/B/C
-  const skusByType = applyTypeFilter(data.skus, ctx.productType);
+  // Aplico SIEMPRE el filtro Producto/Servicio antes de filtrar por clase A/B/C.
+  // IMPORTANTE: el call a useSkuEnrichment va ANTES del early return - las
+  // hooks no pueden ser condicionales (React error #310 si lo intentamos).
+  const skusByType = data ? applyTypeFilter(data.skus, ctx.productType) : [];
   const visible = filter === "all" ? skusByType : skusByType.filter((s) => s.clase === filter);
-
-  // Enriquecimiento con thumbnails (primeros 80 SKUs visibles para no spamear)
   const skuList = visible.slice(0, 80).map((s) => s.sku).filter(Boolean);
   const enriched = useSkuEnrichment("unistore", skuList);
   const enrichMap = enriched.data ?? {};
+
+  if (isLoading || !data) return <SectionLoader />;
 
   return (
     <>
