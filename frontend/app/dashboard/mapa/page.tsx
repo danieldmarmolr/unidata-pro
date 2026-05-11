@@ -10,8 +10,7 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { ComposableMap, Geographies, Geography } from "react-simple-maps";
-import { geoMercator } from "d3-geo";
+import { geoMercator, geoPath } from "d3-geo";
 import { X } from "lucide-react";
 import { useSkuEnrichment } from "@/lib/use-sku-enrichment";
 import { SkuRow } from "@/components/sku-row";
@@ -355,15 +354,36 @@ function ArgentinaMap({
   metric: Metric;
   fmtMetric: (v: number) => string;
 }) {
-  // Proyeccion: Mercator ajustada al canvas via fitSize sobre el geojson cargado.
-  // Esto garantiza que la silueta completa de Argentina entre exactamente en
-  // el viewBox sin importar la resolucion del cliente.
+  // Canvas. Argentina es alta (~33 grados de latitud) y angosta (~20 lon).
   const W = 600;
   const H = 820;
-  const projection = useMemo(
-    () => geoMercator().fitSize([W, H], geoData as any),
-    [geoData],
-  );
+
+  // Proyeccion calculada de forma EXPLICITA - no usamos fitSize() porque
+  // en build de produccion de Next 16 / Turbopack el resultado colapsaba a
+  // un solo rectangulo. Calculamos bounds proyectados con scale=1 y
+  // derivamos scale + translate manualmente.
+  const { pathGen, fc } = useMemo(() => {
+    // Filtramos features con geometria valida para evitar NaN en bounds
+    const fc = {
+      type: "FeatureCollection" as const,
+      features: geoData.features.filter((f) => !!f.geometry),
+    };
+    const baseProj = geoMercator()
+      .scale(1)
+      .translate([0, 0])
+      .center([0, 0]);
+    const basePath = geoPath(baseProj);
+    const [[x0, y0], [x1, y1]] = basePath.bounds(fc as any);
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    // 0.96 deja un pequeno margen interno
+    const scale = (0.96 * Math.min(W / dx, H / dy)) || 1;
+    const tx = (W - scale * (x1 + x0)) / 2;
+    const ty = (H - scale * (y1 + y0)) / 2;
+    const proj = geoMercator().scale(scale).translate([tx, ty]).center([0, 0]);
+    const path = geoPath(proj);
+    return { pathGen: path, fc };
+  }, [geoData]);
 
   return (
     <div
@@ -373,10 +393,9 @@ function ArgentinaMap({
       }}
       onMouseLeave={() => onHover(null)}
     >
-      <ComposableMap
-        projection={projection as any}
-        width={W}
-        height={H}
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="xMidYMid meet"
         style={{
           width: "100%",
           height: "auto",
@@ -384,44 +403,78 @@ function ArgentinaMap({
           display: "block",
         }}
       >
-        <Geographies geography={geoData as any}>
-          {({ geographies }: { geographies: any[] }) =>
-            geographies.map((geo: any) => {
-              const name = geo.properties?.NAME_1 ?? "";
-              const value = valueByProvince.get(name) ?? 0;
-              const isSelected = selectedProvince === name;
-              const isHover = hoverProvince?.name === name;
-              const fill = isHover
-                ? "#a259ff"
-                : isSelected
-                  ? "#5d2d8e"
-                  : colorScale(value, maxValue);
-              const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
-              return (
-                <Geography
-                  key={geo.rsmKey || name}
-                  geography={geo}
-                  fill={fill}
-                  stroke={stroke}
-                  strokeWidth={isSelected ? 1.8 : 0.6}
-                  style={{
-                    default: { outline: "none", cursor: "pointer", transition: "fill 150ms ease" },
-                    hover: { outline: "none", cursor: "pointer", fill: "#a259ff" },
-                    pressed: { outline: "none" },
-                  }}
-                  onClick={() => onSelect(name)}
-                  onMouseEnter={(e: React.MouseEvent) =>
-                    onHover({ name, value, x: e.clientX, y: e.clientY })
-                  }
-                  onMouseMove={(e: React.MouseEvent) =>
-                    onHover({ name, value, x: e.clientX, y: e.clientY })
-                  }
-                />
-              );
-            })
-          }
-        </Geographies>
-      </ComposableMap>
+        {/* Provincias */}
+        <g>
+          {fc.features.map((f, i) => {
+            const name = f.properties?.NAME_1 ?? "";
+            const value = valueByProvince.get(name) ?? 0;
+            const isSelected = selectedProvince === name;
+            const isHover = hoverProvince?.name === name;
+            const d = pathGen(f as any);
+            if (!d) return null;
+            const fill = isHover
+              ? "#a259ff"
+              : isSelected
+                ? "#5d2d8e"
+                : colorScale(value, maxValue);
+            const stroke = isSelected ? "#5d2d8e" : "#7a8aa1";
+            return (
+              <path
+                key={`prov-${i}`}
+                d={d}
+                fill={fill}
+                stroke={stroke}
+                strokeWidth={isSelected ? 1.8 : 0.6}
+                strokeLinejoin="round"
+                style={{ cursor: "pointer", transition: "fill 150ms ease" }}
+                onClick={() => onSelect(name)}
+                onMouseEnter={(e) =>
+                  onHover({ name, value, x: e.clientX, y: e.clientY })
+                }
+                onMouseMove={(e) =>
+                  onHover({ name, value, x: e.clientX, y: e.clientY })
+                }
+              />
+            );
+          })}
+        </g>
+
+        {/* Labels: solo provincias grandes */}
+        <g pointerEvents="none">
+          {fc.features.map((f, i) => {
+            const name = f.properties?.NAME_1 ?? "";
+            const value = valueByProvince.get(name) ?? 0;
+            const bounds = pathGen.bounds(f as any);
+            const w = bounds[1][0] - bounds[0][0];
+            const h = bounds[1][1] - bounds[0][1];
+            if (!Number.isFinite(w) || !Number.isFinite(h) || w < 32 || h < 32) return null;
+            const c = pathGen.centroid(f as any);
+            if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return null;
+            const isDark = value > 0 && value / Math.max(maxValue, 1) > 0.4;
+            const fontSize = Math.min(11, Math.max(8, Math.min(w, h) / 6));
+            return (
+              <text
+                key={`lbl-${i}`}
+                x={c[0]}
+                y={c[1]}
+                textAnchor="middle"
+                style={{
+                  fontFamily: "Inter, system-ui, sans-serif",
+                  fontSize,
+                  fontWeight: 700,
+                  fill: isDark ? "#fff" : "#1f1235",
+                  paintOrder: "stroke",
+                  stroke: isDark ? "rgba(0,0,0,0.4)" : "rgba(255,255,255,0.85)",
+                  strokeWidth: 2.4,
+                  strokeLinejoin: "round",
+                }}
+              >
+                {name}
+              </text>
+            );
+          })}
+        </g>
+      </svg>
 
       {/* Tooltip flotante */}
       {hoverProvince && (
