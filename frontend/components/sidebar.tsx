@@ -36,6 +36,8 @@ import {
   Settings,
   Target,
   Warehouse,
+  Repeat,
+  AlertTriangle,
   X,
 } from "lucide-react";
 
@@ -69,9 +71,11 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ONLY_GERENCIA,
     children: [
-      { label: "Vista general",       href: "/dashboard/cs",       icon: HeartHandshake },
-      { label: "Cohortes",            href: "/dashboard/cohortes", icon: Users          },
-      { label: "Segmentacion RFM",    href: "/dashboard/rfm",      icon: Target         },
+      { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
+      { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
+      { label: "Segmentacion RFM",    href: "/dashboard/rfm",        icon: Target         },
+      { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows", icon: Repeat        },
+      { label: "NLP Cancelaciones",     href: "/dashboard/cancel-nlp", icon: AlertTriangle },
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
@@ -85,6 +89,7 @@ const ITEMS: NavItem[] = [
       { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
       { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
       { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles    },
+      { label: "Forecast demanda",    href: "/dashboard/forecast",            icon: TrendingUp  },
       { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
     ],
   },

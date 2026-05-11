@@ -7,6 +7,7 @@ import { ScanBarcode } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
 import { SkuSearchBox } from "@/components/sku-search-box";
+import { SmartSearch } from "@/components/smart-search";
 import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
 import { CategoryTable } from "@/components/generic-table";
@@ -78,26 +79,9 @@ export default function ProductosPage() {
           title="Comparador HOY · Productos"
         />
 
-        {/* Buscador SKU / EAN */}
-        <div className="mb-6 bg-gradient-to-r from-primary/5 to-accent/5 border border-primary/20 rounded-xl p-4">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center flex-shrink-0">
-              <ScanBarcode size={18} />
-            </div>
-            <div className="flex-1">
-              <div className="text-sm font-bold text-text mb-0.5">Buscar SKU o escanear EAN</div>
-              <div className="text-[11px] text-text-muted mb-2">
-                Tipea SKU o escanea EAN — UNIDATA lo resuelve y abre el detalle del producto.
-              </div>
-              <SkuSearchBox
-                unit="unistore"
-                placeholder="Ej: 10IVA21 (SKU) o 1000010800002 (EAN)"
-                onSkuSelected={(sku) =>
-                  router.push(`/dashboard/productos/${encodeURIComponent(sku)}`)
-                }
-              />
-            </div>
-          </div>
+        {/* Buscador SKU / EAN con autocomplete + dropdown de matches */}
+        <div className="mb-6">
+          <SmartSearch mode="skus" unit="unistore" variant="hero" />
         </div>
 
         {error && (

@@ -17,6 +17,7 @@ import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { OrderDetailModal } from "@/components/order-detail-modal";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
+import { SmartSearch } from "@/components/smart-search";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
@@ -108,6 +109,15 @@ export default function CustomerSuccessPage() {
  <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">
  Error: {(error as Error).message}
  </div>
+ )}
+
+ {/* Buscador rapido de cliente arriba del dashboard - el flow tipico de
+     CS es 'tengo un caso de un cliente, buscar su perfil para entender
+     el contexto antes de responder'. */}
+ {unit === "unistore" && (
+   <div className="mb-6">
+     <SmartSearch mode="customers" unit="unistore" variant="hero" />
+   </div>
  )}
 
  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">

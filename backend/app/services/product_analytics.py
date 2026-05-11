@@ -27,33 +27,58 @@ log = logging.getLogger("unidata.product_analytics")
 # ABC clasification (Pareto 80/15/5 por revenue)
 # ============================================================
 
-def abc_analysis(period: str = "90d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+def abc_analysis(period: str = "90d", from_iso: str | None = None, to_iso: str | None = None, unit: str = "unistore") -> dict:
     """Clasifica SKUs en A/B/C segun acumulado de revenue (Pareto).
 
     - A: hasta 80% acumulado
     - B: 80-95% acumulado
     - C: 95-100% acumulado (cola larga)
+
+    unit:
+      - unistore: ventas TN del retail (tienda_nube.OrderItem)
+      - unidrop:  ventas TN dropshippers (public.tienda_nube_order_items + tienda_nube_orders)
     """
-    eng = get_engine("unistore")
     days = resolve_window(period, from_iso, to_iso)["days"]
 
-    rows = q(eng, """
-        SELECT oi.sku,
-               MAX(oi.name) AS nombre,
-               COALESCE(MAX(pv.barcode), '') AS ean,
-               SUM(oi.quantity * oi.price)::float AS revenue,
-               SUM(oi.quantity)::int AS unidades,
-               COUNT(DISTINCT oi."orderId")::int AS ordenes,
-               COUNT(DISTINCT o."customerId")::int AS clientes
-        FROM tienda_nube."OrderItem" oi
-        JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-        LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = oi.sku
-        WHERE o."paymentStatus" = 'paid'
-          AND o."createdAt" >= NOW() - make_interval(days => :d)
-          AND oi.sku IS NOT NULL
-        GROUP BY oi.sku
-        ORDER BY revenue DESC NULLS LAST
-    """, {"d": days}) or []
+    if unit == "unidrop":
+        eng = get_engine("unidrop")
+        # Schema unidrop_api: public.tienda_nube_orders (denormalizada) +
+        # public.tienda_nube_order_items.
+        rows = q(eng, """
+            SELECT oi.sku,
+                   MAX(oi.name) AS nombre,
+                   '' AS ean,
+                   SUM(oi.quantity * oi.price)::float AS revenue,
+                   SUM(oi.quantity)::int AS unidades,
+                   COUNT(DISTINCT oi.order_id)::int AS ordenes,
+                   COUNT(DISTINCT tno.contact_identification)::int AS clientes
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :d)
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku
+            ORDER BY revenue DESC NULLS LAST
+        """, {"d": days}) or []
+    else:
+        eng = get_engine("unistore")
+        rows = q(eng, """
+            SELECT oi.sku,
+                   MAX(oi.name) AS nombre,
+                   COALESCE(MAX(pv.barcode), '') AS ean,
+                   SUM(oi.quantity * oi.price)::float AS revenue,
+                   SUM(oi.quantity)::int AS unidades,
+                   COUNT(DISTINCT oi."orderId")::int AS ordenes,
+                   COUNT(DISTINCT o."customerId")::int AS clientes
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = oi.sku
+            WHERE o."paymentStatus" = 'paid'
+              AND o."createdAt" >= NOW() - make_interval(days => :d)
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku
+            ORDER BY revenue DESC NULLS LAST
+        """, {"d": days}) or []
 
     total_rev = sum(float(r[3] or 0) for r in rows) or 1.0
 

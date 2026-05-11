@@ -370,6 +370,9 @@ from app.services import notifications as notif_svc
 from app.services import customer_vip as vip_svc
 from app.services import product_analytics as prod_analytics_svc
 from app.services import sku_optimizer as sku_opt_svc
+from app.services import rfm_flows as rfm_flows_svc
+from app.services import forecast_batch as forecast_svc
+from app.services import cancel_nlp as cancel_nlp_svc
 
 
 @router.get("/sku-optimizer")
@@ -383,15 +386,53 @@ def get_sku_optimizer(_: Annotated[str, Depends(current_user)]) -> dict:
     return _b()
 
 
+@router.get("/rfm-flows")
+def get_rfm_flows(_: Annotated[str, Depends(current_user)]) -> dict:
+    """Migracion de segmentos RFM mes a mes (Sankey).
+    Devuelve transiciones from->to + alertas de fuga y reactivacion."""
+    key = "rfm-flows-v1"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return rfm_flows_svc.rfm_flows_mom()
+    return _b()
+
+
+@router.get("/forecast-batch")
+def get_forecast_batch(
+    _: Annotated[str, Depends(current_user)],
+    top_n: Annotated[int, Query(ge=10, le=500)] = 100,
+) -> dict:
+    """Forecast batch: prediccion 30d/60d para top SKUs por demanda.
+    Devuelve PO sugerida si stock < forecast. Metodo: velocidad 90d + tendencia."""
+    key = f"forecast-batch:{top_n}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return forecast_svc.forecast_all_skus(top_n=top_n)
+    return _b()
+
+
+@router.get("/cancel-nlp")
+def get_cancel_nlp(_: Annotated[str, Depends(current_user)]) -> dict:
+    """Clustering simple de motivos de cancelacion (90d).
+    Cruza cancel_reason enum + lexicon manual sobre notas libres."""
+    key = "cancel-nlp-v1"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return cancel_nlp_svc.cancellations_analysis()
+    return _b()
+
+
 @router.get("/products/abc")
 def get_products_abc(
     _: Annotated[str, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
-    """Clasificacion ABC (Pareto 80/15/5) por revenue."""
-    return prod_analytics_svc.abc_analysis(period, from_iso, to_iso)
+    """Clasificacion ABC (Pareto 80/15/5) por revenue.
+    unit=unistore: TN del retail. unit=unidrop: TN de dropshippers."""
+    return prod_analytics_svc.abc_analysis(period, from_iso, to_iso, unit=unit)
 
 
 @router.get("/products/abc-xyz")
