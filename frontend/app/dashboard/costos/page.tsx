@@ -1,13 +1,13 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { Segmented } from "@/components/segmented";
 import { api, getToken, getUser } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { UploadCloud, Trash2, RefreshCcw, AlertCircle } from "lucide-react";
+import { UploadCloud, Trash2, RefreshCcw, AlertCircle, ChevronDown, ChevronRight, Filter } from "lucide-react";
 
 type Lote = {
   id: number;
@@ -231,13 +231,114 @@ function SkusTab({
 }
 
 // ============================================================
-// LOTES TAB
+// LOTES TAB - con filas expandibles y filtro por proveedor
 // ============================================================
+type LoteDetail = {
+  lote: { id: number; lote: string; proveedor: string | null; fecha_ingreso: string | null; origen: string | null; envio: string | null };
+  items: Array<{
+    sku: string;
+    producto: string | null;
+    categoria: string | null;
+    cantidad: number | null;
+    costo_total_sin_iva_usd: number | null;
+    costo_con_iva_usd: number | null;
+    precio_ars: number | null;
+    pct_rentabilidad: number | null;
+  }>;
+};
+
+function LoteRowExpanded({ loteId }: { loteId: number }) {
+  const { data, isLoading } = useQuery<LoteDetail>({
+    queryKey: ["costs", "lote", loteId],
+    queryFn: () => api<LoteDetail>(`/api/costs/lotes/${loteId}`),
+  });
+
+  if (isLoading) return <div className="px-6 py-4 text-xs text-text-muted">Cargando SKUs...</div>;
+  if (!data?.items?.length) return <div className="px-6 py-4 text-xs text-text-muted">Sin items en el lote.</div>;
+
+  // Total del lote (suma de cantidades y de costo total s/iva)
+  const totalUnidades = data.items.reduce((acc, it) => acc + (it.cantidad ?? 0), 0);
+  const totalUsdSinIva = data.items.reduce((acc, it) => acc + (it.costo_total_sin_iva_usd ?? 0), 0);
+
+  return (
+    <div className="bg-soft/40 border-t border-border">
+      <div className="px-6 py-3 text-[11px] text-text-muted flex items-center gap-4 flex-wrap">
+        <span><strong className="text-text">{data.items.length}</strong> SKUs</span>
+        <span><strong className="text-text">{formatNumber(totalUnidades)}</strong> unidades en el lote</span>
+        <span>Costo total s/IVA: <strong className="text-text">US$ {totalUsdSinIva.toLocaleString("es-AR", { maximumFractionDigits: 2 })}</strong></span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <th className="px-4 py-2">SKU</th>
+              <th className="px-4 py-2">Producto</th>
+              <th className="px-4 py-2">Categoria</th>
+              <th className="px-4 py-2 text-right">Cant.</th>
+              <th className="px-4 py-2 text-right">Costo total s/IVA (USD)</th>
+              <th className="px-4 py-2 text-right">Costo unit. s/IVA (USD)</th>
+              <th className="px-4 py-2 text-right">Costo c/IVA (USD)</th>
+              <th className="px-4 py-2 text-right">Precio sug. ARS</th>
+              <th className="px-4 py-2 text-right">% Rent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.items.map((it) => {
+              const unit = it.cantidad && it.cantidad > 0 && it.costo_total_sin_iva_usd
+                ? it.costo_total_sin_iva_usd / it.cantidad
+                : null;
+              return (
+                <tr key={it.sku} className="border-t border-border/60 hover:bg-white transition">
+                  <td className="px-4 py-1.5 font-mono font-semibold">
+                    <Link href={`/dashboard/productos/${encodeURIComponent(it.sku)}`} className="hover:text-primary">
+                      {it.sku}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-1.5 text-text-muted truncate max-w-[260px]" title={it.producto ?? ""}>{it.producto || "—"}</td>
+                  <td className="px-4 py-1.5 text-text-muted">{it.categoria || "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.cantidad ?? "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.costo_total_sin_iva_usd?.toLocaleString("es-AR", { maximumFractionDigits: 2 }) ?? "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums font-semibold text-primary">{unit !== null ? unit.toFixed(2) : "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.costo_con_iva_usd?.toLocaleString("es-AR", { maximumFractionDigits: 2 }) ?? "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.precio_ars ? formatCurrency(it.precio_ars) : "—"}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums">{it.pct_rentabilidad !== null ? `${it.pct_rentabilidad.toFixed(0)}%` : "—"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => void }) {
   const { data, isLoading } = useQuery<Lote[]>({
     queryKey: ["costs", "lotes"],
     queryFn: () => api<Lote[]>("/api/costs/lotes"),
   });
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [proveedorFilter, setProveedorFilter] = useState<string>("");
+
+  const proveedores = useMemo(() => {
+    const set = new Set<string>();
+    (data ?? []).forEach((l) => { if (l.proveedor) set.add(l.proveedor); });
+    return Array.from(set).sort();
+  }, [data]);
+
+  const filtered = useMemo(() => {
+    if (!proveedorFilter) return data ?? [];
+    return (data ?? []).filter((l) => l.proveedor === proveedorFilter);
+  }, [data, proveedorFilter]);
+
+  function toggleExpand(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function deleteLote(l: Lote) {
     if (!confirm(`Eliminar lote "${l.lote}" con ${l.items_count} items? Esta accion no se puede deshacer.`)) return;
@@ -251,16 +352,52 @@ function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => v
 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
+      {/* Filtros */}
+      <div className="p-4 border-b border-border flex items-center gap-3 flex-wrap">
+        <Filter size={14} className="text-text-muted" />
+        <span className="text-xs text-text-muted font-semibold">Proveedor:</span>
+        <button
+          onClick={() => setProveedorFilter("")}
+          className={`px-3 py-1 text-xs rounded-full border transition ${
+            proveedorFilter === ""
+              ? "bg-primary text-white border-primary"
+              : "bg-surface border-border hover:border-primary/40 text-text-muted"
+          }`}
+        >
+          Todos ({data?.length ?? 0})
+        </button>
+        {proveedores.map((p) => {
+          const count = (data ?? []).filter((l) => l.proveedor === p).length;
+          return (
+            <button
+              key={p}
+              onClick={() => setProveedorFilter(p)}
+              className={`px-3 py-1 text-xs rounded-full border transition ${
+                proveedorFilter === p
+                  ? "bg-primary text-white border-primary"
+                  : "bg-surface border-border hover:border-primary/40 text-text-muted"
+              }`}
+            >
+              {p} ({count})
+            </button>
+          );
+        })}
+        <div className="ml-auto text-xs text-text-muted">
+          {filtered.length} lote{filtered.length === 1 ? "" : "s"} visible{filtered.length === 1 ? "" : "s"}
+        </div>
+      </div>
+
       {isLoading ? (
         <div className="p-12 text-center text-text-muted text-sm">Cargando...</div>
-      ) : !data?.length ? (
+      ) : !filtered.length ? (
         <div className="p-12 text-center text-text-muted text-sm">
-          Aun no hay lotes importados. Ir a la tab \"Importar\".
+          {proveedorFilter ? "Sin lotes para este proveedor." : "Aun no hay lotes importados. Ir a la tab \"Importar\"."}
         </div>
       ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted bg-soft">
+              <th className="px-2 py-2 w-8"></th>
               <th className="px-4 py-2">Lote</th>
               <th className="px-4 py-2">Proveedor</th>
               <th className="px-4 py-2">Fecha ingreso</th>
@@ -273,31 +410,49 @@ function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => v
             </tr>
           </thead>
           <tbody>
-            {data.map((l) => (
-              <tr key={l.id} className="border-t border-border hover:bg-soft transition">
-                <td className="px-4 py-2 font-mono font-semibold">{l.lote}</td>
-                <td className="px-4 py-2">{l.proveedor || "—"}</td>
-                <td className="px-4 py-2 text-text-muted">{l.fecha_ingreso || "—"}</td>
-                <td className="px-4 py-2 text-text-muted">{l.origen || "—"}</td>
-                <td className="px-4 py-2 text-text-muted">{l.envio || "—"}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatNumber(l.items_count)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatNumber(l.skus)}</td>
-                <td className="px-4 py-2 text-xs text-text-muted">
-                  <div>{l.imported_by}</div>
-                  <div className="text-[10px]">{new Date(l.imported_at).toLocaleString("es-AR")}</div>
-                </td>
-                <td className="px-4 py-2">
-                  {isAdmin && (
-                    <button
-                      onClick={() => deleteLote(l)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-error hover:bg-red-50"
-                    >
-                      <Trash2 size={12} /> Eliminar
-                    </button>
+            {filtered.map((l) => {
+              const isOpen = expanded.has(l.id);
+              return (
+                <Fragment key={l.id}>
+                  <tr
+                    className="border-t border-border hover:bg-soft transition cursor-pointer"
+                    onClick={() => toggleExpand(l.id)}
+                  >
+                    <td className="px-2 py-2 text-text-muted">
+                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                    </td>
+                    <td className="px-4 py-2 font-mono font-semibold">{l.lote}</td>
+                    <td className="px-4 py-2">{l.proveedor || "—"}</td>
+                    <td className="px-4 py-2 text-text-muted">{l.fecha_ingreso || "—"}</td>
+                    <td className="px-4 py-2 text-text-muted">{l.origen || "—"}</td>
+                    <td className="px-4 py-2 text-text-muted">{l.envio || "—"}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(l.items_count)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums">{formatNumber(l.skus)}</td>
+                    <td className="px-4 py-2 text-xs text-text-muted">
+                      <div>{l.imported_by}</div>
+                      <div className="text-[10px]">{new Date(l.imported_at).toLocaleString("es-AR")}</div>
+                    </td>
+                    <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
+                      {isAdmin && (
+                        <button
+                          onClick={() => deleteLote(l)}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-error hover:bg-red-50"
+                        >
+                          <Trash2 size={12} /> Eliminar
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                  {isOpen && (
+                    <tr className="bg-soft/30">
+                      <td colSpan={10} className="p-0">
+                        <LoteRowExpanded loteId={l.id} />
+                      </td>
+                    </tr>
                   )}
-                </td>
-              </tr>
-            ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       )}

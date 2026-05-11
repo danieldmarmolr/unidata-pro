@@ -26,6 +26,7 @@ type CostInfo = {
   usd_rate: number | null;
   margen_estimado_lifetime?: number;
   margen_pct?: number;
+  margen_warning?: string;
 } | null;
 
 type Detail = {
@@ -147,11 +148,9 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div>
-                <div className="text-xs text-text-muted">Marca</div>
-                <div className="font-semibold">{data.product_info.brand || "—"}</div>
-              </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+              {/* Marca oculta: la data esta rota (todos los productos vienen como '(sin marca)').
+                  Cuando se corrija el sourcing en TN/digip se vuelve a habilitar. */}
               <div>
                 <div className="text-xs text-text-muted">Precio actual</div>
                 <div className="font-semibold">$ {data.product_info.price.toLocaleString("es-AR")}</div>
@@ -215,7 +214,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
                 <div className="text-[10px] text-text-muted">@ USD venta $ {data.cost_info.usd_rate.toFixed(2)} BNA</div>
               )}
             </div>
-            {typeof data.cost_info.margen_estimado_lifetime === "number" && (
+            {typeof data.cost_info.margen_estimado_lifetime === "number" ? (
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Margen estimado lifetime</div>
                 <div className={`font-bold ${data.cost_info.margen_estimado_lifetime >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
@@ -225,7 +224,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
                   )}
                 </div>
               </div>
-            )}
+            ) : data.cost_info.margen_warning ? (
+              <div className="max-w-md">
+                <div className="text-[10px] uppercase tracking-wider text-amber-700 font-bold">Margen lifetime</div>
+                <div className="text-xs text-amber-700">{data.cost_info.margen_warning}</div>
+              </div>
+            ) : null}
           </div>
         )}
 

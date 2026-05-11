@@ -34,7 +34,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex min-h-screen">
+    // h-screen + overflow-hidden hace que la layout ocupe exacto el viewport
+    // y no scrollee el body. Sidebar y main son ambos h=viewport. El scroll
+    // queda en el div interno con overflow-y-auto de cada pagina, asi el
+    // sidebar morado y el topbar quedan SIEMPRE fijos al hacer scroll.
+    <div className="flex h-screen overflow-hidden">
       <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
 
       {/* Boton hamburger fijo (solo mobile) */}
@@ -47,7 +51,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Menu size={20} />
       </button>
 
-      <main className="flex-1 flex flex-col min-w-0 lg:pt-0 pt-14">{children}</main>
+      <main className="flex-1 flex flex-col min-w-0 lg:pt-0 pt-14 h-screen overflow-hidden">{children}</main>
     </div>
   );
 }

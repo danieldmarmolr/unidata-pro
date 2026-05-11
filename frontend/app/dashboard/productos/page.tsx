@@ -135,16 +135,8 @@ export default function ProductosPage() {
                 ]}
                 onRowClick={goSku}
               />
-              <CategoryTable
-                caption="Top 10 marcas"
-                subtitle="Revenue + productos distintos vendidos"
-                data={data.top_brands}
-                formatter="currency"
-                extraColumns={[
-                  { key: "productos", label: "Productos", format: "number" },
-                  { key: "units", label: "Unid", format: "number" },
-                ]}
-              />
+              {/* Top 10 marcas oculto: la data esta rota (todas las filas vienen como '(sin marca)').
+                  Cuando se corrija el sourcing de marcas en TN/digip se vuelve a habilitar. */}
             </>
           )}
         </div>
@@ -176,7 +168,7 @@ export default function ProductosPage() {
                 formatter="number"
                 extraColumns={[
                   { key: "sku", label: "SKU", format: "raw" },
-                  { key: "brand", label: "Marca", format: "raw" },
+                  { key: "stock", label: "Stock", format: "number" },
                 ]}
                 showProgress={false}
                 onRowClick={goSku}
