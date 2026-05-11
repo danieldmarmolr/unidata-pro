@@ -2,7 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { Zap, Package, AlertTriangle, TrendingDown, TrendingUp, DollarSign } from "lucide-react";
+import { useState } from "react";
+import { Zap, Package, AlertTriangle, TrendingDown, TrendingUp, DollarSign, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
@@ -37,12 +38,17 @@ type OptimizerResp = {
   };
 };
 
+type FilterKey = "combos" | "reposiciones" | "liquidar" | "pricing";
+
 export default function SkuOptimizerPage() {
   const { data, isLoading } = useQuery<OptimizerResp>({
     queryKey: ["sku-optimizer"],
     queryFn: () => api("/api/dashboards/sku-optimizer"),
     staleTime: 5 * 60_000,
   });
+  const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
+  const toggle = (k: FilterKey) => setActiveFilter((cur) => (cur === k ? null : k));
+  const show = (k: FilterKey) => activeFilter === null || activeFilter === k;
 
   return (
     <>
@@ -68,14 +74,28 @@ export default function SkuOptimizerPage() {
           </div>
         </div>
 
-        {/* Summary cards */}
+        {/* Summary cards - actúan como filtros */}
         {data && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <SummaryCard icon={Package} label="Combos sugeridos" value={data.summary.combos_count} color="from-emerald-500 to-teal-500" />
-            <SummaryCard icon={AlertTriangle} label="Reposición urgente" value={data.summary.reposiciones_count} color="from-red-500 to-rose-500" />
-            <SummaryCard icon={TrendingDown} label="Liquidar/discontinuar" value={data.summary.liquidar_count} color="from-amber-500 to-orange-500" />
-            <SummaryCard icon={DollarSign} label="Subir precio" value={data.summary.pricing_count} color="from-blue-500 to-cyan-500" />
-          </div>
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <SummaryCard icon={Package} label="Combos sugeridos" value={data.summary.combos_count} color="from-emerald-500 to-teal-500" active={activeFilter === "combos"} onClick={() => toggle("combos")} />
+              <SummaryCard icon={AlertTriangle} label="Reposición urgente" value={data.summary.reposiciones_count} color="from-red-500 to-rose-500" active={activeFilter === "reposiciones"} onClick={() => toggle("reposiciones")} />
+              <SummaryCard icon={TrendingDown} label="Liquidar/discontinuar" value={data.summary.liquidar_count} color="from-amber-500 to-orange-500" active={activeFilter === "liquidar"} onClick={() => toggle("liquidar")} />
+              <SummaryCard icon={DollarSign} label="Subir precio" value={data.summary.pricing_count} color="from-blue-500 to-cyan-500" active={activeFilter === "pricing"} onClick={() => toggle("pricing")} />
+            </div>
+            <div className="mb-6 text-[11px] text-text-muted flex items-center gap-2">
+              {activeFilter ? (
+                <>
+                  <span>Mostrando solo: <strong className="text-text capitalize">{activeFilter}</strong>.</span>
+                  <button onClick={() => setActiveFilter(null)} className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-border hover:bg-soft transition">
+                    <X size={11} /> Limpiar filtro
+                  </button>
+                </>
+              ) : (
+                <span>Tocá una tarjeta para filtrar a esa sección.</span>
+              )}
+            </div>
+          </>
         )}
 
         {isLoading && (
@@ -89,6 +109,7 @@ export default function SkuOptimizerPage() {
         {data && (
           <div className="space-y-6">
             {/* COMBOS */}
+            {show("combos") && (
             <Section
               icon={Package}
               title="Combos sugeridos"
@@ -122,8 +143,10 @@ export default function SkuOptimizerPage() {
                 </div>
               )}
             </Section>
+            )}
 
             {/* REPOSICION */}
+            {show("reposiciones") && (
             <Section
               icon={AlertTriangle}
               title="Reposición urgente"
@@ -165,8 +188,10 @@ export default function SkuOptimizerPage() {
                 </table>
               )}
             </Section>
+            )}
 
             {/* LIQUIDAR */}
+            {show("liquidar") && (
             <Section
               icon={TrendingDown}
               title="Liquidar o discontinuar"
@@ -208,8 +233,10 @@ export default function SkuOptimizerPage() {
                 </table>
               )}
             </Section>
+            )}
 
             {/* PRICING */}
+            {show("pricing") && (
             <Section
               icon={DollarSign}
               title="Candidatos a subir precio"
@@ -249,6 +276,7 @@ export default function SkuOptimizerPage() {
                 </table>
               )}
             </Section>
+            )}
           </div>
         )}
       </div>
@@ -256,15 +284,22 @@ export default function SkuOptimizerPage() {
   );
 }
 
-function SummaryCard({ icon: Icon, label, value, color }: { icon: any; label: string; value: number; color: string }) {
+function SummaryCard({ icon: Icon, label, value, color, active, onClick }: { icon: any; label: string; value: number; color: string; active?: boolean; onClick?: () => void }) {
   return (
-    <div className="bg-surface border border-border rounded-xl p-4">
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "text-left bg-surface border rounded-xl p-4 transition cursor-pointer hover:shadow-md hover:-translate-y-0.5 " +
+        (active ? "border-primary ring-2 ring-primary/30 shadow-md" : "border-border")
+      }
+    >
       <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${color} text-white flex items-center justify-center shadow-md mb-2`}>
         <Icon size={18} />
       </div>
       <div className="text-2xl font-extrabold text-text tabular-nums">{value}</div>
-      <div className="text-[11px] text-text-muted">{label}</div>
-    </div>
+      <div className="text-[11px] text-text-muted">{label}{active ? " · filtrando" : ""}</div>
+    </button>
   );
 }
 
