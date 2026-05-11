@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { InteractiveMetricChart, type MetricDef } from "@/components/interactive-metric-chart";
 import { OrderDetailModal } from "@/components/order-detail-modal";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -270,10 +271,20 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
- <DailyRevenueChart
- points={data.monthly_trend}
- caption="Revenue mensual del customer"
- subtitle="Ordenes pagas · click en una orden abajo para expandir items"
+ <InteractiveMetricChart
+ points={data.monthly_trend as any[]}
+ metrics={[
+   { key: "revenue", label: "Revenue", kind: "currency", color: "#7a3eae" },
+   { key: "ordenes_pagas", label: "Órdenes pagas", kind: "number", color: "#10b981" },
+   { key: "units", label: "Unidades", kind: "number", color: "#0ea5e9" },
+   { key: "skus_distintos", label: "SKUs distintos", kind: "number", color: "#f59e0b" },
+   { key: "ticket_promedio", label: "Ticket promedio", kind: "currency", color: "#ec4899" },
+   { key: "ordenes_canceladas", label: "Cancelaciones", kind: "number", color: "#ef4444" },
+ ] satisfies MetricDef[]}
+ defaultPrimary="revenue"
+ defaultSecondary="ordenes_pagas"
+ caption="Evolución mensual"
+ subtitle="Elegí qué métrica ver como barras (eje izq) y opcionalmente otra como línea (eje der) · ej: Revenue + Ticket promedio para ver si subió el AOV"
  height={320}
  />
  )}

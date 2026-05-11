@@ -655,16 +655,29 @@ def customer_detail(customer_id: int) -> dict:
     } for r in rows]
 
     rows = q(eng, """
-        SELECT date_trunc('month', "createdAt")::date,
-               COUNT(*)::int,
-               SUM(CASE WHEN "paymentStatus"='paid' THEN total ELSE 0 END)::float
-        FROM tienda_nube."Order"
-        WHERE "customerId" = :cid
+        SELECT date_trunc('month', o."createdAt")::date AS mes,
+               COUNT(*)::int AS ordenes_total,
+               COUNT(*) FILTER (WHERE o."paymentStatus" = 'paid')::int AS ordenes_pagas,
+               COUNT(*) FILTER (WHERE o.status = 'cancelled')::int AS ordenes_canceladas,
+               COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN o.total ELSE 0 END),0)::float AS revenue,
+               COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN oi.quantity ELSE 0 END),0)::int AS units,
+               COUNT(DISTINCT oi.sku) FILTER (WHERE o."paymentStatus"='paid')::int AS skus_distintos
+        FROM tienda_nube."Order" o
+        LEFT JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
+        WHERE o."customerId" = :cid
         GROUP BY 1 ORDER BY 1
     """, {"cid": customer_id}) or []
     monthly_trend = [{
         "date": r[0].strftime("%Y-%m") if r[0] else "",
-        "value": float(r[2] or 0),
+        "value": float(r[4] or 0),  # revenue es la metrica default (backwards compat)
+        # Metricas adicionales para el chart interactivo:
+        "revenue": float(r[4] or 0),
+        "ordenes": int(r[1] or 0),
+        "ordenes_pagas": int(r[2] or 0),
+        "ordenes_canceladas": int(r[3] or 0),
+        "units": int(r[5] or 0),
+        "skus_distintos": int(r[6] or 0),
+        "ticket_promedio": round(float(r[4] or 0) / max(int(r[2] or 1), 1), 0),
     } for r in rows]
 
     return {
