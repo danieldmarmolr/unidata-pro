@@ -58,6 +58,7 @@ const ONLY_GERENCIA: Role[] = ["admin", "gerencia"];
 
 const ITEMS: NavItem[] = [
   { label: "Inicio",           href: "/dashboard/home",           icon: LayoutDashboard, group: "Principal", roles: ALL },
+  { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencial",        href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
   { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA },

@@ -315,6 +315,47 @@ def get_unidrop_end_consumer(
     return ec_unidrop_svc.end_consumer_detail_unidrop(dni)
 
 
+# ============================================================
+# BUSQUEDA DE CLIENTES Y DROPSHIPPERS
+# ============================================================
+from app.services import search_customers as search_svc
+
+
+@router.get("/search/unistore-customers")
+def search_unistore_customers(
+    _: Annotated[str, Depends(current_user)],
+    q: Annotated[str, Query(min_length=1, max_length=120)] = "",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "12m",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+    only_active: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    """Busqueda rapida de clientes Unistore por texto (nombre/email/tel/id).
+    Con period + only_active=true devuelve solo los que compraron en la ventana."""
+    return search_svc.search_unistore_customers(
+        q, period=period, from_iso=from_iso, to_iso=to_iso,
+        only_active_in_period=only_active, limit=limit,
+    )
+
+
+@router.get("/search/unidrop-dropshippers")
+def search_unidrop_dropshippers(
+    _: Annotated[str, Depends(current_user)],
+    q: Annotated[str, Query(min_length=1, max_length=120)] = "",
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "12m",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+    only_active: Annotated[bool, Query()] = False,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    """Busqueda rapida de dropshippers Unidrop por texto (nombre/fantasy/email/dni/cuit)."""
+    return search_svc.search_unidrop_dropshippers(
+        q, period=period, from_iso=from_iso, to_iso=to_iso,
+        only_active_in_period=only_active, limit=limit,
+    )
+
+
 from app.services import lotes_analytics as lotes_svc
 from app.services import cohorts_analytics as cohorts_svc
 from app.services import rfm_analytics as rfm_svc
