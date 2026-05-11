@@ -26,10 +26,12 @@ type Pricing = {
   precio_actual: number; precio_sugerido: number; accion: string; razon: string;
 };
 type OptimizerResp = {
+  unit?: "unistore" | "unidrop";
   combos: Combo[];
   reposiciones: Reposicion[];
   liquidar: Liquidar[];
   pricing: Pricing[];
+  notas?: Partial<Record<"combos" | "reposiciones" | "liquidar" | "pricing", string>>;
   summary: {
     combos_count: number;
     reposiciones_count: number;
@@ -39,11 +41,13 @@ type OptimizerResp = {
 };
 
 type FilterKey = "combos" | "reposiciones" | "liquidar" | "pricing";
+type Unit = "unistore" | "unidrop";
 
 export default function SkuOptimizerPage() {
+  const [unit, setUnit] = useState<Unit>("unistore");
   const { data, isLoading } = useQuery<OptimizerResp>({
-    queryKey: ["sku-optimizer"],
-    queryFn: () => api("/api/dashboards/sku-optimizer"),
+    queryKey: ["sku-optimizer", unit],
+    queryFn: () => api(`/api/dashboards/sku-optimizer?unit=${unit}`),
     staleTime: 5 * 60_000,
   });
   const [activeFilter, setActiveFilter] = useState<FilterKey | null>(null);
@@ -57,6 +61,28 @@ export default function SkuOptimizerPage() {
         subtitle="Recomendaciones accionables · combos · reposición urgente · liquidar · subir precio"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        {/* Unit selector: Unistore (retail propio) vs Unidrop (red de dropshippers) */}
+        <div className="mb-4 inline-flex bg-soft rounded-xl p-1 border border-border">
+          <button
+            onClick={() => setUnit("unistore")}
+            className={
+              "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
+              (unit === "unistore" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+            }
+          >
+            UNISTORE
+          </button>
+          <button
+            onClick={() => setUnit("unidrop")}
+            className={
+              "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
+              (unit === "unidrop" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+            }
+          >
+            UNIDROP
+          </button>
+        </div>
+
         {/* Intro */}
         <div className="bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 rounded-xl p-5 mb-6 flex items-start gap-3">
           <Zap size={20} className="text-violet-600 shrink-0 mt-0.5" />
@@ -149,8 +175,11 @@ export default function SkuOptimizerPage() {
             {show("reposiciones") && (
             <Section
               icon={AlertTriangle}
-              title="Reposición urgente"
-              subtitle="SKUs con < 14 días de stock al ritmo actual de venta — ordenar YA"
+              title={unit === "unidrop" ? "Top movers Unidrop · verificar stock Unistore" : "Reposición urgente"}
+              subtitle={unit === "unidrop"
+                ? "SKUs con mayor velocidad en la red de dropshippers · stock fisico vive en Unistore"
+                : "SKUs con < 14 días de stock al ritmo actual de venta — ordenar YA"}
+              note={data.notas?.reposiciones}
               color="red"
               exportFilename="sku_optimizer_reposicion"
               exportColumns={["SKU", "Nombre", "Unid 30d", "Vel. diaria", "Stock", "Días restantes", "Urgencia", "Acción"]}
@@ -177,9 +206,13 @@ export default function SkuOptimizerPage() {
                           <div className="text-[10px] font-mono text-text-muted">{r.sku}</div>
                         </td>
                         <td className="py-2 text-right tabular-nums">{r.daily_velocity}/día</td>
-                        <td className="py-2 text-right tabular-nums">{formatNumber(r.stock_actual)}</td>
                         <td className="py-2 text-right tabular-nums">
-                          <span className={r.days_left < 7 ? "text-red-600 font-bold" : "text-amber-700 font-bold"}>{r.days_left}d</span>
+                          {r.stock_actual < 0 ? <span className="text-text-muted italic text-xs">en Unistore</span> : formatNumber(r.stock_actual)}
+                        </td>
+                        <td className="py-2 text-right tabular-nums">
+                          {r.stock_actual < 0
+                            ? <span className="text-amber-700 text-xs">verificar</span>
+                            : <span className={r.days_left < 7 ? "text-red-600 font-bold" : "text-amber-700 font-bold"}>{r.days_left}d</span>}
                         </td>
                         <td className="py-2 pl-3 text-xs text-text-muted">{r.accion}</td>
                       </tr>
@@ -195,7 +228,10 @@ export default function SkuOptimizerPage() {
             <Section
               icon={TrendingDown}
               title="Liquidar o discontinuar"
-              subtitle="Ventas en caída con stock alto — liberar capital atado"
+              subtitle={unit === "unidrop"
+                ? "Ventas en caída en la red Unidrop — comunicar a dropshippers"
+                : "Ventas en caída con stock alto — liberar capital atado"}
+              note={data.notas?.liquidar}
               color="amber"
               exportFilename="sku_optimizer_liquidar"
               exportColumns={["SKU", "Nombre", "Unid 30d", "Unid 30d previo", "Stock", "% Cambio", "Acción"]}
@@ -226,7 +262,9 @@ export default function SkuOptimizerPage() {
                         <td className="py-2 text-right tabular-nums">
                           <span className="text-red-600 font-bold">{r.pct_change}%</span>
                         </td>
-                        <td className="py-2 text-right tabular-nums text-amber-700">{formatNumber(r.stock_actual)}</td>
+                        <td className="py-2 text-right tabular-nums text-amber-700">
+                          {r.stock_actual < 0 ? <span className="text-text-muted italic text-xs">en Unistore</span> : formatNumber(r.stock_actual)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -303,7 +341,7 @@ function SummaryCard({ icon: Icon, label, value, color, active, onClick }: { ico
   );
 }
 
-function Section({ icon: Icon, title, subtitle, color, exportFilename, exportColumns, exportRows, children }: any) {
+function Section({ icon: Icon, title, subtitle, color, exportFilename, exportColumns, exportRows, note, children }: any) {
   const colorMap: Record<string, string> = {
     emerald: "text-emerald-600 border-emerald-200",
     red: "text-red-600 border-red-200",
@@ -322,6 +360,11 @@ function Section({ icon: Icon, title, subtitle, color, exportFilename, exportCol
         </div>
         <ExportButtons filename={exportFilename} columns={exportColumns} rows={exportRows} />
       </div>
+      {note && (
+        <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[11px] text-amber-900 leading-relaxed">
+          <strong className="font-semibold">Nota Unidrop:</strong> {note}
+        </div>
+      )}
       {children}
     </div>
   );

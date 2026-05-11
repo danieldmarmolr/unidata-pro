@@ -392,13 +392,18 @@ def get_sku_omnichannel(
 
 
 @router.get("/sku-optimizer")
-def get_sku_optimizer(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_sku_optimizer(
+    _: Annotated[str, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+) -> dict:
     """SKU Optimizer: combos + reposicion urgente + liquidar + pricing.
-    Recomendaciones accionables cruzando cross-sell + lifecycle + stock."""
-    key = "sku-optimizer-v1"
+    unit=unistore (default): TN retail + digip stock.
+    unit=unidrop: TN de dropshippers; reposicion y liquidar referencian
+    stock de Unistore (no propio)."""
+    key = f"sku-optimizer-{unit}-v1"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return sku_opt_svc.sku_optimizer_overview()
+        return sku_opt_svc.sku_optimizer_overview(unit=unit)
     return _b()
 
 
