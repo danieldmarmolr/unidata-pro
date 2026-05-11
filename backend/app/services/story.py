@@ -134,7 +134,10 @@ def today_story() -> dict:
     # ============================================================
     # 2) SKU lider por canal — uno por canal: TN/MELI Unistore, TN/MELI Unidrop
     # ============================================================
-    # Helper para construir el blurb de un lider por canal
+    # Helper para construir el blurb de un lider por canal.
+    # Ahora el click NO abre un modal, navega al Producto 360 con period=today
+    # asi el usuario ve la seccion 'Ordenes con este SKU' completa + el resto
+    # de KPIs del producto.
     def _leader_blurb(label: str, channel: str, sku: str, name: str, units: int, drill_endpoint: str, drill_filename: str) -> dict:
         clean_name = (name or sku)[:60]
         return {
@@ -144,10 +147,8 @@ def today_story() -> dict:
             "body": f"En {label} hoy lidera \"{clean_name}\" con {units} unidades vendidas.",
             "accent": "#a259ff",
             "link": {
-                "kind": "drill",
-                "endpoint": drill_endpoint,
-                "title": f"Ordenes hoy de {clean_name} ({label})",
-                "filename": drill_filename,
+                "kind": "navigate",
+                "href": f"/dashboard/productos/{sku}?period=today",
             },
         }
 

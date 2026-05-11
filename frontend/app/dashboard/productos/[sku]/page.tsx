@@ -3,13 +3,16 @@
 import { use } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { CategoryTable } from "@/components/generic-table";
 import { DailyRevenueChart } from "@/components/sparkline";
+import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
+import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
-import { ArrowLeft } from "lucide-react";
+import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { ArrowLeft, Package } from "lucide-react";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeries } from "@/lib/types";
 
 type CostInfo = {
@@ -59,6 +62,24 @@ type Detail = {
   devoluciones: CategoryValue[];
   first_sale: string | null;
   last_sale: string | null;
+  recent_orders?: Array<{
+    id: number | null;
+    numero: string;
+    fecha: string;
+    payment: string;
+    shipping: string;
+    status: string;
+    total: number;
+    qty: number;
+    precio_unit: number;
+    subtotal: number;
+    provincia: string;
+    cliente: string;
+    customer_id: number | null;
+    empaquetada: boolean;
+  }>;
+  period?: string;
+  window_label?: string;
   generated_at: string;
 };
 
@@ -66,10 +87,21 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
   const { sku: skuRaw } = use(params);
   const sku = decodeURIComponent(skuRaw);
   const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // El filtro global del topbar manda. Si la URL trae ?period=today
+  // (ej. cuando se hace click desde el blurb 'Lider TN Unistore hoy'),
+  // ese valor pisa al filtro global mientras este en la URL.
+  const globalPeriod = useGlobalFilters((s) => s.period);
+  const customFrom = useGlobalFilters((s) => s.customFrom);
+  const customTo = useGlobalFilters((s) => s.customTo);
+  const urlPeriod = searchParams?.get("period");
+  const effectivePeriod = (urlPeriod ?? globalPeriod) as typeof globalPeriod;
+  const qs = periodToQuery(effectivePeriod, customFrom, customTo);
 
   const { data, isLoading, error } = useQuery<Detail>({
-    queryKey: ["product-detail", sku],
-    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}`),
+    queryKey: ["product-detail", sku, effectivePeriod, customFrom, customTo],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}?${qs}`),
     staleTime: 60_000,
   });
 
@@ -336,6 +368,81 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             </>
           )}
         </div>
+
+        {/* Ordenes que incluyen este SKU (respeta el filtro de periodo) */}
+        {data && data.recent_orders && (
+          <div className="bg-surface border border-border rounded-xl p-5 mt-6">
+            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                  <Package size={16} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-text">Órdenes con este SKU · {data.window_label || effectivePeriod}</h3>
+                  <p className="text-[11px] text-text-muted">
+                    {data.recent_orders.length} {data.recent_orders.length === 1 ? "orden" : "órdenes"} TN incluyen este SKU en el periodo seleccionado · click una fila para ver los items completos
+                  </p>
+                </div>
+              </div>
+              <ExportButtons
+                filename={`ordenes_con_${sku}_${data.period || "30d"}`}
+                columns={["#", "Numero", "Fecha", "Cliente", "Provincia", "Qty", "Precio unit", "Subtotal SKU", "Total orden", "Estado pago", "Estado envío"]}
+                rows={data.recent_orders.map((o, i) => [
+                  i + 1, o.numero, o.fecha, o.cliente, o.provincia,
+                  o.qty, o.precio_unit, o.subtotal, o.total, o.payment, o.shipping,
+                ])}
+              />
+            </div>
+            {data.recent_orders.length === 0 ? (
+              <div className="py-8 text-center text-text-muted text-sm">
+                No hay órdenes con este SKU en el periodo seleccionado.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-text-muted">
+                      <th className="px-3 py-2">#</th>
+                      <th className="px-3 py-2">Número</th>
+                      <th className="px-3 py-2">Fecha</th>
+                      <th className="px-3 py-2">Estado del pedido</th>
+                      <th className="px-3 py-2 text-right">Total orden</th>
+                      <th className="px-3 py-2 text-center"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.recent_orders.map((o, i) => {
+                      if (!o.id) return null;
+                      const subtitleParts: string[] = [];
+                      if (o.cliente) subtitleParts.push(o.cliente);
+                      if (o.provincia) subtitleParts.push(o.provincia);
+                      subtitleParts.push(`${o.qty}x · ${o.subtotal.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 })} de este SKU`);
+                      const orderRow: OrderRowData = {
+                        id: o.id,
+                        numero: o.numero,
+                        fecha: o.fecha,
+                        total: o.total,
+                        payment: o.payment,
+                        shipping: o.shipping,
+                        status: o.status,
+                        empaquetada: o.empaquetada,
+                        subtitle: subtitleParts.join(" · "),
+                      };
+                      return (
+                        <ExpandableOrderRow
+                          key={i}
+                          order={orderRow}
+                          idx={i + 1}
+                          cols={6}
+                        />
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

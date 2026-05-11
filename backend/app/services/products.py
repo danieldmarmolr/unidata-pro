@@ -7,11 +7,14 @@ unidev.devolucion_items (devoluciones), costs SQLite (costo de importacion).
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services._utils import resolve_window
 from app.services import costs as costs_svc
+
+log = logging.getLogger("unidata.products")
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
@@ -194,8 +197,17 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
 
 # ===================== PRODUCT 360 (por SKU) =====================
 
-def product_detail(sku: str) -> dict:
-    """Vista 360 de un producto/SKU: ventas, canales, customers, devoluciones, stock."""
+def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Vista 360 de un producto/SKU: ventas, canales, customers, devoluciones, stock.
+
+    period: ventana usada para la nueva seccion 'recent_orders' (lista de ordenes
+    que incluyen este SKU en el periodo). El resto de los KPIs siguen siendo
+    lifetime salvo donde el nombre dice 'periodo'.
+    """
+    from app.services._utils import resolve_window
+    win = resolve_window(period, from_iso, to_iso)
+    from_ts = win["from_ts"]
+    to_ts = win["to_ts"]
     eng = get_engine("unistore")
 
     info = q(eng, """
@@ -443,6 +455,53 @@ def product_detail(sku: str) -> dict:
     if product_info:
         product_info["images"] = images
 
+    # Ordenes que incluyen este SKU en el periodo seleccionado.
+    # Es la nueva seccion 'recent_orders' que reemplaza el modal drilldown
+    # cuando el user clickea un blurb del home story tipo 'En TN Unistore
+    # hoy lidera X con N unidades'. Filtrar HOY = solo del calendar day.
+    recent_orders: list[dict] = []
+    try:
+        rows = q(eng, """
+            SELECT o.id, o.number, o."createdAt"::text AS fecha,
+                   o."paymentStatus", o."shippingStatus", o.status,
+                   o.total::float, oi.quantity, oi.price::float,
+                   (oi.quantity * oi.price)::float AS subtotal,
+                   COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') AS provincia,
+                   COALESCE(c.name, c.email, 'Customer ' || o."customerId"::text) AS cliente,
+                   o."customerId" AS customer_id,
+                   EXISTS (
+                     SELECT 1 FROM digip."DespachoPedido" dp
+                     JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                     WHERE pd."orderId" = o.id
+                   ) AS empaquetada
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
+            LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
+            WHERE oi.sku = :sku
+              AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+            ORDER BY o."createdAt" DESC
+            LIMIT 200
+        """, {"sku": sku, "from_ts": from_ts, "to_ts": to_ts}) or []
+        recent_orders = [{
+            "id": int(r[0]) if r[0] else None,
+            "numero": str(r[1] or r[0] or ""),
+            "fecha": (r[2] or "")[:16] if r[2] else "",
+            "payment": r[3] or "",
+            "shipping": r[4] or "",
+            "status": r[5] or "",
+            "total": float(r[6] or 0),
+            "qty": int(r[7] or 0),
+            "precio_unit": float(r[8] or 0),
+            "subtotal": float(r[9] or 0),
+            "provincia": r[10] or "",
+            "cliente": r[11] or "",
+            "customer_id": int(r[12] or 0) if r[12] else None,
+            "empaquetada": bool(r[13]) if r[13] is not None else False,
+        } for r in rows]
+    except Exception as e:
+        log.warning("product_detail recent_orders fail: %s", e)
+
     return {
         "sku": sku,
         "product_info": product_info,
@@ -457,6 +516,10 @@ def product_detail(sku: str) -> dict:
         "devoluciones": devs,
         "first_sale": first_sale,
         "last_sale": last_sale,
+        # Nuevo: ordenes con este SKU en el periodo seleccionado
+        "recent_orders": recent_orders,
+        "period": period,
+        "window_label": win.get("label", period),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 

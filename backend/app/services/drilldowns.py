@@ -74,36 +74,49 @@ def _serialize(rows: list, columns: list[str]) -> dict:
 
 
 def orders_by_product(unit: str, product_id: str, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    """Listado de orders TN que contienen un producto especifico."""
+    """Listado de orders TN que contienen un producto especifico.
+
+    Usa from_ts/to_ts del resolve_window: HOY = inicio del dia AR -> ahora
+    (NO ultimas 24h rolling, que era el bug que mostraba ordenes de ayer
+    cuando se filtraba HOY).
+    """
     if unit != "unistore":
         return _serialize([], [])
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
+    from_ts = win["from_ts"]
+    to_ts = win["to_ts"]
     eng = get_engine(unit)
     rows = q(eng, """
         SELECT o.id, o.number, o."createdAt"::text AS fecha,
                o."paymentStatus", o."shippingStatus",
                o.total::float, oi.quantity, oi.price::float,
                (oi.quantity * oi.price)::float AS subtotal,
-               COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') AS provincia
+               COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') AS provincia,
+               COALESCE(c.name, c.email, 'Customer ' || o."customerId"::text) AS cliente,
+               o."customerId" AS customer_id
         FROM tienda_nube."OrderItem" oi
         JOIN tienda_nube."Order" o ON o.id = oi."orderId"
         LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
+        LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
         WHERE oi."productId"::text = :pid
-          AND o."createdAt" >= NOW() - make_interval(days => :days)
+          AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
         ORDER BY o."createdAt" DESC
         LIMIT 200
-    """, {"pid": str(product_id), "days": days}) or []
+    """, {"pid": str(product_id), "from_ts": from_ts, "to_ts": to_ts}) or []
     return _serialize(
         rows,
-        ["order_id", "numero", "fecha", "payment", "shipping", "total", "qty", "precio_unit", "subtotal", "provincia"],
+        ["order_id", "numero", "fecha", "payment", "shipping", "total", "qty",
+         "precio_unit", "subtotal", "provincia", "cliente", "customer_id"],
     )
 
 
 def orders_by_province(unit: str, province: str, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    """Listado de orders TN paid en una provincia."""
+    """Listado de orders TN paid en una provincia. from_ts/to_ts del window."""
     if unit != "unistore":
         return _serialize([], [])
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
+    from_ts = win["from_ts"]
+    to_ts = win["to_ts"]
     eng = get_engine(unit)
     rows = q(eng, """
         SELECT o.id, o.number, o."createdAt"::text AS fecha,
@@ -117,10 +130,10 @@ def orders_by_province(unit: str, province: str, period: str = "30d", from_iso: 
         JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
         WHERE COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') = :prov
           AND o."paymentStatus" = 'paid'
-          AND o."createdAt" >= NOW() - make_interval(days => :days)
+          AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
         ORDER BY o."createdAt" DESC
         LIMIT 200
-    """, {"prov": province, "days": days}) or []
+    """, {"prov": province, "from_ts": from_ts, "to_ts": to_ts}) or []
     return _serialize(
         rows,
         ["order_id", "numero", "fecha", "payment", "shipping", "total", "ciudad", "cliente", "direccion", "customer_id"],

@@ -702,11 +702,16 @@ def get_products(
 def get_product_detail(
     sku: str,
     _: Annotated[str, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
-    key = f"prod-sku:{sku}"
+    """Product 360 con periodo filtrable (afecta solo la seccion
+    recent_orders; el resto de KPIs son lifetime)."""
+    key = f"prod-sku:{sku}:{period}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_svc.product_detail(sku)
+        return products_svc.product_detail(sku, period=period, from_iso=from_iso, to_iso=to_iso)
     return _b()
 
 
