@@ -1098,40 +1098,42 @@ def dropshipper_unified_orders(
                 "enriched": False,
             })
 
-    # 3) Enrich TN — linkage doble: (a) via pi.orderIds (safe_tn) y (b) directo
-    # por user_id en tienda_nube_orders. Todo inlineado (sin bind params) para
-    # evitar conflictos del parser SQLAlchemy con :param + ::cast + ANY(ARRAY).
-    tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]" if safe_tn else "ARRAY[]::text[]"
+    # 3) Enrich TN — linkage doble via UNION ALL (la version anterior con
+    # OR ANY(...) OR user_id rompia por interaccion del parser SQLAlchemy).
+    # Brazo (a): orders cuyos tienda_nube_id estan en pi.orderIds[]
+    # Brazo (b): orders cuyo user_id = uid (cliente del dropshipper en TN)
+    # Dedup por tienda_nube_id se hace en Python al final.
     uid_int = int(user_id)
+    base_select = """
+        SELECT tno.tienda_nube_id::text AS internal_id,
+               tno."number",
+               tno.created_at::text AS fecha,
+               tno.payment_status::text AS payment_status,
+               COALESCE(tno.total,0)::float AS total,
+               COALESCE(tno.contact_name, '') AS buyer_name,
+               COALESCE(tno.billing_province,'') AS provincia,
+               COALESCE(tno.contact_identification,'') AS dni
+        FROM public.tienda_nube_orders tno
+    """
+    parts: list[str] = []
+    if safe_tn:
+        tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]"
+        parts.append(f"{base_select} WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})")
+    parts.append(f"{base_select} WHERE tno.user_id = {uid_int}")
+    union_sql = " UNION ALL ".join(parts) + " ORDER BY fecha DESC NULLS LAST LIMIT 400"
     try:
-        # Cols minimas que sabemos existen (otras como contact_identification o
-        # billing_province pueden no existir en algunos schemas — usamos COALESCE
-        # con NULL fallback para que no rompa si la col esta pero esta vacia.)
-        # Si una col directamente no existe, exception -> log fail.
-        erows = q(eng, f"""
-            SELECT tno.tienda_nube_id::text AS internal_id,
-                   tno."number",
-                   tno.created_at::text AS fecha,
-                   tno.payment_status::text AS payment_status,
-                   COALESCE(tno.total,0)::float AS total,
-                   COALESCE(tno.contact_name, '') AS buyer_name,
-                   COALESCE(tno.billing_province,'') AS provincia,
-                   COALESCE(tno.contact_identification,'') AS dni
-            FROM public.tienda_nube_orders tno
-            WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})
-               OR tno.user_id = {uid_int}
-            ORDER BY tno.created_at DESC NULLS LAST
-            LIMIT 200
-        """) or []
-        log.info("unified_orders TN enrich uid=%s safe_tn=%d rows=%d",
+        erows = q(eng, union_sql) or []
+        # Dedup por internal_id manteniendo el primer registro
+        seen_ids: set[str] = set()
+        dedup_rows: list = []
+        for er in erows:
+            k = er[0] or ""
+            if k in seen_ids: continue
+            seen_ids.add(k)
+            dedup_rows.append(er)
+        erows = dedup_rows[:200]
+        log.info("unified_orders TN enrich uid=%s safe_tn=%d rows=%d (dedup)",
                  user_id, len(safe_tn), len(erows))
-        if not erows:
-            # Debug: verificar si user_id linkage funciona solo (sin la OR ANY)
-            debug = q(eng, f"""
-                SELECT COUNT(*)::int FROM public.tienda_nube_orders WHERE user_id = {uid_int}
-            """) or []
-            log.warning("unified_orders TN rows=0 uid=%s — solo-user_id count=%s",
-                        user_id, debug[0][0] if debug else "?")
         for er in erows:
             key_intent = tn_id_to_intent.get(er[0])
             tn_rows.append({
