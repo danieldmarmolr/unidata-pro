@@ -34,28 +34,61 @@ type Resp = {
 };
 
 export default function RfmFlowsPage() {
+  const [unit, setUnit] = useState<"unistore" | "unidrop">("unistore");
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ["rfm-flows"],
-    queryFn: () => api("/api/dashboards/rfm-flows"),
+    queryKey: ["rfm-flows", unit],
+    queryFn: () => api(`/api/dashboards/rfm-flows?unit=${unit}`),
     staleTime: 10 * 60_000,
   });
   const [popupKey, setPopupKey] = useState<string | null>(null);
-  // Cuando esta seteado, mostramos el popup de TRANSICION (con customers + ambas acciones)
   const [flowPopup, setFlowPopup] = useState<{ from: string; to: string } | null>(null);
+  const labelCustomers = unit === "unidrop" ? "dropshippers" : "clientes";
 
   return (
     <>
       <Topbar
         title="RFM Flows · Migración mes a mes"
-        subtitle="Cómo se mueven los clientes entre segmentos · alertas de fuga y reactivación"
+        subtitle={unit === "unidrop"
+          ? "Cómo se mueven los dropshippers Unidrop entre segmentos · ground truth Talo"
+          : "Cómo se mueven los clientes Unistore entre segmentos · alertas de fuga y reactivación"}
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        {/* Toggle Unistore / Unidrop */}
+        <div className="mb-4 inline-flex bg-soft rounded-xl p-1 border border-border">
+          <button
+            onClick={() => setUnit("unistore")}
+            className={
+              "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
+              (unit === "unistore" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+            }
+          >
+            UNISTORE (clientes finales)
+          </button>
+          <button
+            onClick={() => setUnit("unidrop")}
+            className={
+              "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
+              (unit === "unidrop" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+            }
+          >
+            UNIDROP (dropshippers)
+          </button>
+        </div>
+
         <div className="bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 rounded-xl p-5 mb-6">
           <div className="text-sm font-bold text-violet-900 mb-1">¿Qué muestra?</div>
           <div className="text-xs text-violet-800/90 leading-relaxed">
-            Cada cliente se clasifica en un segmento RFM en el <strong>mes previo</strong> y en el <strong>mes actual</strong>. Las transiciones (champions → at_risk, new → loyal, etc.) revelan dinámicas que un snapshot estático no muestra.
+            Cada {labelCustomers === "dropshippers" ? "dropshipper" : "cliente"} se clasifica en un segmento RFM en el <strong>mes previo</strong> y en el <strong>mes actual</strong>. Las transiciones revelan dinámicas que un snapshot estático no muestra.
             <br />
-            <strong>Foco operativo</strong>: las alertas abajo son los movimientos más accionables del último mes — fugas que requieren intervención y reactivaciones que demuestran qué tácticas funcionan.
+            {unit === "unidrop" ? (
+              <>
+                <strong>Fuente Unidrop</strong>: PaymentIntent PROCESSED (lo que cobramos a cada dropshipper en cada mes via Talo). Recency · Frequency · Monetary computadas sobre actividad real de plataforma.
+              </>
+            ) : (
+              <>
+                <strong>Foco operativo</strong>: las alertas abajo son los movimientos más accionables del último mes — fugas que requieren intervención y reactivaciones que demuestran qué tácticas funcionan.
+              </>
+            )}
           </div>
         </div>
 
@@ -189,13 +222,14 @@ export default function RfmFlowsPage() {
         />
       )}
 
-      {/* Popup transicion (al tocar una fila): ambos segmentos + lista de clientes */}
+      {/* Popup transicion (al tocar una fila): ambos segmentos + lista de clientes/dropshippers */}
       {flowPopup && data && (
         <FlowTransitionPopup
           fromKey={flowPopup.from}
           toKey={flowPopup.to}
           segments={data.segments}
           actions={data.actions}
+          unit={unit}
           onClose={() => setFlowPopup(null)}
         />
       )}
@@ -249,12 +283,13 @@ function SegmentInfoPopup({
 }
 
 function FlowTransitionPopup({
-  fromKey, toKey, segments, actions, onClose,
+  fromKey, toKey, segments, actions, unit, onClose,
 }: {
   fromKey: string;
   toKey: string;
   segments: Record<string, { label: string; color: string; icon: string; desc: string }>;
   actions?: Record<string, SegmentAction>;
+  unit: "unistore" | "unidrop";
   onClose: () => void;
 }) {
   type CustResp = {
@@ -275,8 +310,8 @@ function FlowTransitionPopup({
     }[];
   };
   const { data, isLoading } = useQuery<CustResp>({
-    queryKey: ["rfm-flows-customers", fromKey, toKey],
-    queryFn: () => api(`/api/dashboards/rfm-flows/customers?from=${encodeURIComponent(fromKey)}&to=${encodeURIComponent(toKey)}&limit=100`),
+    queryKey: ["rfm-flows-customers", fromKey, toKey, unit],
+    queryFn: () => api(`/api/dashboards/rfm-flows/customers?from=${encodeURIComponent(fromKey)}&to=${encodeURIComponent(toKey)}&limit=100&unit=${unit}`),
     staleTime: 60_000,
   });
 
@@ -370,7 +405,7 @@ function FlowTransitionPopup({
                 {data.customers.map((c) => (
                   <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40">
                     <td className="px-4 py-2">
-                      <Link href={`/dashboard/customer/${c.customer_id}`} className="block">
+                      <Link href={unit === "unidrop" ? `/dashboard/dropshipper/${c.customer_id}` : `/dashboard/customer/${c.customer_id}`} className="block">
                         <div className="text-primary hover:underline font-semibold truncate max-w-[260px]">{c.nombre}</div>
                         {c.email && <div className="text-[10px] text-text-muted font-mono truncate max-w-[260px]">{c.email}</div>}
                       </Link>
@@ -380,7 +415,7 @@ function FlowTransitionPopup({
                     <td className="px-2 py-2 text-right tabular-nums text-text-muted">{c.revenue_prev > 0 ? formatCurrency(c.revenue_prev) : "—"}</td>
                     <td className="px-2 py-2 text-right tabular-nums font-semibold">{c.revenue_cur > 0 ? formatCurrency(c.revenue_cur) : "—"}</td>
                     <td className="px-2 py-2 text-right">
-                      <Link href={`/dashboard/customer/${c.customer_id}`} className="inline-flex items-center text-primary opacity-60 hover:opacity-100">
+                      <Link href={unit === "unidrop" ? `/dashboard/dropshipper/${c.customer_id}` : `/dashboard/customer/${c.customer_id}`} className="inline-flex items-center text-primary opacity-60 hover:opacity-100">
                         <ExternalLink size={12} />
                       </Link>
                     </td>

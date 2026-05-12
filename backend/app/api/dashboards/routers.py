@@ -419,12 +419,18 @@ def get_sku_optimizer(
 
 
 @router.get("/rfm-flows")
-def get_rfm_flows(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_rfm_flows(
+    _: Annotated[str, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+) -> dict:
     """Migracion de segmentos RFM mes a mes (Sankey).
-    Devuelve transiciones from->to + alertas de fuga y reactivacion."""
-    key = "rfm-flows-v1"
+    unit=unistore: clientes finales TN
+    unit=unidrop:  dropshippers Unidrop (PaymentIntent ground truth)"""
+    key = f"rfm-flows-{unit}-v2"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
+        if unit == "unidrop":
+            return rfm_flows_svc.rfm_flows_mom_unidrop()
         return rfm_flows_svc.rfm_flows_mom()
     return _b()
 
@@ -435,9 +441,11 @@ def get_rfm_flows_customers(
     from_seg: Annotated[str, Query(alias="from")],
     to_seg: Annotated[str, Query(alias="to")],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
-    """Lista de clientes para una transicion from->to especifica.
-    Para que las acciones sugeridas tengan a quien aplicar."""
+    """Lista de customers (clientes o dropshippers) para una transicion FROM->TO."""
+    if unit == "unidrop":
+        return rfm_flows_svc.rfm_flows_customers_unidrop(from_seg, to_seg, limit=limit)
     return rfm_flows_svc.rfm_flows_customers(from_seg, to_seg, limit=limit)
 
 

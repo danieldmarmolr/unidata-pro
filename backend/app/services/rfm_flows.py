@@ -185,6 +185,244 @@ def rfm_flows_mom() -> dict:
     }
 
 
+def rfm_flows_mom_unidrop() -> dict:
+    """RFM Flows Unidrop: dropshippers que migraron entre segmentos mes a mes.
+
+    Ground truth = PaymentIntent PROCESSED (lo que cobramos a cada dropshipper
+    via Talo en cada periodo). Misma estructura que rfm_flows_mom Unistore.
+
+    Para cada dropshipper con actividad en cualquiera de los 2 meses, clasifica
+    su comportamiento usando los mismos quintiles + segmentos clasicos.
+    """
+    eng = get_engine("unidrop")
+
+    rows = q(eng, """
+        WITH base AS (
+            SELECT cpa."userId" AS cid,
+                   pi.id AS pid,
+                   pi."createdAt" AS fecha,
+                   pi."paidAmount"::float AS total,
+                   (COALESCE(array_length(pi."mlOrderIds",1),0)
+                  + COALESCE(array_length(pi."orderIds",1),0))::int AS orders_in_intent,
+                   CASE
+                     WHEN pi."createdAt" >= NOW() - INTERVAL '30 days' THEN 'current'
+                     WHEN pi."createdAt" >= NOW() - INTERVAL '60 days' THEN 'previous'
+                     ELSE 'older'
+                   END AS bucket
+            FROM public."PaymentIntent" pi
+            INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+            WHERE pi."status" = 'PROCESSED'
+              AND pi."createdAt" >= NOW() - INTERVAL '120 days'
+        )
+        SELECT cid, bucket,
+               SUM(orders_in_intent)::int AS orders,
+               MAX(fecha)::date AS last,
+               SUM(total)::float AS revenue
+        FROM base
+        WHERE bucket IN ('current', 'previous')
+        GROUP BY cid, bucket
+    """) or []
+
+    by_customer: dict[int, dict[str, dict]] = {}
+    for r in rows:
+        cid = int(r[0] or 0)
+        bucket = r[1]
+        if cid not in by_customer:
+            by_customer[cid] = {}
+        by_customer[cid][bucket] = {
+            "orders": int(r[2] or 0),
+            "last": r[3],
+            "revenue": float(r[4] or 0),
+        }
+
+    current_orders_dist = sorted([d["current"]["orders"] for d in by_customer.values() if "current" in d])
+    current_rev_dist = sorted([d["current"]["revenue"] for d in by_customer.values() if "current" in d])
+    today = dt.date.today()
+    current_recency_dist = sorted([
+        (today - d["current"]["last"]).days
+        for d in by_customer.values()
+        if "current" in d and d["current"]["last"]
+    ])
+
+    if not current_orders_dist:
+        return {
+            "flows": [],
+            "segments": SEGMENTS,
+            "actions": SEGMENT_ACTIONS,
+            "alerts": [],
+            "current_month_start": (today - dt.timedelta(days=30)).isoformat(),
+            "previous_month_start": (today - dt.timedelta(days=60)).isoformat(),
+            "total_customers": 0,
+            "unit": "unidrop",
+            "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        }
+
+    def classify(orders: int, recency_days: int, revenue: float) -> str:
+        f = _quintile_score(orders, current_orders_dist, higher_is_better=True)
+        r = _quintile_score(recency_days, current_recency_dist, higher_is_better=False)
+        m = _quintile_score(revenue, current_rev_dist, higher_is_better=True)
+        return _classify_segment(r, f, m)
+
+    transitions: dict[tuple[str, str], dict] = {}
+    for cid, periods in by_customer.items():
+        cur_seg = None
+        prev_seg = None
+        if "current" in periods and periods["current"]["last"]:
+            d = periods["current"]
+            cur_seg = classify(d["orders"], (today - d["last"]).days, d["revenue"])
+        if "previous" in periods and periods["previous"]["last"]:
+            d = periods["previous"]
+            prev_seg = classify(d["orders"], (today - d["last"]).days, d["revenue"])
+
+        if prev_seg and cur_seg:
+            key = (prev_seg, cur_seg)
+        elif prev_seg and not cur_seg:
+            key = (prev_seg, "_inactivo")
+        elif not prev_seg and cur_seg:
+            key = ("_nuevo", cur_seg)
+        else:
+            continue
+
+        if key not in transitions:
+            transitions[key] = {
+                "from": key[0], "to": key[1],
+                "count": 0, "revenue_a": 0.0, "revenue_b": 0.0,
+                "customer_ids": [],
+            }
+        transitions[key]["count"] += 1
+        if "previous" in periods:
+            transitions[key]["revenue_a"] += periods["previous"]["revenue"]
+        if "current" in periods:
+            transitions[key]["revenue_b"] += periods["current"]["revenue"]
+        if len(transitions[key]["customer_ids"]) < 500:
+            transitions[key]["customer_ids"].append(int(cid))
+
+    flows = sorted(transitions.values(), key=lambda x: -x["count"])
+    for f in flows:
+        f["revenue_a"] = round(f["revenue_a"], 0)
+        f["revenue_b"] = round(f["revenue_b"], 0)
+
+    # Alertas equivalentes Unidrop
+    alerts: list[dict] = []
+    for f in flows:
+        if f["from"] == "champions" and f["to"] == "at_risk":
+            alerts.append({
+                "severity": "high", "icon": "SOS",
+                "title": f"{f['count']} dropshippers Champions cayeron a At Risk",
+                "body": "Top dropshippers facturando menos. Outreach del CS urgente.",
+            })
+        if f["from"] == "new" and f["to"] in ("lost", "_inactivo"):
+            alerts.append({
+                "severity": "medium", "icon": "WAVE",
+                "title": f"{f['count']} dropshippers Nuevos no volvieron",
+                "body": "Onboarding del dropshipper falla. Revisar primera experiencia.",
+            })
+        if f["from"] in ("hibernating", "lost") and f["to"] in ("champions", "loyal", "potential_loyalist"):
+            alerts.append({
+                "severity": "info", "icon": "REVIVED",
+                "title": f"{f['count']} dropshippers reactivados",
+                "body": "Win-back funcionando. Que tactica los trajo de vuelta?",
+            })
+
+    return {
+        "flows": flows,
+        "segments": SEGMENTS,
+        "actions": SEGMENT_ACTIONS,
+        "alerts": alerts[:10],
+        "current_month_start": (today - dt.timedelta(days=30)).isoformat(),
+        "previous_month_start": (today - dt.timedelta(days=60)).isoformat(),
+        "total_customers": len(by_customer),
+        "unit": "unidrop",
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+def rfm_flows_customers_unidrop(from_seg: str, to_seg: str, limit: int = 100) -> dict:
+    """Dropshippers de una transicion FROM->TO especifica (Unidrop)."""
+    base = rfm_flows_mom_unidrop()
+    flows = base.get("flows", [])
+    target = next((f for f in flows if f["from"] == from_seg and f["to"] == to_seg), None)
+    if not target:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": 0, "unit": "unidrop"}
+
+    ids = target.get("customer_ids", [])[:limit]
+    if not ids:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": int(target.get("count", 0)), "unit": "unidrop"}
+
+    ids_int = [int(i) for i in ids if i is not None]
+    if not ids_int:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": int(target.get("count", 0)), "unit": "unidrop"}
+    ids_literal = "ARRAY[" + ",".join(str(i) for i in ids_int) + "]::bigint[]"
+
+    eng = get_engine("unidrop")
+    sql = f"""
+        WITH ids AS (SELECT UNNEST({ids_literal}) AS id),
+             pi_curr AS (
+               SELECT cpa."userId" AS cid,
+                      COUNT(*)::int AS intents_cur,
+                      MAX(pi."createdAt")::date AS last_cur,
+                      COALESCE(SUM(pi."paidAmount"),0)::float AS rev_cur,
+                      SUM(COALESCE(array_length(pi."mlOrderIds",1),0) + COALESCE(array_length(pi."orderIds",1),0))::int AS orders_cur
+               FROM public."PaymentIntent" pi
+               INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+               WHERE pi."status" = 'PROCESSED'
+                 AND pi."createdAt" >= NOW() - INTERVAL '30 days'
+                 AND cpa."userId" = ANY({ids_literal})
+               GROUP BY cpa."userId"
+             ),
+             pi_prev AS (
+               SELECT cpa."userId" AS cid,
+                      COUNT(*)::int AS intents_prev,
+                      MAX(pi."createdAt")::date AS last_prev,
+                      COALESCE(SUM(pi."paidAmount"),0)::float AS rev_prev,
+                      SUM(COALESCE(array_length(pi."mlOrderIds",1),0) + COALESCE(array_length(pi."orderIds",1),0))::int AS orders_prev
+               FROM public."PaymentIntent" pi
+               INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+               WHERE pi."status" = 'PROCESSED'
+                 AND pi."createdAt" >= NOW() - INTERVAL '60 days'
+                 AND pi."createdAt" <  NOW() - INTERVAL '30 days'
+                 AND cpa."userId" = ANY({ids_literal})
+               GROUP BY cpa."userId"
+             )
+        SELECT ids.id,
+               COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||ids.id::text) AS nombre,
+               u.email,
+               COALESCE(pc.orders_cur, 0) AS orders_cur,
+               COALESCE(pp.orders_prev, 0) AS orders_prev,
+               COALESCE(pc.rev_cur, 0)::float AS rev_cur,
+               COALESCE(pp.rev_prev, 0)::float AS rev_prev,
+               pc.last_cur::text AS last_cur,
+               pp.last_prev::text AS last_prev
+        FROM ids
+        LEFT JOIN public."User" u ON u.id = ids.id
+        LEFT JOIN pi_curr pc ON pc.cid = ids.id
+        LEFT JOIN pi_prev pp ON pp.cid = ids.id
+        ORDER BY (COALESCE(pc.rev_cur,0) + COALESCE(pp.rev_prev,0)) DESC NULLS LAST
+    """
+    rows = q(eng, sql) or []
+
+    customers = [{
+        "customer_id": int(r[0]),
+        "nombre": r[1] or "",
+        "email": r[2] or "",
+        "orders_cur": int(r[3] or 0),
+        "orders_prev": int(r[4] or 0),
+        "revenue_cur": round(float(r[5] or 0), 2),
+        "revenue_prev": round(float(r[6] or 0), 2),
+        "last_cur": r[7],
+        "last_prev": r[8],
+    } for r in rows]
+
+    return {
+        "from": from_seg,
+        "to": to_seg,
+        "customers": customers,
+        "total": int(target.get("count", 0)),
+        "showing": len(customers),
+        "unit": "unidrop",
+    }
+
+
 def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
     """Devuelve la lista de clientes de una transicion FROM->TO especifica.
 
