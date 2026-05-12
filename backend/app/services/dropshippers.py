@@ -743,34 +743,42 @@ def dropshipper_detail(
     ml_ids_list = list({r[0] for r in last_orders_intent if r[0]})
     enrich: dict[str, dict] = {}
     if ml_ids_list:
-        try:
-            erows = q(eng, """
-                SELECT o."mlOrderId"::text AS ml_order_id,
-                       o.id AS order_id,
-                       o."status",
-                       o."dateCreated"::text AS fecha,
-                       COALESCE(p.gmv,0)::float AS total,
-                       COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
-                       COALESCE(o."shipping_cost",0)::float AS shipping_cost
-                FROM mercado_libre_dev."OrderMercadoLibre" o
-                LEFT JOIN (
-                    SELECT "orderId", SUM("totalAmount")::float AS gmv
-                    FROM mercado_libre_dev."PaymentMercadoLibre"
-                    GROUP BY 1
-                ) p ON p."orderId" = o.id
-                WHERE o."mlOrderId"::text = ANY(:ids::text[])
-            """, {"ids": ml_ids_list}) or []
-            for er in erows:
-                enrich[er[0]] = {
-                    "id": int(er[1]) if er[1] else None,
-                    "status": er[2] or "",
-                    "fecha": er[3],
-                    "total": float(er[4] or 0),
-                    "profit_unidrop": float(er[5] or 0),
-                    "shipping_cost": float(er[6] or 0),
-                }
-        except Exception as e:
-            log.warning("dropshipper enrich ml orders fail: %s", e)
+        # IDs vienen de PaymentIntent.mlOrderIds (TEXT[] en DB). Los inlineamos
+        # como array literal para evitar el conflicto :param::text[] con
+        # SQLAlchemy/text() (los : del cast rompen el parser de bindparams).
+        # Sanitizamos: solo dejamos strings con digitos/guiones (formato ML ID).
+        import re as _re
+        safe_ids = [str(s) for s in ml_ids_list if _re.match(r"^[A-Za-z0-9_-]+$", str(s))]
+        if safe_ids:
+            ids_literal = "ARRAY[" + ",".join("'" + i + "'" for i in safe_ids) + "]::text[]"
+            try:
+                erows = q(eng, f"""
+                    SELECT o."mlOrderId"::text AS ml_order_id,
+                           o.id AS order_id,
+                           o."status",
+                           o."dateCreated"::text AS fecha,
+                           COALESCE(p.gmv,0)::float AS total,
+                           COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+                           COALESCE(o."shipping_cost",0)::float AS shipping_cost
+                    FROM mercado_libre_dev."OrderMercadoLibre" o
+                    LEFT JOIN (
+                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        FROM mercado_libre_dev."PaymentMercadoLibre"
+                        GROUP BY 1
+                    ) p ON p."orderId" = o.id
+                    WHERE o."mlOrderId"::text = ANY({ids_literal})
+                """) or []
+                for er in erows:
+                    enrich[er[0]] = {
+                        "id": int(er[1]) if er[1] else None,
+                        "status": er[2] or "",
+                        "fecha": er[3],
+                        "total": float(er[4] or 0),
+                        "profit_unidrop": float(er[5] or 0),
+                        "shipping_cost": float(er[6] or 0),
+                    }
+            except Exception as e:
+                log.warning("dropshipper enrich ml orders fail: %s", e)
 
     orders: list[dict] = []
     for r in last_orders_intent:

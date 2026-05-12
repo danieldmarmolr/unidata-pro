@@ -202,9 +202,18 @@ def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
     if not ids:
         return {"from": from_seg, "to": to_seg, "customers": [], "total": int(target.get("count", 0))}
 
+    # IDs son ints generados por nosotros desde el query previo (customer_ids
+    # de tienda_nube."Order"."customerId"). Los inlinejamos como array literal
+    # para evitar el conflicto entre named params y casts de SQLAlchemy
+    # (:ids::int[] rompia el parser).
+    ids_int = [int(i) for i in ids if i is not None]
+    if not ids_int:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": int(target.get("count", 0))}
+    ids_literal = "ARRAY[" + ",".join(str(i) for i in ids_int) + "]::bigint[]"
+
     eng = get_engine("unistore")
-    rows = q(eng, """
-        WITH ids AS (SELECT UNNEST(:ids::int[]) AS id),
+    sql = f"""
+        WITH ids AS (SELECT UNNEST({ids_literal}) AS id),
              ord_curr AS (
                SELECT o."customerId" AS cid,
                       COUNT(*)::int AS orders_cur,
@@ -213,7 +222,7 @@ def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
                FROM tienda_nube."Order" o
                WHERE o."paymentStatus"='paid'
                  AND o."createdAt" >= NOW() - INTERVAL '30 days'
-                 AND o."customerId" = ANY(:ids::int[])
+                 AND o."customerId" = ANY({ids_literal})
                GROUP BY o."customerId"
              ),
              ord_prev AS (
@@ -225,7 +234,7 @@ def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
                WHERE o."paymentStatus"='paid'
                  AND o."createdAt" >= NOW() - INTERVAL '60 days'
                  AND o."createdAt" <  NOW() - INTERVAL '30 days'
-                 AND o."customerId" = ANY(:ids::int[])
+                 AND o."customerId" = ANY({ids_literal})
                GROUP BY o."customerId"
              )
         SELECT ids.id,
@@ -242,7 +251,8 @@ def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
         LEFT JOIN ord_curr oc ON oc.cid = ids.id
         LEFT JOIN ord_prev op ON op.cid = ids.id
         ORDER BY (COALESCE(oc.rev_cur,0) + COALESCE(op.rev_prev,0)) DESC NULLS LAST
-    """, {"ids": ids}) or []
+    """
+    rows = q(eng, sql) or []
 
     customers = [{
         "customer_id": int(r[0]),
