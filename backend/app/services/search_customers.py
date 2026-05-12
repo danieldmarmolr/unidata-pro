@@ -11,9 +11,12 @@ devuelven clientes que tuvieron actividad (orden paga) en esa ventana.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from app.db.engines import get_engine
 from app.services._utils import q, resolve_window
+
+log = logging.getLogger("unidata.search")
 
 
 def search_unistore_customers(
