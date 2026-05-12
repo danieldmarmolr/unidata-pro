@@ -1,5 +1,7 @@
 "use client";
 
+import { fmtArDateTime } from "@/lib/dates";
+
 export function DashboardHeader({
   filters,
   generatedAt,
@@ -14,7 +16,7 @@ export function DashboardHeader({
       <div className="flex flex-wrap items-center gap-3">{filters}</div>
       {generatedAt && (
         <div className="text-xs text-text-muted">
-          Datos al {new Date(generatedAt).toLocaleString("es-AR")}
+          Datos al {fmtArDateTime(generatedAt, { withSeconds: true })} (hora Argentina)
           {isFetching && " · refrescando..."}
         </div>
       )}

@@ -476,7 +476,24 @@ def dropshipper_detail(
         "cant_referidos": int(h[23] or 0),
     }
 
-    # KPIs de ventas MELI
+    # KPIs de ventas MELI - PaymentIntent es ground truth (lo que el dropshipper
+    # efectivamente pago a Unidrop). Enriquecemos con OrderMercadoLibre si esta
+    # disponible para detalles como ultima fecha real, costos, profit, etc.
+    intent_ml = q(eng, """
+        SELECT
+          COALESCE(SUM(COALESCE(array_length(pi."mlOrderIds",1),0)),0)::int AS orders_count,
+          COUNT(*) FILTER (WHERE COALESCE(array_length(pi."mlOrderIds",1),0) > 0)::int AS intents_count
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+          AND pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0)]
+    ml_orders_paid = int(intent_ml[0][0] or 0)
+    ml_intents = int(intent_ml[0][1] or 0)
+
+    # Detalle desde OrderMercadoLibre (puede no estar sincronizado para todos
+    # los dropshippers - es ENRIQUECIMIENTO, no fuente principal del count).
     ventas = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
@@ -500,9 +517,18 @@ def dropshipper_detail(
           AND o."dateCreated" >= NOW() - make_interval(days => :d)
     """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
     v = ventas[0]
+    # Usar ml_orders_paid (de PaymentIntent) como ventas_pagadas si la sincro
+    # con OrderMercadoLibre quedo corta. Asi nunca mostramos "0 ventas" cuando
+    # los pagos a Unidrop muestran ordenes ML claras.
+    ventas_pagadas_intent = ml_orders_paid
+    ventas_pagadas_omml = int(v[0] or 0)
+    ventas_pagadas_final = max(ventas_pagadas_intent, ventas_pagadas_omml)
+
     ventas_kpi = {
-        "ventas_pagadas": int(v[0] or 0),
-        "ordenes_totales": int(v[1] or 0),
+        "ventas_pagadas": ventas_pagadas_final,
+        "ventas_pagadas_intent": ventas_pagadas_intent,  # contado en PaymentIntent.mlOrderIds (ground truth de pago)
+        "ventas_pagadas_oml": ventas_pagadas_omml,       # contado en OrderMercadoLibre (puede no estar synced)
+        "ordenes_totales": max(int(v[1] or 0), ventas_pagadas_intent),
         "canceladas": int(v[2] or 0),
         "ultima_venta": v[3],
         "primera_venta": v[4],
@@ -512,9 +538,22 @@ def dropshipper_detail(
         "profit_unidrop": float(v[8] or 0),
         "ticket_promedio": float(v[9] or 0),
         "tasa_cancelacion_pct": round(int(v[2] or 0) / max(int(v[1] or 1), 1) * 100, 1),
+        "intents_ml_count": ml_intents,  # cuantos PaymentIntent cubren MELI
     }
 
-    # KPIs de ventas TN (cliente final del dropshipper)
+    # KPIs de ventas TN: ground truth = PaymentIntent.orderIds, enrichment con tienda_nube_orders
+    intent_tn = q(eng, """
+        SELECT
+          COALESCE(SUM(COALESCE(array_length(pi."orderIds",1),0)),0)::int AS orders_count,
+          COUNT(*) FILTER (WHERE COALESCE(array_length(pi."orderIds",1),0) > 0)::int AS intents_count
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+          AND pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0)]
+    tn_orders_paid = int(intent_tn[0][0] or 0)
+
     tn_v = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE payment_status::text='paid')::int AS ventas_pagadas,
@@ -529,8 +568,10 @@ def dropshipper_detail(
     """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0)]
     tnv = tn_v[0]
     tn_kpi = {
-        "ventas_pagadas": int(tnv[0] or 0),
-        "ordenes_totales": int(tnv[1] or 0),
+        "ventas_pagadas": max(int(tnv[0] or 0), tn_orders_paid),
+        "ventas_pagadas_intent": tn_orders_paid,
+        "ventas_pagadas_tno": int(tnv[0] or 0),
+        "ordenes_totales": max(int(tnv[1] or 0), tn_orders_paid),
         "gmv": float(tnv[2] or 0),
         "ultima_venta": tnv[3],
         "primera_venta": tnv[4],
@@ -682,32 +723,70 @@ def dropshipper_detail(
         "profit": round(float(r[3] or 0), 2),
     } for r in monthly]
 
-    # Ultimas 50 ventas MELI
-    last_orders = q(eng, """
-        SELECT o.id, o."mlOrderId", o."status", o."dateCreated"::text,
-               COALESCE(p.gmv,0)::float AS total,
-               COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
-               COALESCE(o."shipping_cost",0)::float AS shipping_cost
-        FROM mercado_libre_dev."OrderMercadoLibre" o
-        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
-        LEFT JOIN (
-            SELECT "orderId", SUM("totalAmount")::float AS gmv
-            FROM mercado_libre_dev."PaymentMercadoLibre"
-            GROUP BY 1
-        ) p ON p."orderId" = o.id
-        WHERE mla."userId" = :uid
-        ORDER BY o."dateCreated" DESC NULLS LAST
+    # Ultimas ventas MELI: ground truth = mlOrderIds desnormalizados de PaymentIntents
+    # PROCESSED del dropshipper. Para cada ML order ID, buscamos enriquecimiento en
+    # OrderMercadoLibre por su mlOrderId. Si no existe, devolvemos al menos el ID +
+    # fecha del intent (asi nunca decimos 'Sin ventas registradas' cuando hay pagos).
+    last_orders_intent = q(eng, """
+        SELECT unnest(pi."mlOrderIds")::text AS ml_order_id,
+               pi."createdAt"::text AS fecha_intent,
+               pi.id AS intent_id
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+          AND pi."status" = 'PROCESSED'
+          AND COALESCE(array_length(pi."mlOrderIds",1),0) > 0
+        ORDER BY pi."createdAt" DESC NULLS LAST
         LIMIT 50
     """, {"uid": int(user_id)}) or []
-    orders = [{
-        "id": int(r[0]) if r[0] else None,
-        "ml_order_id": r[1] or "",
-        "status": r[2] or "",
-        "fecha": r[3],
-        "total": round(float(r[4] or 0), 2),
-        "profit_unidrop": round(float(r[5] or 0), 2),
-        "shipping_cost": round(float(r[6] or 0), 2),
-    } for r in last_orders]
+
+    ml_ids_list = list({r[0] for r in last_orders_intent if r[0]})
+    enrich: dict[str, dict] = {}
+    if ml_ids_list:
+        try:
+            erows = q(eng, """
+                SELECT o."mlOrderId"::text AS ml_order_id,
+                       o.id AS order_id,
+                       o."status",
+                       o."dateCreated"::text AS fecha,
+                       COALESCE(p.gmv,0)::float AS total,
+                       COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+                       COALESCE(o."shipping_cost",0)::float AS shipping_cost
+                FROM mercado_libre_dev."OrderMercadoLibre" o
+                LEFT JOIN (
+                    SELECT "orderId", SUM("totalAmount")::float AS gmv
+                    FROM mercado_libre_dev."PaymentMercadoLibre"
+                    GROUP BY 1
+                ) p ON p."orderId" = o.id
+                WHERE o."mlOrderId"::text = ANY(:ids::text[])
+            """, {"ids": ml_ids_list}) or []
+            for er in erows:
+                enrich[er[0]] = {
+                    "id": int(er[1]) if er[1] else None,
+                    "status": er[2] or "",
+                    "fecha": er[3],
+                    "total": float(er[4] or 0),
+                    "profit_unidrop": float(er[5] or 0),
+                    "shipping_cost": float(er[6] or 0),
+                }
+        except Exception as e:
+            log.warning("dropshipper enrich ml orders fail: %s", e)
+
+    orders: list[dict] = []
+    for r in last_orders_intent:
+        ml_id = r[0]
+        intent_fecha = r[1]
+        info = enrich.get(ml_id, {})
+        orders.append({
+            "id": info.get("id"),
+            "ml_order_id": ml_id,
+            "status": info.get("status") or "paid (via Talo)",
+            "fecha": info.get("fecha") or intent_fecha,
+            "total": round(float(info.get("total") or 0), 2),
+            "profit_unidrop": round(float(info.get("profit_unidrop") or 0), 2),
+            "shipping_cost": round(float(info.get("shipping_cost") or 0), 2),
+            "synced_in_oml": ml_id in enrich,
+        })
 
     # Ultimos 50 pagos Talo
     last_pagos = q(eng, """

@@ -57,7 +57,9 @@ export default function ClientesPage() {
   const qs = periodToQuery(period, customFrom, customTo);
   const router = useRouter();
 
-  const [unit, setUnit] = useState<Unit>("unistore");
+  // Esta pagina busca SOLO clientes finales Unistore. Los dropshippers Unidrop
+  // tienen su propio modulo en sidebar > UNIDROP > Dropshippers.
+  const unit: Unit = "unistore";
   const [query, setQuery] = useState("");
   const [onlyActive, setOnlyActive] = useState(false);
   // Debounce simple: actualizamos el query "real" cada 350 ms
@@ -76,32 +78,16 @@ export default function ClientesPage() {
     staleTime: 30_000,
   });
 
-  const unidrop = useQuery<SearchResp<UnidropRow>>({
-    queryKey: ["search-unidrop-dropshippers", debounced, period, customFrom, customTo, onlyActive],
-    queryFn: () => api(`/api/dashboards/search/unidrop-dropshippers?q=${encodeURIComponent(debounced)}&${qs}&only_active=${onlyActive}`),
-    enabled: unit === "unidrop" && enabled,
-    staleTime: 30_000,
-  });
-
-  const isLoading = (unit === "unistore" ? unistore.isFetching : unidrop.isFetching) && enabled;
+  const isLoading = unistore.isFetching && enabled;
 
   return (
     <>
       <Topbar
         title="Buscar clientes"
-        subtitle="Unistore (compradores TN) · Unidrop (dropshippers de la plataforma) · El filtro de fechas restringe a 'activos en el periodo'"
+        subtitle="Compradores finales de Unistore (TN) · Para buscar dropshippers Unidrop usa el menu 'Dropshippers' en la unidad UNIDROP"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
-        {/* Tabs Unistore / Unidrop */}
         <div className="mb-4 flex items-center gap-3 flex-wrap">
-          <Segmented<Unit>
-            value={unit}
-            onChange={setUnit}
-            options={[
-              { value: "unistore", label: "Unistore - Clientes" },
-              { value: "unidrop", label: "Unidrop - Dropshippers" },
-            ]}
-          />
           <label className="inline-flex items-center gap-2 text-xs text-text-muted cursor-pointer ml-auto">
             <input
               type="checkbox"
@@ -118,7 +104,7 @@ export default function ClientesPage() {
         <div className="bg-surface border border-border rounded-xl p-4 mb-4">
           <label className="block">
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-1.5">
-              {unit === "unistore" ? "Buscar por nombre, email, telefono o ID" : "Buscar por nombre, fantasy, email, DNI, CUIT o ID"}
+              Buscar por nombre, email, telefono o ID
             </div>
             <div className="relative">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -126,7 +112,7 @@ export default function ClientesPage() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={unit === "unistore" ? "Ej: Pablo Amezcua, gmail.com, 11..." : "Ej: ORYX, dropshipper@..., 20-12345678-9..."}
+                placeholder="Ej: Pablo Amezcua, gmail.com, 11..."
                 className="w-full pl-10 pr-3 py-2.5 border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none"
                 autoFocus
               />
@@ -148,18 +134,10 @@ export default function ClientesPage() {
         )}
 
         {/* UNISTORE results */}
-        {enabled && unit === "unistore" && unistore.data && !isLoading && (
+        {enabled && unistore.data && !isLoading && (
           <UnistoreResults
             data={unistore.data}
             onOpen={(id) => router.push(`/dashboard/customer/${id}`)}
-          />
-        )}
-
-        {/* UNIDROP results */}
-        {enabled && unit === "unidrop" && unidrop.data && !isLoading && (
-          <UnidropResults
-            data={unidrop.data}
-            onOpen={(id) => router.push(`/dashboard/dropshipper/${id}`)}
           />
         )}
       </div>

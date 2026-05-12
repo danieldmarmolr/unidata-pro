@@ -29,11 +29,11 @@ _LOCK = threading.RLock()
 _INITIALIZED = False
 
 
-# 10 areas que el usuario definio explicitamente. El orden importa: define
-# el orden visual en el dropdown del onboarding.
+# 9 areas operativas. Gerencia NO es un area sino un ROL del usuario
+# (role='gerencia' en la tabla users): cualquier user con ese rol ve TODAS
+# las areas + el dashboard de Gerencia. El admin lo toggle desde /admin/usuarios.
 AREAS_SEED: list[tuple[str, str, str, str]] = [
     # (slug, name, color, description)
-    ("gerencia",        "Gerencia",                "#7a3eae", "Vision cross del grupo"),
     ("administracion",  "Administracion / Contabilidad", "#0ea5e9", "Cobranzas, conciliacion, ERP"),
     ("compras",         "Compras",                 "#10b981", "Adquisicion + importacion"),
     ("finanzas",        "Finanzas",                "#f59e0b", "Cashflow, margen, costos"),
@@ -75,6 +75,11 @@ def init() -> None:
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS interests TEXT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN NOT NULL DEFAULT FALSE')
+
+            # Migracion: eliminar el area 'gerencia' si existe (paso a ser rol, no area).
+            # Antes de borrarla, des-asignamos a quien la tenia.
+            cur.execute("UPDATE users SET area_id = NULL WHERE area_id IN (SELECT id FROM areas WHERE slug = 'gerencia')")
+            cur.execute("DELETE FROM areas WHERE slug = 'gerencia'")
 
             # Seed areas si la tabla esta vacia
             cur.execute("SELECT COUNT(*) AS n FROM areas")
