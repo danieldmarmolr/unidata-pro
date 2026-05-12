@@ -261,9 +261,13 @@ SEGMENT_ACTIONS: dict[str, dict[str, str]] = {
 def rfm_overview_unidrop(period_days: int = 365) -> dict:
     """RFM aplicado a DROPSHIPPERS Unidrop (usuarios de public.User que venden con nuestra app).
 
-    Recency  = dias desde su ultima venta (MELI + TN)
-    Frequency = total de ventas en el periodo (MELI count + TN count)
-    Monetary  = GMV total en el periodo (MELI totalAmount + TN total paid)
+    Fuente de verdad: PaymentIntent PROCESSED (lo que efectivamente cobramos a
+    cada dropshipper a traves de Talo). Esto incluye dropshippers cuyas ventas
+    no aparecen en OrderMercadoLibre por falta de sincronizacion.
+
+    Recency  = dias desde su ultima venta cobrada via Talo
+    Frequency = cantidad de ordenes (mlOrderIds + orderIds) en periodo
+    Monetary  = SUM(paidAmount) del periodo (lo que pago a Unidrop, NO el GMV)
     """
     eng = get_engine("unidrop")
     today = today_ar()
@@ -272,44 +276,41 @@ def rfm_overview_unidrop(period_days: int = 365) -> dict:
         WITH ventas AS (
           SELECT u.id AS customer_id,
                  COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
-                 -- Frequency: count MELI + TN
                  (
-                   COALESCE((SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                               ON mla."mlUserId"::text = o."sellerId"::text
-                             WHERE mla."userId" = u.id
-                               AND o."status" IN ('paid','confirmed','shipped','delivered')
-                               AND o."dateCreated" >= NOW() - make_interval(days => :d)), 0)
-                 + COALESCE((SELECT COUNT(*) FROM public.tienda_nube_orders tno
-                             WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
-                               AND tno.created_at >= NOW() - make_interval(days => :d)), 0)
-                 )::int AS frecuencia,
-                 -- Monetary: SUM totalAmount MELI + total TN
+                   -- Sumamos cantidad de ordenes (TN + ML) en TODOS los PaymentIntent del periodo
+                   SELECT COALESCE(SUM(
+                     COALESCE(array_length(pi."mlOrderIds",1),0)
+                   + COALESCE(array_length(pi."orderIds",1),0)
+                   ),0)::int
+                   FROM public."PaymentIntent" pi
+                   INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                   WHERE cpa."userId" = u.id
+                     AND pi."status" = 'PROCESSED'
+                     AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                 ) AS frecuencia,
                  (
-                   COALESCE((SELECT SUM(o."totalAmount") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                               ON mla."mlUserId"::text = o."sellerId"::text
-                             WHERE mla."userId" = u.id
-                               AND o."status" IN ('paid','confirmed','shipped','delivered')
-                               AND o."dateCreated" >= NOW() - make_interval(days => :d)), 0)
-                 + COALESCE((SELECT SUM(tno.total) FROM public.tienda_nube_orders tno
-                             WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
-                               AND tno.created_at >= NOW() - make_interval(days => :d)), 0)
-                 )::float AS monetario,
-                 -- Recency: ultima venta cualquier canal
-                 GREATEST(
-                   COALESCE((SELECT MAX("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                               ON mla."mlUserId"::text = o."sellerId"::text
-                             WHERE mla."userId" = u.id
-                               AND o."status" IN ('paid','confirmed','shipped','delivered')), 'epoch'::timestamp),
-                   COALESCE((SELECT MAX(created_at) FROM public.tienda_nube_orders
-                             WHERE user_id = u.id AND payment_status::text='paid'), 'epoch'::timestamp)
-                 )::date AS ultima_venta
+                   -- Monetary: cuanto facturamos a este dropshipper en el periodo
+                   SELECT COALESCE(SUM(pi."paidAmount"),0)::float
+                   FROM public."PaymentIntent" pi
+                   INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                   WHERE cpa."userId" = u.id
+                     AND pi."status" = 'PROCESSED'
+                     AND pi."createdAt" >= NOW() - make_interval(days => :d)
+                 ) AS monetario,
+                 (
+                   -- Recency: ultima fecha que tuvo un PaymentIntent PROCESSED
+                   SELECT MAX(pi."createdAt")::date
+                   FROM public."PaymentIntent" pi
+                   INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                   WHERE cpa."userId" = u.id
+                     AND pi."status" = 'PROCESSED'
+                 ) AS ultima_venta
           FROM public."User" u
-          WHERE u."subscriptionId" IS NOT NULL
-             OR u."mercadoLibreAccountId" IS NOT NULL
-             OR EXISTS (SELECT 1 FROM public.tienda_nube_orders tno WHERE tno.user_id = u.id)
+          WHERE EXISTS (
+            SELECT 1 FROM public."CustomerPaymentAccount" cpa
+            INNER JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
+            WHERE cpa."userId" = u.id AND pi."status" = 'PROCESSED'
+          )
         )
         SELECT customer_id, nombre, frecuencia, monetario, ultima_venta
         FROM ventas
