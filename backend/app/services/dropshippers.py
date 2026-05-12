@@ -117,11 +117,17 @@ def dropshippers_master(
         GROUP BY mla."id"
     ),
     pagos AS (
+        -- Ground truth de actividad: PaymentIntent PROCESSED. Tambien cuenta
+        -- las ordenes ML/TN que se cobraron via Talo (mlOrderIds + orderIds).
+        -- Esto permite mostrar conteos reales para dropshippers cuyas ventas
+        -- no estan sincronizadas en OrderMercadoLibre / tienda_nube_orders.
         SELECT cpa."userId" AS user_id,
                COUNT(*)::int AS pagos_procesados,
                COALESCE(SUM(pi."paidAmount"),0)::float AS costo_unidrop_total,
                COALESCE(SUM(pi."paidAmount") FILTER (WHERE COALESCE(array_length(pi."mlOrderIds",1),0)>0),0)::float AS costo_unidrop_meli,
                COALESCE(SUM(pi."paidAmount") FILTER (WHERE COALESCE(array_length(pi."orderIds",1),0)>0),0)::float AS costo_unidrop_tn,
+               COALESCE(SUM(COALESCE(array_length(pi."mlOrderIds",1),0)),0)::int AS intent_ml_orders,
+               COALESCE(SUM(COALESCE(array_length(pi."orderIds",1),0)),0)::int AS intent_tn_orders,
                MAX(pi."createdAt") AS ultimo_pago
         FROM public."PaymentIntent" pi
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa."id" = pi."customerAccountId"
@@ -188,8 +194,11 @@ def dropshippers_master(
         COALESCE(pub.pub_activas, 0) AS pub_activas,
         COALESCE(pub.pub_totales, 0) AS pub_totales,
         pub.ultima_publicacion::text,
-        COALESCE(v.ventas_pagadas, 0) AS ventas_pagadas,
-        COALESCE(v.ordenes_totales, 0) AS ordenes_totales,
+        -- Ventas ML: max(OrderMercadoLibre, PaymentIntent ground truth)
+        GREATEST(COALESCE(v.ventas_pagadas, 0), COALESCE(pg.intent_ml_orders, 0)) AS ventas_pagadas,
+        GREATEST(COALESCE(v.ordenes_totales, 0), COALESCE(pg.intent_ml_orders, 0)) AS ordenes_totales,
+        COALESCE(pg.intent_ml_orders, 0) AS ventas_pagadas_intent_ml,
+        COALESCE(v.ventas_pagadas, 0) AS ventas_pagadas_oml,
         v.ultima_venta::text,
         COALESCE(v.gmv, 0)::float AS gmv,
         COALESCE(v.costo_mercaderia, 0)::float AS costo_mercaderia,
@@ -203,11 +212,14 @@ def dropshippers_master(
         pg.ultimo_pago::text,
         COALESCE(d.deuda_pendiente, 0)::float AS deuda_pendiente,
         COALESCE(d.pagos_con_deuda, 0) AS pagos_con_deuda,
-        -- Senales de canal
-        (u."subscriptionId" IS NOT NULL OR u."mercadoLibreAccountId" IS NOT NULL OR COALESCE(v.ventas_pagadas,0) > 0) AS tiene_meli,
-        (COALESCE(tnc.tn_tiendas,0) > 0 OR COALESCE(tn.tn_ventas_pagadas,0) > 0 OR COALESCE(tn.tn_ordenes_totales,0) > 0) AS tiene_tn,
-        COALESCE(tn.tn_ordenes_totales, 0)::int AS tn_ordenes_totales,
-        COALESCE(tn.tn_ventas_pagadas, 0)::int AS tn_ventas_pagadas,
+        -- Senales de canal (incluye PaymentIntent como evidencia de actividad)
+        (u."subscriptionId" IS NOT NULL OR u."mercadoLibreAccountId" IS NOT NULL OR COALESCE(v.ventas_pagadas,0) > 0 OR COALESCE(pg.intent_ml_orders,0) > 0) AS tiene_meli,
+        (COALESCE(tnc.tn_tiendas,0) > 0 OR COALESCE(tn.tn_ventas_pagadas,0) > 0 OR COALESCE(tn.tn_ordenes_totales,0) > 0 OR COALESCE(pg.intent_tn_orders,0) > 0) AS tiene_tn,
+        -- Ventas TN: max(tienda_nube_orders, PaymentIntent ground truth)
+        GREATEST(COALESCE(tn.tn_ordenes_totales, 0), COALESCE(pg.intent_tn_orders, 0)) AS tn_ordenes_totales,
+        GREATEST(COALESCE(tn.tn_ventas_pagadas, 0), COALESCE(pg.intent_tn_orders, 0)) AS tn_ventas_pagadas,
+        COALESCE(pg.intent_tn_orders, 0) AS tn_ventas_pagadas_intent,
+        COALESCE(tn.tn_ventas_pagadas, 0) AS tn_ventas_pagadas_tno,
         COALESCE(tn.tn_gmv, 0)::float AS tn_gmv,
         tn.tn_ultima_venta::text,
         COALESCE(tnc.tn_tiendas, 0)::int AS tn_tiendas
@@ -237,13 +249,17 @@ def dropshippers_master(
         "sub_desde", "sub_vence", "sub_status", "dias_al_vencimiento",
         "cuenta_meli_id", "nickname_meli", "requiere_reauth", "token_expira",
         "cant_referidos", "pub_activas", "pub_totales", "ultima_publicacion",
-        "ventas_pagadas", "ordenes_totales", "ultima_venta",
+        "ventas_pagadas", "ordenes_totales",
+        "ventas_pagadas_intent_ml", "ventas_pagadas_oml",
+        "ultima_venta",
         "gmv", "costo_mercaderia", "profit_unidrop",
         "canceladas", "canceladas_staff", "sku_faltante",
         "pagos_procesados", "pago_unidrop_total", "pago_unidrop_meli", "ultimo_pago",
         "deuda_pendiente", "pagos_con_deuda",
         "tiene_meli", "tiene_tn",
-        "tn_ordenes_totales", "tn_ventas_pagadas", "tn_gmv", "tn_ultima_venta",
+        "tn_ordenes_totales", "tn_ventas_pagadas",
+        "tn_ventas_pagadas_intent", "tn_ventas_pagadas_tno",
+        "tn_gmv", "tn_ultima_venta",
         "tn_tiendas",
     ]
 

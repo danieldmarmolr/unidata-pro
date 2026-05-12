@@ -143,11 +143,36 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
 
     gmv_drop = float(gmv_drop_tn) + float(gmv_drop_ml)
 
+    # Ground truth Unidrop: lo que efectivamente cobramos a los dropshippers via Talo
+    # (PaymentIntent PROCESSED). Esto incluye actividad de dropshippers cuyas ventas
+    # MELI / TN no estan sincronizadas en OrderMercadoLibre / tienda_nube_orders.
+    facturado_unidrop = _scalar(drop, """
+        SELECT COALESCE(SUM(pi."paidAmount"), 0)::float
+        FROM public."PaymentIntent" pi
+        WHERE pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
+          AND pi."status" = 'PROCESSED'
+    """, win_params) or 0
+    ordenes_cobradas_unidrop = _scalar(drop, """
+        SELECT COALESCE(SUM(
+          COALESCE(array_length(pi."mlOrderIds",1),0)
+        + COALESCE(array_length(pi."orderIds",1),0)
+        ),0)::int
+        FROM public."PaymentIntent" pi
+        WHERE pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
+          AND pi."status" = 'PROCESSED'
+    """, win_params) or 0
+
     cards.append({
         "label": f"GMV Unidrop ({period_label})",
         "value": round(gmv_drop, 0),
         "prefix": "$ ",
-        "hint": f"TN: {gmv_drop_tn:,.0f}  /  ML: {gmv_drop_ml:,.0f}",
+        "hint": f"TN: {gmv_drop_tn:,.0f}  /  ML: {gmv_drop_ml:,.0f}  ·  GMV vendido por dropshippers",
+    })
+    cards.append({
+        "label": f"Facturado a Unidrop ({period_label})",
+        "value": round(float(facturado_unidrop), 0),
+        "prefix": "$ ",
+        "hint": f"{int(ordenes_cobradas_unidrop)} ordenes cobradas via Talo (ground truth)",
     })
 
     # Volumen Talo (informativo, no se usa como revenue principal — es el procesador)
@@ -448,9 +473,11 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "label": "Unidrop",
         "color": "#a259ff",
         "metrics": [
+            {"label": f"Facturado a Unidrop ({period_label})", "value": round(float(facturado_unidrop), 0), "prefix": "$ "},
+            {"label": f"Ordenes cobradas via Talo ({period_label})", "value": int(ordenes_cobradas_unidrop)},
             {"label": f"GMV TN dropshippers ({period_label})", "value": round(float(gmv_drop_tn), 0), "prefix": "$ "},
             {"label": f"GMV ML dropshippers ({period_label})", "value": round(float(gmv_drop_ml), 0), "prefix": "$ "},
-            {"label": f"Suscripciones MRR ({period_label})", "value": round(float(mrr_drop), 0), "prefix": "$ "},
+            {"label": f"MRR Suscripciones ({period_label})", "value": round(float(mrr_drop), 0), "prefix": "$ "},
             {"label": "Suscripciones activas (hoy)", "value": int(subs_drop)},
             {"label": f"Usuarios nuevos ({period_label})", "value": int(new_users_drop)},
             {"label": "Vencen <15d", "value": int(expiring_soon)},
