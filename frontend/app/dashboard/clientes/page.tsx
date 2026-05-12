@@ -57,12 +57,12 @@ export default function ClientesPage() {
   const qs = periodToQuery(period, customFrom, customTo);
   const router = useRouter();
 
-  // Esta pagina busca SOLO clientes finales Unistore. Los dropshippers Unidrop
-  // tienen su propio modulo en sidebar > UNIDROP > Dropshippers.
-  const unit: Unit = "unistore";
+  // Buscar funciona en las DOS unidades. Cada una es una nocion distinta de
+  // "cliente": Unistore = comprador final TN; Unidrop = dropshipper que opera
+  // con nuestra plataforma. La pestana superior elige donde busca el query.
+  const [unit, setUnit] = useState<Unit>("unistore");
   const [query, setQuery] = useState("");
   const [onlyActive, setOnlyActive] = useState(false);
-  // Debounce simple: actualizamos el query "real" cada 350 ms
   const [debounced, setDebounced] = useState("");
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 350);
@@ -78,16 +78,31 @@ export default function ClientesPage() {
     staleTime: 30_000,
   });
 
-  const isLoading = unistore.isFetching && enabled;
+  const unidrop = useQuery<SearchResp<UnidropRow>>({
+    queryKey: ["search-unidrop-dropshippers", debounced, period, customFrom, customTo, onlyActive],
+    queryFn: () => api(`/api/dashboards/search/unidrop-dropshippers?q=${encodeURIComponent(debounced)}&${qs}&only_active=${onlyActive}`),
+    enabled: unit === "unidrop" && enabled,
+    staleTime: 30_000,
+  });
+
+  const isLoading = (unit === "unistore" ? unistore.isFetching : unidrop.isFetching) && enabled;
 
   return (
     <>
       <Topbar
         title="Buscar clientes"
-        subtitle="Compradores finales de Unistore (TN) · Para buscar dropshippers Unidrop usa el menu 'Dropshippers' en la unidad UNIDROP"
+        subtitle="Compradores finales Unistore (TN) o dropshippers Unidrop · cada pestana busca en la base correspondiente"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
         <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <Segmented<Unit>
+            value={unit}
+            onChange={setUnit}
+            options={[
+              { value: "unistore", label: "Unistore - Compradores TN" },
+              { value: "unidrop", label: "Unidrop - Dropshippers" },
+            ]}
+          />
           <label className="inline-flex items-center gap-2 text-xs text-text-muted cursor-pointer ml-auto">
             <input
               type="checkbox"
@@ -104,7 +119,9 @@ export default function ClientesPage() {
         <div className="bg-surface border border-border rounded-xl p-4 mb-4">
           <label className="block">
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-1.5">
-              Buscar por nombre, email, telefono o ID
+              {unit === "unistore"
+                ? "Buscar comprador TN por nombre, email, telefono, DNI o ID"
+                : "Buscar dropshipper por nombre, fantasy, email, DNI, CUIT, nickname MELI o ID"}
             </div>
             <div className="relative">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -112,7 +129,7 @@ export default function ClientesPage() {
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ej: Pablo Amezcua, gmail.com, 11..."
+                placeholder={unit === "unistore" ? "Ej: Pablo Amezcua, gmail.com, 11..." : "Ej: TIENDAPINI, ezequiel@..., 20-12345678-9"}
                 className="w-full pl-10 pr-3 py-2.5 border border-border rounded-lg text-sm focus:ring-1 focus:ring-primary outline-none"
                 autoFocus
               />
@@ -133,17 +150,27 @@ export default function ClientesPage() {
           </div>
         )}
 
-        {/* UNISTORE results */}
-        {enabled && unistore.data && !isLoading && (
+        {/* Resultados Unistore */}
+        {enabled && unit === "unistore" && unistore.data && !isLoading && (
           <UnistoreResults
             data={unistore.data}
             onOpen={(id) => router.push(`/dashboard/customer/${id}`)}
+          />
+        )}
+
+        {/* Resultados Unidrop */}
+        {enabled && unit === "unidrop" && unidrop.data && !isLoading && (
+          <UnidropResults
+            data={unidrop.data}
+            onOpen={(id) => router.push(`/dashboard/dropshipper/${id}`)}
           />
         )}
       </div>
     </>
   );
 }
+
+// UnidropResults original ya existe arriba — fin.
 
 function UnistoreResults({ data, onOpen }: { data: SearchResp<UnistoreRow>; onOpen: (id: number) => void }) {
   if (data.rows.length === 0) {

@@ -298,77 +298,61 @@ def _cohorts_overview_unidrop(period: str, from_iso: str | None, to_iso: str | N
     to_ts = win["to_ts"]
     eng = get_engine("unidrop")
 
+    # FUENTE DE VERDAD: PaymentIntent PROCESSED (lo que efectivamente cobramos
+    # via Talo). Igual que en RFM Unidrop y Dropshipper 360, esto incluye a
+    # dropshippers cuyas ventas no estan sincronizadas en OrderMercadoLibre/
+    # tienda_nube_orders. Antes el query devolvia 0 dropshippers porque solo
+    # contaba lo que aparecia en esas tablas.
     rows = q(eng, """
-        WITH stats AS (
+        WITH pi_agg AS (
+          SELECT cpa."userId" AS user_id,
+                 -- Conteos lifetime (sin filtro periodo)
+                 COALESCE(SUM(COALESCE(array_length(pi."mlOrderIds",1),0)),0)::int AS ml_total,
+                 COALESCE(SUM(COALESCE(array_length(pi."orderIds",1),0)),0)::int AS tn_total,
+                 -- Conteos en periodo
+                 COALESCE(SUM(CASE WHEN pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
+                                    THEN COALESCE(array_length(pi."mlOrderIds",1),0) ELSE 0 END),0)::int AS ml_periodo,
+                 COALESCE(SUM(CASE WHEN pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
+                                    THEN COALESCE(array_length(pi."orderIds",1),0) ELSE 0 END),0)::int AS tn_periodo,
+                 -- Revenue cobrado por Unidrop en periodo
+                 COALESCE(SUM(CASE WHEN pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
+                                    THEN pi."paidAmount" ELSE 0 END),0)::float AS revenue_periodo,
+                 COALESCE(SUM(pi."paidAmount"),0)::float AS revenue_total,
+                 MIN(pi."createdAt") AS primera_venta,
+                 MAX(pi."createdAt") AS ultima_venta
+          FROM public."PaymentIntent" pi
+          INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+          WHERE pi."status" = 'PROCESSED'
+          GROUP BY cpa."userId"
+        ),
+        stats AS (
           SELECT u.id AS customer_id,
                  COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
                  COALESCE(u.email,'') AS email,
                  COALESCE(u.phone,'') AS phone,
                  COALESCE(u.dni,'') AS dni,
-                 -- Ventas ML (lifetime y periodo)
-                 (SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" o
-                  INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                    ON mla."mlUserId"::text = o."sellerId"::text
-                  WHERE mla."userId" = u.id
-                    AND o."status" IN ('paid','confirmed','shipped','delivered'))::int AS ml_total,
-                 (SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" o
-                  INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                    ON mla."mlUserId"::text = o."sellerId"::text
-                  WHERE mla."userId" = u.id
-                    AND o."status" IN ('paid','confirmed','shipped','delivered')
-                    AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts)::int AS ml_periodo,
-                 (SELECT COALESCE(SUM(o."totalAmount"),0)::float FROM mercado_libre_dev."OrderMercadoLibre" o
-                  INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                    ON mla."mlUserId"::text = o."sellerId"::text
-                  WHERE mla."userId" = u.id
-                    AND o."status" IN ('paid','confirmed','shipped','delivered')
-                    AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts) AS ml_revenue_periodo,
-                 -- Ventas TN (lifetime y periodo)
-                 (SELECT COUNT(*) FROM public.tienda_nube_orders tno
-                  WHERE tno.user_id = u.id AND tno.payment_status::text='paid')::int AS tn_total,
-                 (SELECT COUNT(*) FROM public.tienda_nube_orders tno
-                  WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
-                    AND tno.created_at >= :from_ts AND tno.created_at < :to_ts)::int AS tn_periodo,
-                 (SELECT COALESCE(SUM(tno.total),0)::float FROM public.tienda_nube_orders tno
-                  WHERE tno.user_id = u.id AND tno.payment_status::text='paid'
-                    AND tno.created_at >= :from_ts AND tno.created_at < :to_ts) AS tn_revenue_periodo,
-                 -- Ultima venta (cualquier canal)
-                 GREATEST(
-                   COALESCE((SELECT MAX("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                               ON mla."mlUserId"::text = o."sellerId"::text
-                             WHERE mla."userId" = u.id
-                               AND o."status" IN ('paid','confirmed','shipped','delivered')), 'epoch'::timestamp),
-                   COALESCE((SELECT MAX(created_at) FROM public.tienda_nube_orders
-                             WHERE user_id = u.id AND payment_status::text='paid'), 'epoch'::timestamp)
-                 ) AS ultima_venta,
-                 -- Primera venta
-                 LEAST(
-                   COALESCE((SELECT MIN("dateCreated") FROM mercado_libre_dev."OrderMercadoLibre" o
-                             INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                               ON mla."mlUserId"::text = o."sellerId"::text
-                             WHERE mla."userId" = u.id
-                               AND o."status" IN ('paid','confirmed','shipped','delivered')), 'infinity'::timestamp),
-                   COALESCE((SELECT MIN(created_at) FROM public.tienda_nube_orders
-                             WHERE user_id = u.id AND payment_status::text='paid'), 'infinity'::timestamp)
-                 ) AS primera_venta,
+                 COALESCE(pi_agg.ml_total, 0) AS ml_total,
+                 COALESCE(pi_agg.tn_total, 0) AS tn_total,
+                 COALESCE(pi_agg.ml_periodo, 0) AS ml_periodo,
+                 COALESCE(pi_agg.tn_periodo, 0) AS tn_periodo,
+                 COALESCE(pi_agg.revenue_periodo, 0) AS revenue_periodo,
+                 COALESCE(pi_agg.revenue_total, 0) AS revenue_total,
+                 pi_agg.ultima_venta,
+                 pi_agg.primera_venta,
                  u."createdAt" AS fecha_alta,
                  u.end_date_subscription AS vence_suscripcion
           FROM public."User" u
-          WHERE u."subscriptionId" IS NOT NULL
-             OR u."mercadoLibreAccountId" IS NOT NULL
-             OR EXISTS (SELECT 1 FROM public.tienda_nube_orders tno WHERE tno.user_id = u.id)
+          INNER JOIN pi_agg ON pi_agg.user_id = u.id
         )
         SELECT customer_id, nombre, email, phone, dni,
                (ml_total + tn_total) AS ordenes_total,
                (ml_periodo + tn_periodo) AS ordenes_periodo,
-               (ml_revenue_periodo + tn_revenue_periodo) AS revenue_periodo,
+               revenue_periodo,
                ultima_venta::date AS ultima_compra,
                primera_venta::date AS primera_compra,
                EXTRACT(DAY FROM (NOW() - ultima_venta))::int AS dias_desde_ultima,
                ml_total, tn_total, ml_periodo, tn_periodo,
                fecha_alta::text, vence_suscripcion::text,
-               -- primera venta CAYO en el periodo?
                (primera_venta >= :from_ts AND primera_venta < :to_ts) AS primera_en_periodo
         FROM stats
         WHERE (ml_total + tn_total) > 0
@@ -511,13 +495,47 @@ def _cohorts_overview_unidrop(period: str, from_iso: str | None, to_iso: str | N
 
 
 def cohort_customers(state: str, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None, unit: str = "unistore") -> dict:
-    """Lista todos los clientes de un estado dado en el periodo (para drilldown).
+    """Lista todos los clientes/dropshippers de un estado dado en el periodo
+    (para drilldown inline en /dashboard/cohortes).
 
-    Devuelve formato {columns, rows, row_count} compatible con DrillDownModal.
+    Devuelve ambos formatos:
+    - `customers`: lista de dicts con campos nombrados (consumido por la tabla
+      inline nueva).
+    - `columns` + `rows`: formato legacy para DrillDownModal.
     """
     overview = cohorts_overview(period, from_iso, to_iso, unit=unit)
     customers_all = overview.get("top_by_state", {}).get(state, [])
 
+    # Normalizar a estructura comun para la tabla inline (CohortInlineTable):
+    customers_normalized = []
+    for c in customers_all:
+        item = {
+            "customer_id": c.get("customer_id"),
+            "nombre": c.get("nombre"),
+            "email": c.get("email"),
+            "phone": c.get("telefono") or c.get("phone"),
+            "dni": c.get("dni"),
+            "ordenes_total": c.get("ordenes_total") or 0,
+            "ordenes_periodo": c.get("ordenes_periodo") or 0,
+            "revenue_periodo": (
+                c.get("facturacion_periodo")
+                or c.get("revenue_periodo")
+                or 0
+            ),
+            "ultima_compra": c.get("ultima_compra"),
+            "primera_compra": c.get("primera_compra"),
+            "dias_desde_ultima": c.get("dias_desde_ultima"),
+        }
+        if unit == "unidrop":
+            item["ml_total"] = c.get("ml_total") or c.get("ordenes_ml_periodo") or 0
+            item["tn_total"] = c.get("tn_total") or c.get("ordenes_tn_periodo") or 0
+            item["ml_periodo"] = c.get("ml_periodo") or c.get("ordenes_ml_periodo") or 0
+            item["tn_periodo"] = c.get("tn_periodo") or c.get("ordenes_tn_periodo") or 0
+            item["fecha_alta"] = c.get("fecha_alta")
+            item["vence_suscripcion"] = c.get("vence_suscripcion")
+        customers_normalized.append(item)
+
+    # Formato legacy (columns/rows) para mantener compat con DrillDownModal
     if unit == "unidrop":
         cols = [
             "user_id", "dropshipper", "email", "telefono", "dni",
@@ -526,20 +544,13 @@ def cohort_customers(state: str, period: str = "30d", from_iso: str | None = Non
             "ordenes_total", "ultima_venta", "dias_desde_ultima",
             "vence_suscripcion", "_unit",
         ]
-        rows = [[
-            c.get("customer_id"),
-            c.get("nombre"),
-            c.get("email"),
-            c.get("telefono"),
-            c.get("dni"),
-            c.get("ordenes_periodo"),
-            c.get("facturacion_periodo"),
-            c.get("ordenes_ml_periodo"),
-            c.get("ordenes_tn_periodo"),
-            c.get("ordenes_total"),
-            c.get("ultima_compra"),
-            c.get("dias_desde_ultima"),
-            c.get("vence_suscripcion"),
+        legacy_rows = [[
+            c.get("customer_id"), c.get("nombre"), c.get("email"),
+            c.get("telefono"), c.get("dni"),
+            c.get("ordenes_periodo"), c.get("facturacion_periodo"),
+            c.get("ordenes_ml_periodo"), c.get("ordenes_tn_periodo"),
+            c.get("ordenes_total"), c.get("ultima_compra"),
+            c.get("dias_desde_ultima"), c.get("vence_suscripcion"),
             "unidrop",
         ] for c in customers_all]
     else:
@@ -549,24 +560,20 @@ def cohort_customers(state: str, period: str = "30d", from_iso: str | None = Non
             "facturacion_periodo", "facturacion_total",
             "ultima_compra", "dias_desde_ultima", "avg_gap_days",
         ]
-        rows = [[
-            c.get("customer_id"),
-            c.get("nombre"),
-            c.get("email"),
-            c.get("telefono"),
-            c.get("ordenes_total"),
-            c.get("ordenes_periodo"),
-            c.get("facturacion_periodo"),
-            c.get("facturacion_total"),
-            c.get("ultima_compra"),
-            c.get("dias_desde_ultima"),
-            c.get("avg_gap_days"),
+        legacy_rows = [[
+            c.get("customer_id"), c.get("nombre"), c.get("email"),
+            c.get("telefono"), c.get("ordenes_total"),
+            c.get("ordenes_periodo"), c.get("facturacion_periodo"),
+            c.get("facturacion_total"), c.get("ultima_compra"),
+            c.get("dias_desde_ultima"), c.get("avg_gap_days"),
         ] for c in customers_all]
 
     return {
+        "customers": customers_normalized,
+        "total": len(customers_normalized),
         "columns": cols,
-        "rows": rows,
-        "row_count": len(rows),
+        "rows": legacy_rows,
+        "row_count": len(legacy_rows),
         "state": state,
         "label": next((s["label"] for s in overview["states"] if s["key"] == state), state),
         "period": period,
