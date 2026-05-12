@@ -523,6 +523,89 @@ def tn_orders_stuck() -> dict:
     return _orders_serialize(rows)
 
 
+def unidrop_orders_tn_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes TN de DROPSHIPPERS (Unidrop, no Unistore). Source: unidrop.public.tienda_nube_orders.
+
+    Cada fila tiene `number` (DROP-{dni}-{seq}) que se puede linkear al panel Unidrop.
+    NUNCA mezclar con tienda_nube de Unistore (que es Fox Electronics).
+    """
+    eng = get_engine("unidrop")
+    days = resolve_window(period, from_iso, to_iso)["days"]
+    rows = q(eng, """
+        SELECT tno.tienda_nube_id::text AS id,
+               tno."number",
+               tno.created_at::text AS fecha,
+               tno.payment_status::text AS estado_pago,
+               COALESCE(tno.total, 0)::float AS total,
+               COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
+               COALESCE(tno."billingProvince", tno."shippingProvince", '') AS provincia,
+               tno.user_id AS dropshipper_id
+        FROM public.tienda_nube_orders tno
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= NOW() - make_interval(days => :d)
+        ORDER BY tno.created_at DESC NULLS LAST
+        LIMIT 2000
+    """, {"d": days}) or []
+    return _serialize(rows, [
+        "id", "number", "fecha", "estado_pago", "total", "cliente", "provincia", "dropshipper_id",
+    ])
+
+
+def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes ML de DROPSHIPPERS (Unidrop, no Unistore Fox Electronics).
+    Source: unidrop.mercado_libre_dev.OrderMercadoLibre.
+    """
+    eng = get_engine("unidrop")
+    days = resolve_window(period, from_iso, to_iso)["days"]
+    rows = q(eng, """
+        SELECT o.id::text AS id,
+               o."number",
+               o."mlOrderId"::text AS ml_order_id,
+               o."dateCreated"::text AS fecha,
+               o.status::text AS estado,
+               COALESCE(o."totalAmount", 0)::float AS total,
+               COALESCE(o."profit_for_subscription", 0)::float AS profit_unidrop,
+               COALESCE(o."shipping_cost", 0)::float AS shipping_cost
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        WHERE o.status IN ('paid','confirmed','shipped','delivered')
+          AND o."dateCreated" >= NOW() - make_interval(days => :d)
+        ORDER BY o."dateCreated" DESC NULLS LAST
+        LIMIT 2000
+    """, {"d": days}) or []
+    return _serialize(rows, [
+        "id", "number", "ml_order_id", "fecha", "estado", "total", "profit_unidrop", "shipping_cost",
+    ])
+
+
+def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes cobradas a Unidrop via Talo: PaymentIntent PROCESSED del periodo.
+    Ground truth de lo que efectivamente facturamos.
+    """
+    eng = get_engine("unidrop")
+    days = resolve_window(period, from_iso, to_iso)["days"]
+    rows = q(eng, """
+        SELECT pi.id::text AS intent_id,
+               pi."createdAt"::text AS fecha,
+               pi."paidAmount"::float AS pagado,
+               COALESCE(array_length(pi."mlOrderIds",1), 0)::int AS ml_orders_count,
+               COALESCE(array_length(pi."orderIds",1), 0)::int AS tn_orders_count,
+               COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS dropshipper,
+               u.dni AS dni,
+               u.id AS dropshipper_id
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        LEFT JOIN public."User" u ON u.id = cpa."userId"
+        WHERE pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+        ORDER BY pi."createdAt" DESC NULLS LAST
+        LIMIT 2000
+    """, {"d": days}) or []
+    return _serialize(rows, [
+        "intent_id", "fecha", "pagado", "ml_orders_count", "tn_orders_count",
+        "dropshipper", "dni", "dropshipper_id",
+    ])
+
+
 def tn_products_published() -> dict:
     eng = get_engine("unistore")
     rows = q(eng, """

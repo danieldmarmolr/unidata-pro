@@ -38,9 +38,26 @@ export function getCardDrill(label: string, ctx: Ctx = {}): KpiDrill | undefined
   if (lc.includes("vencer")) return { endpoint: `/api/drilldowns/saas/users-expiring${qs({ days: "7", segment: seg })}`, title: "Suscripciones a vencer (7 dias)", filename: "vencer_7d.csv" };
   if (lc.includes("tiendas")) return { endpoint: `/api/drilldowns/saas/tn-credentials`, title: "Tiendas TN conectadas", filename: "tiendas_tn.csv" };
 
-  // TN orders
+  // UNIDROP cards (deben matchear ANTES que el catch-all de gmv abajo, que va a Unistore)
+  if (lc.includes("facturado a unidrop")) {
+    return { endpoint: `/api/drilldowns/unidrop/intents-processed${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Facturado a Unidrop (${period})`, subtitle: "PaymentIntent PROCESSED · click una fila", filename: `unidrop_facturado_${period}.csv` };
+  }
+  if (lc.includes("ordenes cobradas via talo")) {
+    return { endpoint: `/api/drilldowns/unidrop/intents-processed${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes cobradas via Talo (${period})`, filename: `unidrop_cobradas_${period}.csv` };
+  }
+  if ((lc.includes("gmv") && (lc.includes("dropshipper") || lc.includes("unidrop"))) && lc.includes("tn")) {
+    return { endpoint: `/api/drilldowns/unidrop/orders-tn${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes TN dropshippers Unidrop (${period})`, filename: `unidrop_tn_${period}.csv` };
+  }
+  if ((lc.includes("gmv") && (lc.includes("dropshipper") || lc.includes("unidrop"))) && lc.includes("ml")) {
+    return { endpoint: `/api/drilldowns/unidrop/orders-ml${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes ML dropshippers Unidrop (${period})`, filename: `unidrop_ml_${period}.csv` };
+  }
+  if (lc.includes("gmv unidrop") || (lc.includes("gmv") && lc.includes("unidrop"))) {
+    return { endpoint: `/api/drilldowns/unidrop/intents-processed${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `GMV Unidrop · cobranzas Talo (${period})`, filename: `unidrop_gmv_${period}.csv` };
+  }
+
+  // TN orders Unistore (el catch-all gmv solo entra para cards que NO son Unidrop)
   if (lc.includes("gmv") || lc.includes("revenue") && !lc.includes("operativa") && !lc.includes("contabilium")) {
-    return { endpoint: `/api/drilldowns/orders/paid${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes pagas (${period})`, subtitle: "Click filas para ver detalle", filename: `orders_paid_${period}.csv` };
+    return { endpoint: `/api/drilldowns/orders/paid${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes pagas Unistore (${period})`, subtitle: "Click filas para ver detalle", filename: `orders_paid_${period}.csv` };
   }
   if (lc.startsWith("ordenes") || lc === "ordenes" || lc.includes("ordenes unistore")) {
     return { endpoint: `/api/drilldowns/orders/all${qs({ period, from: ctx.customFrom, to: ctx.customTo })}`, title: `Ordenes (${period})`, filename: `orders_${period}.csv` };

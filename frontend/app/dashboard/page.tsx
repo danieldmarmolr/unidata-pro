@@ -98,6 +98,11 @@ type ExtendedExec = ExecutiveOverview & {
   unit_health?: UnitHealth[];
   top_products_cross?: CategoryValue[];
   lifecycle_mix?: CategoryValue[];
+  unidev_analysis?: {
+    top_motivos: CategoryValue[];
+    top_resoluciones: CategoryValue[];
+    top_skus: CategoryValue[];
+  };
 };
 
 function UnitHealthCard({ u, drillCtx }: { u: UnitHealth; drillCtx: Ctx }) {
@@ -177,6 +182,56 @@ function UnitMetricCell({ m, drill }: { m: UnitMetric; drill: ReturnType<typeof 
         />
       )}
     </>
+  );
+}
+
+function UnidevMiniTable({
+  title, rows, color, suffix, extraKey, extraLabel,
+}: {
+  title: string;
+  rows: CategoryValue[];
+  color: string;
+  suffix?: string;
+  extraKey?: string;
+  extraLabel?: string;
+}) {
+  if (!rows || rows.length === 0) {
+    return (
+      <div className="bg-surface border border-border rounded-xl p-4">
+        <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">{title}</div>
+        <div className="text-xs text-text-muted italic py-6 text-center">Sin datos en el periodo</div>
+      </div>
+    );
+  }
+  const max = Math.max(1, ...rows.map((r) => r.value));
+  return (
+    <div className="bg-surface border border-border rounded-xl p-4">
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-3">{title}</div>
+      <div className="space-y-1.5">
+        {rows.slice(0, 8).map((r, i) => {
+          const extra = (r as any).extra ?? {};
+          const extraVal = extraKey ? extra[extraKey] : undefined;
+          return (
+            <div key={(r.category as string) + i} className="text-xs">
+              <div className="flex items-center justify-between gap-2 mb-0.5">
+                <span className="font-medium text-text truncate max-w-[200px]" title={r.category as string}>{r.category}</span>
+                <span className="tabular-nums font-bold" style={{ color }}>
+                  {formatNumber(r.value)}{suffix ?? ""}
+                </span>
+              </div>
+              <div className="h-1.5 bg-soft rounded overflow-hidden">
+                <div className="h-full" style={{ background: color, width: `${(r.value / max) * 100}%` }} />
+              </div>
+              {extraVal !== undefined && extraLabel && (
+                <div className="text-[10px] text-text-muted mt-0.5">
+                  {extraLabel}: <strong className="text-text">{extraVal}</strong>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -302,6 +357,23 @@ export default function ExecutiveDashboardPage() {
               {data.unit_health.map((u) => (
                 <UnitHealthCard key={u.unit} u={u} drillCtx={{ period, customFrom, customTo }} />
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Analisis Unidev: causas + resoluciones + SKUs con mas devs */}
+        {data?.unidev_analysis && (
+          <div className="bg-rose-50/30 border border-rose-200 rounded-xl p-5 mb-6">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                Analisis Unidev · {periodLabel}
+              </span>
+              <span className="text-[11px] text-rose-700/80">causas, resoluciones y SKUs con mas devoluciones</span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <UnidevMiniTable title="Top causas (motivos de falla)" rows={data.unidev_analysis.top_motivos} color="#f43f5e" suffix=" unid" extraKey="items" extraLabel="items" />
+              <UnidevMiniTable title="Tipo de resolucion preferida" rows={data.unidev_analysis.top_resoluciones} color="#fb923c" suffix=" devs" />
+              <UnidevMiniTable title="SKUs mas devueltos" rows={data.unidev_analysis.top_skus} color="#ef4444" suffix=" u" extraKey="items" extraLabel="items" />
             </div>
           </div>
         )}

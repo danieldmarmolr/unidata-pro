@@ -158,6 +158,43 @@ def drill_orders_stuck(_: Annotated[dict, Depends(current_user)]) -> dict:
     return svc.tn_orders_stuck()
 
 
+# ============================================
+# UNIDROP drilldowns (NO mezclar con Unistore)
+# ============================================
+
+@router.get("/unidrop/orders-tn")
+def drill_unidrop_orders_tn(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[_PERIOD_LITERAL, Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Ordenes TN de dropshippers Unidrop pagadas en periodo."""
+    return svc.unidrop_orders_tn_paid(period, from_iso=from_iso, to_iso=to_iso)
+
+
+@router.get("/unidrop/orders-ml")
+def drill_unidrop_orders_ml(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[_PERIOD_LITERAL, Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Ordenes ML de dropshippers Unidrop pagadas en periodo."""
+    return svc.unidrop_orders_ml_paid(period, from_iso=from_iso, to_iso=to_iso)
+
+
+@router.get("/unidrop/intents-processed")
+def drill_unidrop_intents(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[_PERIOD_LITERAL, Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """PaymentIntent PROCESSED del periodo: lo facturado a Unidrop via Talo."""
+    return svc.unidrop_intents_processed(period, from_iso=from_iso, to_iso=to_iso)
+
+
 @router.get("/products/published")
 def drill_products_published(_: Annotated[dict, Depends(current_user)]) -> dict:
     return svc.tn_products_published()

@@ -512,6 +512,58 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         ],
     })
 
+    # ---------- Analisis Unidev: causas + resoluciones + SKUs (en periodo) ----------
+    dev_top_motivos: list[dict] = []
+    dev_top_resoluciones: list[dict] = []
+    dev_top_skus: list[dict] = []
+    try:
+        dev_eng = get_engine("unidev")
+        # Top motivos de falla (causas)
+        rows = _q(dev_eng, """
+            SELECT COALESCE(f.descripcion,'(sin descripcion)') AS motivo,
+                   SUM(f.canitdad)::int AS cant,
+                   COUNT(DISTINCT f.devolucion_item_id)::int AS items
+            FROM public.devolucion_items_fallas f
+            JOIN public.devolucion_items di ON di.devolucion_item_id = f.devolucion_item_id
+            JOIN public.devoluciones d ON d.devolucion_id = di.devolucion_id
+            WHERE d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts
+            GROUP BY 1
+            ORDER BY cant DESC LIMIT 10
+        """, win_params) or []
+        dev_top_motivos = [{
+            "category": r[0],
+            "value": int(r[1] or 0),
+            "extra": {"items": int(r[2] or 0)},
+        } for r in rows]
+
+        # Tipos de resolucion preferida
+        rows = _q(dev_eng, """
+            SELECT COALESCE(tipo_resolucion_preferida,'(sin tipo)') AS tipo, COUNT(*)::int
+            FROM public.devoluciones
+            WHERE fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+            GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+        """, win_params) or []
+        dev_top_resoluciones = [{"category": r[0], "value": int(r[1] or 0)} for r in rows]
+
+        # SKUs con mas devoluciones (unidades)
+        rows = _q(dev_eng, """
+            SELECT COALESCE(di.sku,'(sin SKU)') AS sku,
+                   SUM(di.cantidad_solicitada)::int AS unidades,
+                   COUNT(*)::int AS items,
+                   COALESCE(SUM(di.monto_unitario * di.cantidad_solicitada),0)::float AS monto
+            FROM public.devolucion_items di
+            JOIN public.devoluciones d ON d.devolucion_id = di.devolucion_id
+            WHERE d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts
+            GROUP BY 1 ORDER BY unidades DESC LIMIT 10
+        """, win_params) or []
+        dev_top_skus = [{
+            "category": r[0],
+            "value": int(r[1] or 0),
+            "extra": {"items": int(r[2] or 0), "monto": float(r[3] or 0)},
+        } for r in rows]
+    except Exception as e:
+        log.warning("dev analytics fail: %s", e)
+
     # ---------- Top productos cross-canal (TN + ML) ----------
     top_cross_rows = _q(uni, """
         WITH tn_p AS (
@@ -603,5 +655,11 @@ def executive_overview(period: str = "30d", from_iso: str | None = None, to_iso:
         "lifecycle_mix": lifecycle_mix,
         "integration_health": integrations,
         "top_alerts": alerts[:8],
+        # Unidev breakdown analitico - causas / resoluciones / SKUs
+        "unidev_analysis": {
+            "top_motivos": dev_top_motivos,
+            "top_resoluciones": dev_top_resoluciones,
+            "top_skus": dev_top_skus,
+        },
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
