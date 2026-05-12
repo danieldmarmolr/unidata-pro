@@ -1103,15 +1103,15 @@ def dropshipper_unified_orders(
     # con ANY(ARRAY[...]::text[]). Bajamos a single-WHERE por query, que
     # confirmamos funciona con count=11 del debug anterior.)
     uid_int = int(user_id)
+    # Columnas mínimas que SABEMOS existen (last_tn_orders ya las usa).
+    # Las extras (contact_name, billing_province, contact_identification) las
+    # traemos con un SELECT defensivo aparte que si falla por schema no rompe.
     base_select = """
         SELECT tno.tienda_nube_id::text AS internal_id,
                tno."number",
                tno.created_at::text AS fecha,
                tno.payment_status::text AS payment_status,
-               COALESCE(tno.total,0)::float AS total,
-               COALESCE(tno.contact_name, '') AS buyer_name,
-               COALESCE(tno.billing_province,'') AS provincia,
-               COALESCE(tno.contact_identification,'') AS dni
+               COALESCE(tno.total,0)::float AS total
         FROM public.tienda_nube_orders tno
     """
     erows_all: list = []
@@ -1165,13 +1165,32 @@ def dropshipper_unified_orders(
                 "merch_cost": 0.0,
                 "shipping_cost": 0.0,
                 "profit_unidrop": 0.0,
-                "buyer_name": er[5] or "",
+                "buyer_name": "",  # se enriquece abajo si la col existe
                 "shipping_type": "",
                 "intent_id": key_intent,
                 "enriched": True,
             })
     except Exception as e:
         log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
+
+    # Enriquecer buyer_name con una query defensiva (si la col contact_name no
+    # existe, q() devuelve None y seguimos con buyer_name vacio).
+    if tn_rows:
+        ids_for_enrich = ",".join("'" + str(r["internal_id"]) + "'" for r in tn_rows if r.get("internal_id"))
+        if ids_for_enrich:
+            try:
+                buyer_rows = q(eng, f"""
+                    SELECT tienda_nube_id::text, COALESCE(contact_name, '')
+                    FROM public.tienda_nube_orders
+                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
+                """) or []
+                buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
+                for r in tn_rows:
+                    iid = str(r.get("internal_id") or "")
+                    if iid in buyer_map:
+                        r["buyer_name"] = buyer_map[iid]
+            except Exception:
+                pass  # col puede no existir, ignoramos
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
