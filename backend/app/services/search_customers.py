@@ -174,6 +174,10 @@ def search_unidrop_dropshippers(
             ") "
         )
 
+    # Patron normal y patron sin espacios (asi 'tiendapi' matchea 'Tienda Pini')
+    pat = f"%{qstr}%"
+    pat_collapsed = "%" + qstr.replace(" ", "") + "%"
+
     rows = q(eng, f"""
         SELECT u.id,
                COALESCE(NULLIF(u.fantasy_name,''), NULLIF(u.name,''), '(sin nombre)') AS nombre,
@@ -182,6 +186,7 @@ def search_unidrop_dropshippers(
                COALESCE(u.phone,'') AS telefono,
                COALESCE(u.dni,'') AS dni,
                COALESCE(u.cuit,'') AS cuit,
+               COALESCE(mla.nickname,'') AS nickname_meli,
                u."createdAt"::text AS fecha_alta,
                u.end_date_subscription::text AS vence_suscripcion,
                COALESCE((
@@ -197,28 +202,34 @@ def search_unidrop_dropshippers(
                     AND tno.created_at >= NOW() - make_interval(days => :d)
                ),0)::float AS tn_revenue_periodo,
                COALESCE((
-                  SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" mo
-                  JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-                    ON mla."mlUserId"::text = mo."sellerId"::text
-                  WHERE mla."userId" = u.id
-                    AND mo."dateCreated" >= NOW() - make_interval(days => :d)
-                    AND mo.status IN ('paid','confirmed','shipped','delivered')
+                  SELECT SUM(COALESCE(array_length(pi."mlOrderIds",1),0))
+                  FROM public."PaymentIntent" pi
+                  INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                  WHERE cpa."userId" = u.id
+                    AND pi."status" = 'PROCESSED'
+                    AND pi."createdAt" >= NOW() - make_interval(days => :d)
                ),0)::int AS ml_ordenes_periodo
         FROM public."User" u
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
         WHERE (
               u.name ILIKE :pat
            OR u.fantasy_name ILIKE :pat
+           OR REPLACE(u.fantasy_name, ' ', '') ILIKE :pat_collapsed
+           OR REPLACE(u.name, ' ', '') ILIKE :pat_collapsed
            OR u.email ILIKE :pat
            OR u.phone ILIKE :pat
            OR u.dni ILIKE :pat
            OR u.cuit ILIKE :pat
+           OR mla.nickname ILIKE :pat
+           OR mla.nickname ILIKE :pat_collapsed
            OR ({'u.id = :uid' if id_candidate is not None else 'FALSE'})
         )
         {period_filter}
         ORDER BY (tn_revenue_periodo) DESC NULLS LAST, u."createdAt" DESC NULLS LAST
         LIMIT :lim
     """, {
-        "pat": f"%{qstr}%",
+        "pat": pat,
+        "pat_collapsed": pat_collapsed,
         "uid": id_candidate if id_candidate is not None else 0,
         "d": int(days),
         "lim": int(limit),
@@ -232,11 +243,12 @@ def search_unidrop_dropshippers(
         "telefono": r[4],
         "dni": r[5],
         "cuit": r[6],
-        "fecha_alta": (r[7] or "")[:10] if r[7] else None,
-        "vence_suscripcion": (r[8] or "")[:10] if r[8] else None,
-        "tn_ordenes_periodo": int(r[9] or 0),
-        "tn_revenue_periodo": float(r[10] or 0),
-        "ml_ordenes_periodo": int(r[11] or 0),
+        "nickname_meli": r[7] or "",
+        "fecha_alta": (r[8] or "")[:10] if r[8] else None,
+        "vence_suscripcion": (r[9] or "")[:10] if r[9] else None,
+        "tn_ordenes_periodo": int(r[10] or 0),
+        "tn_revenue_periodo": float(r[11] or 0),
+        "ml_ordenes_periodo": int(r[12] or 0),
     } for r in rows]
 
     return {
