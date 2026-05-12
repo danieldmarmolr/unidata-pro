@@ -16,6 +16,7 @@ import { Segmented } from "@/components/segmented";
 import { ActionableFooter } from "@/components/actionable-footer";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 
 type Segment = {
   key: string;
@@ -59,11 +60,9 @@ type RfmResponse = {
   generated_at: string;
 };
 
-type Unit = "unistore" | "unidrop";
-
 export default function RfmPage() {
   const [period, setPeriod] = useState(365);
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [selectedSeg, setSelectedSeg] = useState<string | null>(null);
 
   const { data, isLoading, isFetching } = useQuery<RfmResponse>({
@@ -88,6 +87,8 @@ export default function RfmPage() {
               <Segmented<Unit>
                 value={unit}
                 onChange={setUnit}
+                disabled={unitLocked}
+                lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
                 options={[
                   { value: "unistore", label: "Unistore (clientes finales)" },
                   { value: "unidrop", label: "Unidrop (dropshippers)" },

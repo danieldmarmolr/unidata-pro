@@ -20,9 +20,9 @@ import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-o
 import { SmartSearch } from "@/components/smart-search";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
 
-type Unit = "unistore" | "unidrop";
 type Channel = "all" | "tn" | "ml";
 
 type CsResp = {
@@ -52,7 +52,7 @@ export default function CustomerSuccessPage() {
  const customTo = useGlobalFilters((s) => s.customTo);
  const _qs = periodToQuery(period, customFrom, customTo);
  const router = useRouter();
- const [unit, setUnit] = useState<Unit>("unistore");
+ const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
  const [channel, setChannel] = useState<Channel>("all");
  const [drillCustomerId, setDrillCustomerId] = useState<{ id: number; name: string } | null>(null);
  const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
@@ -81,6 +81,8 @@ export default function CustomerSuccessPage() {
  <Segmented<Unit>
  value={unit}
  onChange={setUnit}
+ disabled={unitLocked}
+ lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
  options={[
  { value: "unistore", label: "Unistore" },
  { value: "unidrop", label: "Unidrop" },

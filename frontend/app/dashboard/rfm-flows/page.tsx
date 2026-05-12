@@ -9,6 +9,7 @@ import { ExportButtons } from "@/components/export-buttons";
 import { ActionableFooter } from "@/components/actionable-footer";
 import { api } from "@/lib/api";
 import { formatNumber, formatCurrency } from "@/lib/utils";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 
 type Flow = {
   from: string;
@@ -35,7 +36,7 @@ type Resp = {
 };
 
 export default function RfmFlowsPage() {
-  const [unit, setUnit] = useState<"unistore" | "unidrop">("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const { data, isLoading } = useQuery<Resp>({
     queryKey: ["rfm-flows", unit],
     queryFn: () => api(`/api/dashboards/rfm-flows?unit=${unit}`),
@@ -55,21 +56,26 @@ export default function RfmFlowsPage() {
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
         {/* Toggle Unistore / Unidrop */}
-        <div className="mb-4 inline-flex bg-soft rounded-xl p-1 border border-border">
+        <div className={"mb-4 inline-flex bg-soft rounded-xl p-1 border border-border " + (unitLocked ? "opacity-60" : "")}
+          title={unitLocked ? `Fijado a ${unit}` : undefined}>
           <button
             onClick={() => setUnit("unistore")}
+            disabled={unitLocked}
             className={
               "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
-              (unit === "unistore" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+              (unit === "unistore" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text") +
+              (unitLocked ? " cursor-not-allowed" : "")
             }
           >
             UNISTORE (clientes finales)
           </button>
           <button
             onClick={() => setUnit("unidrop")}
+            disabled={unitLocked}
             className={
               "px-4 py-1.5 text-xs font-bold rounded-lg transition " +
-              (unit === "unidrop" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+              (unit === "unidrop" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text") +
+              (unitLocked ? " cursor-not-allowed" : "")
             }
           >
             UNIDROP (dropshippers)

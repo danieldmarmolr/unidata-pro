@@ -13,9 +13,8 @@ import { CohortInlineTable } from "@/components/cohort-inline-table";
 import { api } from "@/lib/api";
 import { X } from "lucide-react";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-
-type Unit = "unistore" | "unidrop";
 
 type StateKey =
   | "nuevo"
@@ -64,7 +63,7 @@ export default function CohortesPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [drillState, setDrillState] = useState<{ state: StateKey; label: string; color: string } | null>(null);
 
   const { data, isLoading, isFetching } = useQuery<CohortsResponse>({
@@ -102,6 +101,8 @@ export default function CohortesPage() {
             <Segmented<Unit>
               value={unit}
               onChange={setUnit}
+              disabled={unitLocked}
+              lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
               options={[
                 { value: "unistore", label: "Unistore (clientes finales)" },
                 { value: "unidrop", label: "Unidrop (dropshippers)" },

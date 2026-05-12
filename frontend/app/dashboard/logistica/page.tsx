@@ -19,9 +19,9 @@ import { DrillDownModal } from "@/components/drilldown-modal";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
 
-type Unit = "unistore" | "unidrop";
 
 type LogResp = {
   unit?: string;
@@ -45,7 +45,7 @@ export default function LogisticaPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
 
   const { data, isLoading, isFetching, error } = useQuery<LogResp>({
@@ -77,6 +77,8 @@ export default function LogisticaPage() {
             <Segmented<Unit>
               value={unit}
               onChange={setUnit}
+              disabled={unitLocked}
+              lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
               options={[
                 { value: "unistore", label: "Unistore" },
                 { value: "unidrop", label: "Unidrop" },

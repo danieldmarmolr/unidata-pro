@@ -18,10 +18,10 @@ import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { SalesOverview } from "@/lib/types";
 
 type Channel = "all" | "tn" | "ml";
-type Unit = "unistore" | "unidrop";
 
 type Drill =
  | { kind: "product"; productId: string; name: string }
@@ -34,7 +34,7 @@ export default function VentasPage() {
  const customTo = useGlobalFilters((s) => s.customTo);
  const _qs = periodToQuery(period, customFrom, customTo);
  const router = useRouter();
- const [unit, setUnit] = useState<Unit>("unistore");
+ const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
  const [channel, setChannel] = useState<Channel>("all");
  const [drill, setDrill] = useState<Drill | null>(null);
 
@@ -73,6 +73,8 @@ export default function VentasPage() {
  <Segmented<Unit>
  value={unit}
  onChange={setUnit}
+ disabled={unitLocked}
+ lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
  options={[
  { value: "unistore", label: "Unistore" },
  { value: "unidrop", label: "Unidrop" },

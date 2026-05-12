@@ -18,9 +18,8 @@ import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatNumber } from "@/lib/utils";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeries, TimeSeriesPoint } from "@/lib/types";
-
-type Unit = "unistore" | "unidrop";
 
 type MktUni = {
   cards: KpiCardT[];
@@ -81,7 +80,7 @@ function CohortHeatmap({ data }: { data: { cohort: string; data: Record<string, 
 }
 
 export default function MarketingPage() {
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
@@ -120,6 +119,8 @@ export default function MarketingPage() {
               <Segmented<Unit>
                 value={unit}
                 onChange={setUnit}
+                disabled={unitLocked}
+                lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
                 options={[
                   { value: "unistore", label: "Unistore" },
                   { value: "unidrop", label: "Unidrop" },
