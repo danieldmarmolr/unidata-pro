@@ -10,6 +10,8 @@ export type AuthUser = {
   name: string;
   role: "admin" | "user" | "gerencia" | "analista" | "lector";
   is_admin: boolean;
+  /** Slug del area asignada al user (poblado via /api/users/me · usado por RBAC sidebar). */
+  area_slug?: string | null;
 };
 
 export function getToken(): string | null {

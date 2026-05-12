@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Cake, Briefcase, MapPin, Sparkles, ChevronRight, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, getUser, setUser } from "@/lib/api";
 
 type Area = { id: number; slug: string; name: string; color: string; description: string };
 type AreasResp = { areas: Area[] };
@@ -11,7 +11,7 @@ type AreasResp = { areas: Area[] };
 type Me = {
   user: {
     id: number; email: string; name: string;
-    area_id: number | null; area_name: string | null; area_color: string | null;
+    area_id: number | null; area_name: string | null; area_color: string | null; area_slug: string | null;
     birthday_month: number | null; birthday_day: number | null; birthday_year: number | null;
     joined_at: string | null; location_city: string | null; interests: string | null;
     profile_completed: boolean;
@@ -30,6 +30,21 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     queryFn: () => api<Me>("/api/users/me"),
     staleTime: 30_000,
   });
+
+  // Sincroniza area_slug del backend al localStorage user para que el sidebar
+  // pueda hacer RBAC por area sin re-fetch.
+  useEffect(() => {
+    if (!data?.user) return;
+    const current = getUser();
+    if (!current) return;
+    const fresh = { ...current, area_slug: data.user.area_slug ?? null };
+    if (current.area_slug !== fresh.area_slug) {
+      setUser(fresh);
+      // Dispatch storage event para que el sidebar (que lee de localStorage) se re-render
+      try { window.dispatchEvent(new Event("storage")); } catch {}
+    }
+  }, [data?.user?.area_slug]);
+
   if (isLoading) return <>{children}</>;
   if (data?.needs_onboarding) {
     return (

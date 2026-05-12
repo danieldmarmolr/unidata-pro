@@ -43,6 +43,11 @@ import {
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
 
+/** Slugs de areas operativas (sin Gerencia que es ROL). */
+type AreaSlug =
+  | "administracion" | "compras" | "finanzas" | "ventas"
+  | "logistica" | "cs" | "marketing" | "people" | "it_data";
+
 type NavItem = {
   label: string;
   href: string;
@@ -52,6 +57,8 @@ type NavItem = {
   adminOnly?: boolean;
   /** Si presente, solo visible para esos roles (admin siempre puede ver). */
   roles?: Role[];
+  /** Si presente, colaboradores con esas areas (o gerentes/admin) lo ven. */
+  areas?: AreaSlug[];
   children?: NavItem[];
 };
 
@@ -64,13 +71,14 @@ const ITEMS: NavItem[] = [
   { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA, areas: ["marketing"] },
   {
     label: "Customer Success",
     href: "/dashboard/cs",
     icon: HeartHandshake,
     group: "Cross",
     roles: ONLY_GERENCIA,
+    areas: ["cs"],
     children: [
       { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
       { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
@@ -79,13 +87,14 @@ const ITEMS: NavItem[] = [
       { label: "NLP Cancelaciones",     href: "/dashboard/cancel-nlp", icon: AlertTriangle },
     ],
   },
-  { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
   {
     label: "Producto",
     href: "/dashboard/productos",
     icon: ShoppingBag,
     group: "Cross",
     roles: ONLY_GERENCIA,
+    areas: ["ventas", "compras"],
     children: [
       { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
       { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
@@ -94,20 +103,20 @@ const ITEMS: NavItem[] = [
       { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
     ],
   },
-  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL },
-  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore", roles: ALL },
-  { label: "Envios por canal", href: "/dashboard/envios-unistore", icon: Package,         group: "Unistore", roles: ALL },
-  { label: "Heatmap stock",    href: "/dashboard/stock-heatmap",  icon: Warehouse,       group: "Unistore", roles: ["admin", "gerencia", "analista"] },
-  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore", roles: ALL },
-  { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop", roles: ALL },
-  { label: "Dropshippers",     href: "/dashboard/dropshippers",   icon: Users,           group: "Unidrop", roles: ALL },
-  { label: "Pagos Talo",       href: "/dashboard/pagos",          icon: CreditCard,      group: "Unidrop", roles: ALL },
-  { label: "Suscripciones MELI", href: "/dashboard/subscriptions-meli", icon: Sparkles, group: "Unidrop", roles: ALL },
-  { label: "Envios",           href: "/dashboard/envios",         icon: Package,         group: "Unidrop", roles: ALL },
-  { label: "Envios MELI por modo", href: "/dashboard/envios-meli", icon: Package,         group: "Unidrop", roles: ALL },
-  { label: "Devoluciones",     href: "/dashboard/devoluciones",   icon: RotateCcw,       group: "Unidev", roles: ALL },
-  { label: "NLP causas (Unidev)", href: "/dashboard/dev-nlp",     icon: AlertTriangle,   group: "Unidev", roles: ALL },
-  { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "analista"] },
+  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL, areas: ["ventas"] },
+  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore", roles: ALL, areas: ["logistica"] },
+  { label: "Envios por canal", href: "/dashboard/envios-unistore", icon: Package,        group: "Unistore", roles: ALL, areas: ["logistica"] },
+  { label: "Heatmap stock",    href: "/dashboard/stock-heatmap",  icon: Warehouse,       group: "Unistore", roles: ["admin", "gerencia", "analista"], areas: ["logistica", "compras"] },
+  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore", roles: ALL, areas: ["finanzas", "administracion"] },
+  { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop", roles: ALL, areas: ["ventas", "marketing"] },
+  { label: "Dropshippers",     href: "/dashboard/dropshippers",   icon: Users,           group: "Unidrop", roles: ALL, areas: ["ventas", "cs"] },
+  { label: "Pagos Talo",       href: "/dashboard/pagos",          icon: CreditCard,      group: "Unidrop", roles: ALL, areas: ["finanzas", "administracion"] },
+  { label: "Suscripciones MELI", href: "/dashboard/subscriptions-meli", icon: Sparkles,  group: "Unidrop", roles: ALL, areas: ["finanzas", "ventas"] },
+  { label: "Envios",           href: "/dashboard/envios",         icon: Package,         group: "Unidrop", roles: ALL, areas: ["logistica"] },
+  { label: "Envios MELI por modo", href: "/dashboard/envios-meli", icon: Package,        group: "Unidrop", roles: ALL, areas: ["logistica"] },
+  { label: "Devoluciones",     href: "/dashboard/devoluciones",   icon: RotateCcw,       group: "Unidev", roles: ALL, areas: ["cs", "logistica"] },
+  { label: "NLP causas (Unidev)", href: "/dashboard/dev-nlp",     icon: AlertTriangle,   group: "Unidev", roles: ALL, areas: ["cs", "it_data"] },
+  { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "analista"], areas: ["it_data"] },
   { label: "Explorador",       href: "/dashboard/sources",        icon: Database,        group: "Datos", roles: ["admin", "analista"] },
   { label: "SQL libre",        href: "/dashboard/sql",            icon: Terminal,        group: "Datos", roles: ["admin", "analista"] },
   { label: "Audit log",        href: "/dashboard/audit",          icon: ScrollText,      group: "Datos",       adminOnly: true },
@@ -175,9 +184,19 @@ export function Sidebar({
   }, [collapsed, hydrated]);
 
   const role = (user?.role as Role) ?? "user";
+  // RBAC por area: si el user no es admin/gerencia y el item tiene `areas`,
+  // solo se muestra si su area_slug esta incluida. Items sin `areas` se
+  // consideran cross-area (todos los pueden ver, respetando roles).
+  const userAreaSlug = (user?.area_slug as AreaSlug | undefined) ?? undefined;
+  const isPriviledged = role === "admin" || role === "gerencia";
   const visibleItems = ITEMS.filter((it) => {
     if (it.adminOnly && role !== "admin") return false;
     if (it.roles && role !== "admin" && !it.roles.includes(role)) return false;
+    // RBAC area: si tiene areas restrictivas, gerentes/admin pasan; colaboradores
+    // requieren que su area este en la lista.
+    if (it.areas && it.areas.length > 0 && !isPriviledged) {
+      if (!userAreaSlug || !it.areas.includes(userAreaSlug)) return false;
+    }
     return true;
   });
 
