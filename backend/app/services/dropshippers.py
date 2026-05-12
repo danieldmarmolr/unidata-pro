@@ -1099,12 +1099,15 @@ def dropshipper_unified_orders(
             })
 
     # 3) Enrich TN — linkage doble: (a) via pi.orderIds (safe_tn) y (b) directo
-    # por user_id en tienda_nube_orders. La (b) captura TN orders del dropshipper
-    # aunque todavia no esten vinculadas a un PaymentIntent.
+    # por user_id en tienda_nube_orders. Todo inlineado (sin bind params) para
+    # evitar conflictos del parser SQLAlchemy con :param + ::cast + ANY(ARRAY).
     tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]" if safe_tn else "ARRAY[]::text[]"
+    uid_int = int(user_id)
     try:
-        # Solo columnas que confirmamos existen en tienda_nube_orders (otras
-        # como shipping_status / shipping_cost pueden no existir en este schema)
+        # Cols minimas que sabemos existen (otras como contact_identification o
+        # billing_province pueden no existir en algunos schemas — usamos COALESCE
+        # con NULL fallback para que no rompa si la col esta pero esta vacia.)
+        # Si una col directamente no existe, exception -> log fail.
         erows = q(eng, f"""
             SELECT tno.tienda_nube_id::text AS internal_id,
                    tno."number",
@@ -1116,12 +1119,19 @@ def dropshipper_unified_orders(
                    COALESCE(tno.contact_identification,'') AS dni
             FROM public.tienda_nube_orders tno
             WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})
-               OR tno.user_id = :uid
+               OR tno.user_id = {uid_int}
             ORDER BY tno.created_at DESC NULLS LAST
             LIMIT 200
-        """, {"uid": int(user_id)}) or []
+        """) or []
         log.info("unified_orders TN enrich uid=%s safe_tn=%d rows=%d",
                  user_id, len(safe_tn), len(erows))
+        if not erows:
+            # Debug: verificar si user_id linkage funciona solo (sin la OR ANY)
+            debug = q(eng, f"""
+                SELECT COUNT(*)::int FROM public.tienda_nube_orders WHERE user_id = {uid_int}
+            """) or []
+            log.warning("unified_orders TN rows=0 uid=%s — solo-user_id count=%s",
+                        user_id, debug[0][0] if debug else "?")
         for er in erows:
             key_intent = tn_id_to_intent.get(er[0])
             tn_rows.append({
