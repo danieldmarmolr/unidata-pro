@@ -310,6 +310,28 @@ def get_dropshipper_detail(
     return result
 
 
+_drop_unified_cache: TTLCache = TTLCache(maxsize=512, ttl=120)  # 2 min
+
+
+@router.get("/dropshippers/{user_id}/unified-orders")
+def get_dropshipper_unified_orders(
+    user_id: int,
+    _: Annotated[str, Depends(current_user)],
+    intent_id: Annotated[int | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+) -> dict:
+    """Vista unificada de ordenes ML + TN. Si intent_id es no-null, filtra a las
+    ordenes de ese PaymentIntent (click-to-filter del frontend)."""
+    cache_key = f"drop-unified:{user_id}:{intent_id or ''}:{limit}"
+    cached_val = _drop_unified_cache.get(cache_key)
+    if cached_val is not None:
+        return cached_val
+    items = dropshippers_svc.dropshipper_unified_orders(user_id, limit=limit, intent_id=intent_id)
+    result = {"items": items, "total": len(items), "intent_id": intent_id}
+    _drop_unified_cache[cache_key] = result
+    return result
+
+
 # ============================================================
 # UNIDROP END CONSUMER 360 (compradores finales de los dropshippers)
 # ============================================================
@@ -714,8 +736,23 @@ def get_rfm(
     unit=unidrop:  dropshippers (public.User) por ventas combinadas MELI + TN.
     Devuelve segments + top_by_segment + actions (que hacer con cada segmento)."""
     if unit == "unidrop":
-        return rfm_svc.rfm_overview_unidrop(period_days=period_days)
-    return rfm_svc.rfm_overview(period_days=period_days)
+        result = rfm_svc.rfm_overview_unidrop(period_days=period_days)
+    else:
+        result = rfm_svc.rfm_overview(period_days=period_days)
+    # _customers_by_segment es interno (usado por rfm_segment_customers), no se expone
+    return {k: v for k, v in result.items() if not k.startswith("_")}
+
+
+@router.get("/rfm/segment-customers")
+def get_rfm_segment_customers(
+    _: Annotated[str, Depends(current_user)],
+    segment: Annotated[str, Query()],
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+    period_days: Annotated[int, Query(ge=30, le=730)] = 365,
+) -> dict:
+    """Lista COMPLETA de clientes en un segmento RFM con email/contacto.
+    Usado por modal RFM para exportar CSV / generar accion CS."""
+    return rfm_svc.rfm_segment_customers(segment, unit=unit, period_days=period_days)
 
 
 @router.get("/cohorts")
@@ -849,6 +886,20 @@ def get_customer_detail(
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return products_svc.customer_detail(customer_id)
+    return _b()
+
+
+@router.get("/customers/{customer_id}/journey")
+def get_customer_journey(
+    customer_id: int,
+    _: Annotated[str, Depends(current_user)],
+) -> dict:
+    """Timeline + cadencia personal con promedio ponderado.
+    Para el sidebar storytelling de la vista 360."""
+    key = f"cust-journey:{customer_id}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_svc.customer_journey(customer_id)
     return _b()
 
 

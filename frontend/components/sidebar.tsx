@@ -83,6 +83,7 @@ const ITEMS: NavItem[] = [
     areas: ["cs"],
     children: [
       { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
+      { label: "Bandeja CS",          href: "/dashboard/cs-acciones",icon: Target         },
       { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
       { label: "Segmentacion RFM",    href: "/dashboard/rfm",        icon: Target         },
       { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows", icon: Repeat        },

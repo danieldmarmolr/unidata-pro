@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowRight, TrendingUp, TrendingDown, Activity, Info, ExternalLink } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { ExportButtons } from "@/components/export-buttons";
+import { ActionableFooter } from "@/components/actionable-footer";
 import { api } from "@/lib/api";
 import { formatNumber, formatCurrency } from "@/lib/utils";
 
@@ -425,6 +426,22 @@ function FlowTransitionPopup({
             </table>
           )}
         </div>
+
+        {/* Footer accionable: Exportar CSV + Generar accion CS */}
+        {data && data.customers.length > 0 && (
+          <ActionableFooter
+            sourceType="rfm_flow"
+            sourceKey={`${fromKey}->${toKey}`}
+            unit={unit}
+            title={`Flujo RFM ${unit} · ${fromLabel} -> ${toLabel}`}
+            suggestedAction={toAction ? `${toAction.que_es}\n\nAccion: ${toAction.que_hacer}` : `Transicion ${fromLabel} -> ${toLabel}`}
+            targetIds={data.customers.map((c) => c.customer_id)}
+            csvFilename={`rfm_flow_${unit}_${fromKey}_to_${toKey}_${new Date().toISOString().slice(0,10)}`}
+            csvHeaders={["ID", "Cliente", "Email", "Ord. mes ant.", "Ord. mes act.", "Revenue ant.", "Revenue act.", "Ultima act.", "Ultima ant."]}
+            csvRows={data.customers.map((c) => [c.customer_id, c.nombre, c.email, c.orders_prev, c.orders_cur, c.revenue_prev, c.revenue_cur, c.last_cur || "", c.last_prev || ""])}
+            accentColor={toColor}
+          />
+        )}
       </div>
     </div>
   );

@@ -267,7 +267,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  })}
  </div>
 
- <div className="mb-6">
+ <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4 mb-6">
+ <div>
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
@@ -288,6 +289,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  height={320}
  />
  )}
+ </div>
+ <CustomerJourneyPanel customerId={Number(id)} />
  </div>
 
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -427,4 +430,135 @@ function VipStatusCard({ customerId }: { customerId: number }) {
    </div>
   </div>
  );
+}
+
+// ============================================================
+// CustomerJourneyPanel — storytelling al costado del chart mensual.
+// Muestra:
+//   - Timeline de eventos (1ra compra, 2da, gap entre cada una)
+//   - Cadencia personal con promedio ponderado (0.6 ult + 0.3 ant + 0.1 pre-ant)
+//   - Estado: en ritmo / atrasado / muy atrasado vs SU patron (no vs promedio)
+// ============================================================
+type JourneyEvent = {
+  order_id: number;
+  number: string;
+  label: string;
+  date: string;
+  total: number;
+  units: number;
+  gap_days: number | null;
+  cumulative_revenue: number;
+  cumulative_units: number;
+};
+type WeightedItem = { weight: number; gap_days: number; label: string };
+type CustomerJourney = {
+  customer_id: number;
+  events: JourneyEvent[];
+  gaps: number[];
+  avg_gap_days_simple: number | null;
+  expected_gap_days: number | null;
+  expected_next_date: string | null;
+  weighted_breakdown: WeightedItem[];
+  days_since_last: number | null;
+  total_paid_orders: number;
+  total_revenue: number;
+  total_units: number;
+  ticket_avg: number;
+  status: "sin_compras" | "primera_compra" | "en_ritmo" | "atrasado" | "muy_atrasado";
+  status_label: string;
+  narrative: string;
+};
+
+function CustomerJourneyPanel({ customerId }: { customerId: number }) {
+  const { data, isLoading } = useQuery<CustomerJourney>({
+    queryKey: ["customer-journey", customerId],
+    queryFn: () => api(`/api/dashboards/customers/${customerId}/journey`),
+    staleTime: 5 * 60_000,
+  });
+
+  if (isLoading || !data) {
+    return <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />;
+  }
+
+  const statusColors: Record<CustomerJourney["status"], { bg: string; border: string; text: string; dot: string }> = {
+    sin_compras:   { bg: "bg-zinc-50",    border: "border-zinc-300",  text: "text-zinc-700",   dot: "bg-zinc-400" },
+    primera_compra:{ bg: "bg-blue-50",    border: "border-blue-300",  text: "text-blue-800",   dot: "bg-blue-500" },
+    en_ritmo:      { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-800", dot: "bg-emerald-500" },
+    atrasado:      { bg: "bg-amber-50",   border: "border-amber-300", text: "text-amber-900",  dot: "bg-amber-500" },
+    muy_atrasado:  { bg: "bg-red-50",     border: "border-red-300",   text: "text-red-900",    dot: "bg-red-600" },
+  };
+  const sc = statusColors[data.status];
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-4 flex flex-col h-full max-h-[420px] overflow-hidden">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div>
+          <div className="text-sm font-bold text-text">Su historia con nosotros</div>
+          <div className="text-[10px] text-text-muted">Cadencia personal, no promedio</div>
+        </div>
+        <div className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full border ${sc.bg} ${sc.border} ${sc.text}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+          {data.status_label}
+        </div>
+      </div>
+
+      {/* Bloque cadencia */}
+      {data.expected_gap_days != null && (
+        <div className={`${sc.bg} ${sc.border} border rounded-lg p-3 mb-3 text-xs leading-relaxed`}>
+          <div className="flex items-baseline justify-between gap-2 mb-1">
+            <span className="text-text-muted text-[10px] uppercase font-bold tracking-wider">Cadencia personal</span>
+            <span className={`font-extrabold ${sc.text}`}>~{data.expected_gap_days} d</span>
+          </div>
+          {data.weighted_breakdown.length > 0 && (
+            <div className="text-[10px] text-text-muted">
+              {data.weighted_breakdown.map((w, i) => (
+                <span key={i}>
+                  {i > 0 && " + "}
+                  <span className="font-mono">{w.weight}×{w.gap_days}d</span>
+                </span>
+              ))}
+              {data.avg_gap_days_simple != null && (
+                <span className="ml-2 text-text-muted">(prom. simple {data.avg_gap_days_simple}d)</span>
+              )}
+            </div>
+          )}
+          <div className="mt-1.5 text-[11px] text-text">
+            Hace <strong>{data.days_since_last}d</strong> de su última.
+            {data.expected_next_date && (
+              <> Próxima estimada <strong>{data.expected_next_date}</strong>.</>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Narrativa */}
+      <div className="text-[11px] text-text leading-relaxed mb-3 italic">
+        {data.narrative}
+      </div>
+
+      {/* Timeline */}
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
+        Timeline ({data.total_paid_orders} compras · $ {data.total_revenue.toLocaleString("es-AR")})
+      </div>
+      <div className="flex-1 overflow-y-auto pr-1 space-y-2">
+        {data.events.map((e, idx) => (
+          <div key={e.order_id} className="relative pl-4 border-l-2 border-border last:border-transparent">
+            <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-primary" />
+            <div className="flex items-baseline justify-between gap-2">
+              <div className="text-xs font-bold text-text">{e.label}</div>
+              <div className="text-[10px] text-text-muted font-mono">#{e.number}</div>
+            </div>
+            <div className="text-[10px] text-text-muted">
+              {e.date} · <strong className="text-text">$ {e.total.toLocaleString("es-AR")}</strong> · {e.units} u.
+            </div>
+            {e.gap_days != null && idx > 0 && (
+              <div className="text-[10px] text-text-muted mt-0.5">
+                <span className="inline-block bg-soft px-1.5 py-0.5 rounded">+{e.gap_days}d después de la anterior</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }

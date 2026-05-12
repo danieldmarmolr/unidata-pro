@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import logging
 
+from cachetools import TTLCache
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -42,6 +43,50 @@ app = FastAPI(
 limiter = Limiter(key_func=get_remote_address, default_limits=[])
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# HTTP-level cache para endpoints de dashboards/drilldowns. Cubre los 32
+# endpoints que no tienen @cached(_cache) decorator a nivel servicio.
+# TTL 180s = el mismo TTL que usa el cache interno de routers.py.
+# Se saltea search/, users/me, notifications, y cualquier metodo no-GET.
+_http_cache: TTLCache = TTLCache(maxsize=512, ttl=180)
+
+
+@app.middleware("http")
+async def cache_dashboards_middleware(request: Request, call_next):
+    if request.method != "GET":
+        return await call_next(request)
+    path = request.url.path
+    cacheable = (
+        (path.startswith("/api/dashboards/") or path.startswith("/api/drilldowns/"))
+        and "/search/" not in path
+    )
+    if not cacheable:
+        return await call_next(request)
+    # Cache key incluye user para evitar leak entre usuarios con permisos distintos
+    auth_hdr = request.headers.get("authorization", "")
+    cache_key = f"{path}?{request.url.query}|{auth_hdr[-32:]}"
+    cached = _http_cache.get(cache_key)
+    if cached is not None:
+        return Response(
+            content=cached["body"],
+            media_type=cached["media_type"],
+            status_code=200,
+            headers={"X-Cache": "HIT"},
+        )
+    response = await call_next(request)
+    if response.status_code == 200:
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+        _http_cache[cache_key] = {"body": body, "media_type": response.media_type}
+        return Response(
+            content=body,
+            media_type=response.media_type,
+            status_code=200,
+            headers={"X-Cache": "MISS"},
+        )
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,6 +128,9 @@ app.include_router(exports_api.router)
 
 from app.api import notifications as notifications_api
 app.include_router(notifications_api.router)
+
+from app.api import cs_actions as cs_actions_api
+app.include_router(cs_actions_api.router)
 
 
 @app.get("/api/health")

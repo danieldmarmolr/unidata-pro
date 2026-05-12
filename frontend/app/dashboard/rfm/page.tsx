@@ -13,6 +13,7 @@ import {
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
+import { ActionableFooter } from "@/components/actionable-footer";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
@@ -196,6 +197,7 @@ export default function RfmPage() {
             action={data.actions?.[selectedSeg]}
             customers={data.top_by_segment[selectedSeg] ?? []}
             unit={unit}
+            period={period}
             onClose={() => setSelectedSeg(null)}
           />
         )}
@@ -204,16 +206,42 @@ export default function RfmPage() {
   );
 }
 
+type SegmentCustomersResp = {
+  segment: string;
+  total: number;
+  customers: (Customer & { email?: string; phone?: string; dni?: string })[];
+  suggested_action?: SegmentAction;
+};
+
 function SegmentPopup({
-  seg, action, customers, unit, onClose,
+  seg, action, customers, unit, period, onClose,
 }: {
   seg: Segment;
   action?: SegmentAction;
   customers: Customer[];
   unit: Unit;
+  period: number;
   onClose: () => void;
 }) {
   const labelEntidad = unit === "unidrop" ? "Dropshipper" : "Cliente";
+
+  // Lazy fetch lista COMPLETA para CSV / accion CS
+  const { data: fullData, isLoading: loadingFull } = useQuery<SegmentCustomersResp>({
+    queryKey: ["rfm-segment-customers", seg.key, unit, period],
+    queryFn: () => api(`/api/dashboards/rfm/segment-customers?segment=${encodeURIComponent(seg.key)}&unit=${unit}&period_days=${period}`),
+    staleTime: 60_000,
+  });
+
+  const fullList = fullData?.customers ?? [];
+  const csvHeaders = unit === "unidrop"
+    ? ["ID", "Nombre", "Email", "DNI", "R", "F", "M", "Dias recencia", "Ventas", "Volumen", "Ultima compra"]
+    : ["ID", "Nombre", "Email", "Telefono", "R", "F", "M", "Dias recencia", "Ordenes", "Volumen", "Ultima compra"];
+  const csvRows = fullList.map((c: any) => unit === "unidrop"
+    ? [c.customer_id, c.nombre, c.email || "", c.dni || "", c.r_score, c.f_score, c.m_score, c.recency_days, c.frequency, c.monetary, c.ultima_compra || ""]
+    : [c.customer_id, c.nombre, c.email || "", c.phone || "", c.r_score, c.f_score, c.m_score, c.recency_days, c.frequency, c.monetary, c.ultima_compra || ""]
+  );
+  const targetIds = fullList.map((c) => c.customer_id);
+  const suggestedActionText = action ? `${action.que_es}\n\nAccion: ${action.que_hacer}` : "";
   return (
     <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
       <div
@@ -251,8 +279,13 @@ function SegmentPopup({
         )}
 
         {/* Top customers */}
-        <div className="px-5 py-3 border-b border-border">
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between">
           <div className="text-xs font-bold text-text">Top 10 por volumen</div>
+          {fullData && (
+            <div className="text-[10px] text-text-muted">
+              {fullData.total} total en segmento {loadingFull && "· cargando..."}
+            </div>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           {customers.length === 0 ? (
@@ -290,6 +323,20 @@ function SegmentPopup({
             </table>
           )}
         </div>
+
+        {/* Footer accionable: Exportar CSV + Generar accion CS */}
+        <ActionableFooter
+          sourceType="rfm_segment"
+          sourceKey={seg.key}
+          unit={unit}
+          title={`RFM ${unit} · ${seg.label}`}
+          suggestedAction={suggestedActionText}
+          targetIds={targetIds}
+          csvFilename={`rfm_${unit}_${seg.key}_${new Date().toISOString().slice(0,10)}`}
+          csvHeaders={csvHeaders}
+          csvRows={csvRows}
+          accentColor={seg.color}
+        />
       </div>
     </div>
   );

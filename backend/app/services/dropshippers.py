@@ -779,10 +779,17 @@ def dropshipper_detail(
         safe_ids = [str(s) for s in ml_ids_list if _re.match(r"^[A-Za-z0-9_-]+$", str(s))]
         if safe_ids:
             ids_literal = "ARRAY[" + ",".join("'" + i + "'" for i in safe_ids) + "]::text[]"
+            # BUGFIX: matcheamos contra AMBAS columnas (id interno + mlOrderId
+            # externo). Esto cubre los dos casos posibles de como Unidrop guarda
+            # los IDs en PaymentIntent.mlOrderIds[] (algunas integrations guardan
+            # el id interno, otras el externo). Indexamos por el campo que matcheo
+            # (preservamos el key original del intent) para que orders.append lo
+            # encuentre.
             try:
                 erows = q(eng, f"""
-                    SELECT o."mlOrderId"::text AS ml_order_id,
-                           o.id AS order_id,
+                    SELECT o."mlOrderId"::text AS ml_order_id_ext,
+                           o.id::text         AS internal_id_str,
+                           o.id               AS order_id,
                            o."status",
                            o."dateCreated"::text AS fecha,
                            COALESCE(p.gmv,0)::float AS total,
@@ -796,17 +803,28 @@ def dropshipper_detail(
                         GROUP BY 1
                     ) p ON p."orderId" = o.id
                     WHERE o."mlOrderId"::text = ANY({ids_literal})
+                       OR o.id::text          = ANY({ids_literal})
                 """) or []
                 for er in erows:
-                    enrich[er[0]] = {
-                        "id": int(er[1]) if er[1] else None,
-                        "status": er[2] or "",
-                        "fecha": er[3],
-                        "total": float(er[4] or 0),
-                        "profit_unidrop": float(er[5] or 0),
-                        "shipping_cost": float(er[6] or 0),
-                        "number": er[7] or "",
+                    info = {
+                        "id": int(er[2]) if er[2] else None,
+                        "status": er[3] or "",
+                        "fecha": er[4],
+                        "total": float(er[5] or 0),
+                        "profit_unidrop": float(er[6] or 0),
+                        "shipping_cost": float(er[7] or 0),
+                        "number": er[8] or "",
                     }
+                    # Indexamos por AMBAS keys posibles - asi orders.append matchea
+                    # con el ml_id del intent sin importar como esta guardado
+                    if er[0]:
+                        enrich[er[0]] = info
+                    if er[1]:
+                        enrich[er[1]] = info
+                log.info(
+                    "dropshipper %s ml enrich: %d intents ids, %d matched (rows=%d)",
+                    user_id, len(safe_ids), len(enrich), len(erows),
+                )
             except Exception as e:
                 log.warning("dropshipper enrich ml orders fail: %s", e)
 
@@ -881,6 +899,13 @@ def dropshipper_detail(
     except Exception:
         top_clientes_finales = []
 
+    # Vista unificada estilo Unidrop panel (filas ML + TN combinadas por fecha)
+    try:
+        unified_orders = dropshipper_unified_orders(int(user_id), limit=50)
+    except Exception as e:
+        log.warning("dropshipper unified_orders fail uid=%s: %s", user_id, e)
+        unified_orders = []
+
     return {
         "user": user,
         "ventas": ventas_kpi,  # MELI
@@ -891,6 +916,7 @@ def dropshipper_detail(
         "ultimas_ventas": orders,
         "ultimas_ventas_tn": tn_orders_list,  # tabla TN con `number` para link a Unidrop
         "ultimos_pagos": pagos_list,
+        "unified_orders": unified_orders,  # filas ML+TN combinadas por fecha
         # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
         "top_clientes_finales": top_clientes_finales,
         # Suscripciones pagadas (PaymentTransactionSubscription) en periodo
@@ -901,6 +927,218 @@ def dropshipper_detail(
         },
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
+
+
+def dropshipper_unified_orders(
+    user_id: int,
+    *,
+    limit: int = 50,
+    intent_id: int | None = None,
+) -> list[dict]:
+    """Vista unificada estilo Unidrop panel: filas ML + TN combinadas por fecha.
+
+    Cada fila representa UNA orden (ML o TN) que fue cobrada via PaymentIntent.
+    Si `intent_id` es no-null, devuelve solo las ordenes de ese intent (para el
+    click-to-filter del frontend).
+
+    Schema fuentes:
+    - mercado_libre_dev."OrderMercadoLibre" — ordenes ML (id, mlOrderId, number)
+    - public.tienda_nube_orders             — ordenes TN (tienda_nube_id, number)
+    - public."PaymentIntent"                — linkage (mlOrderIds[], orderIds[])
+    - public."CustomerPaymentAccount"       — mapeo intent -> user
+
+    Considera que IDs en PaymentIntent.mlOrderIds[]/orderIds[] pueden ser tanto
+    internos como externos segun la integration: matcheamos por ambos.
+    """
+    eng = get_engine("unidrop")
+
+    # 1) Bajamos los intents PROCESSED del user + sus arrays de IDs
+    intent_filter = "AND pi.id = :intent_id" if intent_id else ""
+    intents = q(eng, f"""
+        SELECT pi.id,
+               pi."createdAt"::text,
+               COALESCE(pi."mlOrderIds", ARRAY[]::text[]) AS ml_ids,
+               COALESCE(pi."orderIds",   ARRAY[]::text[]) AS tn_ids,
+               COALESCE(pi."paidAmount",0)::float AS paid
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE cpa."userId" = :uid
+          AND pi."status" = 'PROCESSED'
+          {intent_filter}
+        ORDER BY pi."createdAt" DESC NULLS LAST
+        LIMIT 200
+    """, {"uid": int(user_id), "intent_id": intent_id}) or []
+
+    if not intents:
+        return []
+
+    # Indices para matchear despues
+    ml_id_to_intent: dict[str, int] = {}
+    tn_id_to_intent: dict[str, int] = {}
+    all_ml_ids: set[str] = set()
+    all_tn_ids: set[str] = set()
+    intent_meta: dict[int, dict] = {}
+    for it in intents:
+        iid = int(it[0])
+        intent_meta[iid] = {"id": iid, "fecha": it[1], "paid": float(it[4] or 0)}
+        for x in (it[2] or []):
+            if x is None: continue
+            s = str(x)
+            all_ml_ids.add(s)
+            ml_id_to_intent.setdefault(s, iid)
+        for x in (it[3] or []):
+            if x is None: continue
+            s = str(x)
+            all_tn_ids.add(s)
+            tn_id_to_intent.setdefault(s, iid)
+
+    import re as _re
+    safe_ml = [s for s in all_ml_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
+    safe_tn = [s for s in all_tn_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
+
+    ml_rows: list[dict] = []
+    tn_rows: list[dict] = []
+    enriched_ml_ids: set[str] = set()
+
+    # 2) Enrich ML — probamos multiples schemas posibles. Si todos fallan,
+    # quedan filas "stub" (fallback) para que la UI siempre muestre algo.
+    if safe_ml:
+        ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_ml) + "]::text[]"
+        SCHEMA_CANDIDATES = ['mercado_libre_dev', 'public', 'mercado_libre', 'meli']
+        erows: list = []
+        last_err = ""
+        for sch in SCHEMA_CANDIDATES:
+            try:
+                erows = q(eng, f"""
+                    SELECT o."mlOrderId"::text AS ext_id,
+                           o.id::text         AS internal_id,
+                           o.id               AS id_num,
+                           o."number",
+                           o."dateCreated"::text AS fecha,
+                           o."status",
+                           o."paymentStatus",
+                           o."shippingStatus",
+                           COALESCE(p.gmv,0)::float AS total,
+                           COALESCE(o."merchandise_cost",0)::float AS merch_cost,
+                           COALESCE(o."shipping_cost",0)::float AS shipping_cost,
+                           COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+                           o."buyer_name",
+                           o."shipping_type"
+                    FROM {sch}."OrderMercadoLibre" o
+                    LEFT JOIN (
+                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        FROM {sch}."PaymentMercadoLibre"
+                        GROUP BY 1
+                    ) p ON p."orderId" = o.id
+                    WHERE o."mlOrderId"::text = ANY({ids_lit})
+                       OR o.id::text          = ANY({ids_lit})
+                """) or []
+                if erows:
+                    log.info("unified_orders ML enrich uid=%s OK schema=%s rows=%d",
+                             user_id, sch, len(erows))
+                    break
+            except Exception as e:
+                last_err = str(e)[:120]
+                continue
+        if not erows and last_err:
+            log.warning("unified_orders ML enrich todos schemas fallan uid=%s: %s", user_id, last_err)
+
+        for er in erows:
+            key_intent = ml_id_to_intent.get(er[0]) or ml_id_to_intent.get(er[1])
+            if er[0]: enriched_ml_ids.add(er[0])
+            if er[1]: enriched_ml_ids.add(er[1])
+            ml_rows.append({
+                "origen": "ml",
+                "internal_id": int(er[2]) if er[2] else None,
+                "external_id": er[0] or "",
+                "number": er[3] or "",
+                "fecha": er[4],
+                "status": er[5] or "",
+                "payment_status": er[6] or "",
+                "shipping_status": er[7] or "",
+                "total": round(float(er[8] or 0), 2),
+                "merch_cost": round(float(er[9] or 0), 2),
+                "shipping_cost": round(float(er[10] or 0), 2),
+                "profit_unidrop": round(float(er[11] or 0), 2),
+                "buyer_name": er[12] or "",
+                "shipping_type": er[13] or "",
+                "intent_id": key_intent,
+                "enriched": True,
+            })
+
+        # Fallback: para ML ids que NO matchearon en ningun schema, generamos
+        # una fila stub con el paid_amount del intent. Esto evita que el row se
+        # pierda con $0 cuando OrderMercadoLibre no tiene el registro
+        # (ej: orden muy nueva o schema fuera de sync).
+        for mlid in safe_ml:
+            if mlid in enriched_ml_ids: continue
+            intent_id_for = ml_id_to_intent.get(mlid)
+            meta = intent_meta.get(intent_id_for, {}) if intent_id_for else {}
+            ml_rows.append({
+                "origen": "ml",
+                "internal_id": None,
+                "external_id": mlid,
+                "number": "",
+                "fecha": meta.get("fecha") or "",
+                "status": "paid (via Talo)",
+                "payment_status": "paid",
+                "shipping_status": "",
+                "total": round(float(meta.get("paid") or 0), 2),
+                "merch_cost": 0.0,
+                "shipping_cost": 0.0,
+                "profit_unidrop": 0.0,
+                "buyer_name": "",
+                "shipping_type": "",
+                "intent_id": intent_id_for,
+                "enriched": False,
+            })
+
+    # 3) Enrich TN
+    if safe_tn:
+        ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]"
+        try:
+            erows = q(eng, f"""
+                SELECT tno.tienda_nube_id::text AS internal_id,
+                       tno."number",
+                       tno.created_at::text AS fecha,
+                       tno.payment_status::text AS payment_status,
+                       COALESCE(tno.status::text, '') AS status,
+                       COALESCE(tno.total,0)::float AS total,
+                       COALESCE(tno.shipping_cost,0)::float AS shipping_cost,
+                       COALESCE(tno.shipping_status::text,'') AS shipping_status,
+                       COALESCE(tno.contact_name, '') AS buyer_name
+                FROM public.tienda_nube_orders tno
+                WHERE tno.tienda_nube_id::text = ANY({ids_lit})
+            """) or []
+            for er in erows:
+                key_intent = tn_id_to_intent.get(er[0])
+                tn_rows.append({
+                    "origen": "tn",
+                    "internal_id": int(er[0]) if er[0] and er[0].isdigit() else None,
+                    "external_id": er[0] or "",
+                    "number": er[1] or "",
+                    "fecha": er[2],
+                    "status": er[4] or "",
+                    "payment_status": er[3] or "",
+                    "shipping_status": er[7] or "",
+                    "total": round(float(er[5] or 0), 2),
+                    "merch_cost": 0.0,
+                    "shipping_cost": round(float(er[6] or 0), 2),
+                    "profit_unidrop": 0.0,
+                    "buyer_name": er[8] or "",
+                    "shipping_type": "",
+                    "intent_id": key_intent,
+                    "enriched": True,
+                })
+        except Exception as e:
+            log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
+
+    # 4) Combinar y ordenar por fecha desc
+    unified = ml_rows + tn_rows
+    unified.sort(key=lambda x: x.get("fecha") or "", reverse=True)
+
+    # 5) Limit
+    return unified[:int(limit)]
 
 
 def cohort_signups() -> dict:
