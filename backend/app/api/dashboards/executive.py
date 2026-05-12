@@ -11,7 +11,7 @@ from app.services.dashboards import executive_overview
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 
-_cache: TTLCache = TTLCache(maxsize=64, ttl=60)
+_cache: TTLCache = TTLCache(maxsize=64, ttl=180)  # 3 min: Gerencia cross-unidad es pesado, no cambia minuto a minuto
 
 
 @router.get("/executive")
