@@ -1117,17 +1117,20 @@ def dropshipper_unified_orders(
     erows_all: list = []
     erows_by_intent: list = []
     erows_by_user: list = []
-    # Brazo (b) — por user_id. Sabemos que funciona (count=11).
-    try:
-        erows_by_user = q(eng, f"""
-            {base_select}
-            WHERE tno.user_id = {uid_int}
-            ORDER BY tno.created_at DESC NULLS LAST
-            LIMIT 200
-        """) or []
-    except Exception as e:
-        log.warning("unified_orders TN by_user fail uid=%s: %s", user_id, str(e)[:200])
-    # Brazo (a) — por tienda_nube_id IN safe_tn (opcional)
+    # Brazo (b) — por user_id. SOLO si NO estamos filtrando por intent_id
+    # especifico (cuando hay intent_id queremos ver SOLO las orders ligadas
+    # a ese intent, no todas las del dropshipper).
+    if not intent_id:
+        try:
+            erows_by_user = q(eng, f"""
+                {base_select}
+                WHERE tno.user_id = {uid_int}
+                ORDER BY tno.created_at DESC NULLS LAST
+                LIMIT 200
+            """) or []
+        except Exception as e:
+            log.warning("unified_orders TN by_user fail uid=%s: %s", user_id, str(e)[:200])
+    # Brazo (a) — por tienda_nube_id IN safe_tn (las orders ligadas a intents)
     if safe_tn:
         tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]"
         try:
