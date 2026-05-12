@@ -373,6 +373,7 @@ from app.services import sku_optimizer as sku_opt_svc
 from app.services import rfm_flows as rfm_flows_svc
 from app.services import forecast_batch as forecast_svc
 from app.services import cancel_nlp as cancel_nlp_svc
+from app.services import dev_nlp as dev_nlp_svc
 from app.services import sku_omnichannel as sku_omni_svc
 
 
@@ -452,6 +453,21 @@ def get_cancel_nlp(_: Annotated[str, Depends(current_user)]) -> dict:
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return cancel_nlp_svc.cancellations_analysis()
+    return _b()
+
+
+@router.get("/dev-nlp")
+def get_dev_nlp(
+    _: Annotated[str, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=7, le=365)] = 90,
+) -> dict:
+    """Clustering de causas de devoluciones (Unidev) usando lexicon manual.
+    Analiza devolucion_items_fallas.descripcion (texto libre) y agrupa en
+    causas operativas + top SKUs afectados por causa."""
+    key = f"dev-nlp-{period_days}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return dev_nlp_svc.devoluciones_nlp(period_days=period_days)
     return _b()
 
 

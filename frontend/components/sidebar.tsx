@@ -106,6 +106,7 @@ const ITEMS: NavItem[] = [
   { label: "Envios",           href: "/dashboard/envios",         icon: Package,         group: "Unidrop", roles: ALL },
   { label: "Envios MELI por modo", href: "/dashboard/envios-meli", icon: Package,         group: "Unidrop", roles: ALL },
   { label: "Devoluciones",     href: "/dashboard/devoluciones",   icon: RotateCcw,       group: "Unidev", roles: ALL },
+  { label: "NLP causas (Unidev)", href: "/dashboard/dev-nlp",     icon: AlertTriangle,   group: "Unidev", roles: ALL },
   { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "analista"] },
   { label: "Explorador",       href: "/dashboard/sources",        icon: Database,        group: "Datos", roles: ["admin", "analista"] },
   { label: "SQL libre",        href: "/dashboard/sql",            icon: Terminal,        group: "Datos", roles: ["admin", "analista"] },
