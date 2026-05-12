@@ -494,7 +494,11 @@ def dropshipper_detail(
 
     # KPIs de ventas MELI - PaymentIntent es ground truth (lo que el dropshipper
     # efectivamente pago a Unidrop). Enriquecemos con OrderMercadoLibre si esta
-    # disponible para detalles como ultima fecha real, costos, profit, etc.
+    # disponible. Para Unidrop la linkage canonica entre dropshipper y order
+    # es la columna `number` con formato DROP-{dni}-{seq}.
+    drop_dni = (user.get("dni") or "").strip()
+    drop_number_prefix = f"DROP-{drop_dni}-%" if drop_dni else None
+
     intent_ml = q(eng, """
         SELECT
           COALESCE(SUM(COALESCE(array_length(pi."mlOrderIds",1),0)),0)::int AS orders_count,
@@ -508,8 +512,9 @@ def dropshipper_detail(
     ml_orders_paid = int(intent_ml[0][0] or 0)
     ml_intents = int(intent_ml[0][1] or 0)
 
-    # Detalle desde OrderMercadoLibre (puede no estar sincronizado para todos
-    # los dropshippers - es ENRIQUECIMIENTO, no fuente principal del count).
+    # Detalle desde OrderMercadoLibre - linkage triple: por mlAccount.userId,
+    # por sellerId, o por number prefix DROP-{dni}-. Asi capturamos a dropshippers
+    # cuyas ventas no estan linkeadas via mla.userId pero si tienen number.
     ventas = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
@@ -523,15 +528,18 @@ def dropshipper_detail(
             COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
             COALESCE(AVG(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
         FROM mercado_libre_dev."OrderMercadoLibre" o
-        INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
             SELECT "orderId", SUM("totalAmount")::float AS gmv
             FROM mercado_libre_dev."PaymentMercadoLibre"
             GROUP BY 1
         ) p ON p."orderId" = o.id
-        WHERE mla."userId" = :uid
+        WHERE (
+              mla."userId" = :uid
+           OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix)
+        )
           AND o."dateCreated" >= NOW() - make_interval(days => :d)
-    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
+    """, {"uid": int(user_id), "d": int(days), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
     v = ventas[0]
     # Usar ml_orders_paid (de PaymentIntent) como ventas_pagadas si la sincro
     # con OrderMercadoLibre quedo corta. Asi nunca mostramos "0 ventas" cuando
@@ -570,6 +578,7 @@ def dropshipper_detail(
     """, {"uid": int(user_id), "d": int(days)}) or [(0, 0)]
     tn_orders_paid = int(intent_tn[0][0] or 0)
 
+    # Linkage TN: user_id OR number prefix DROP-{dni}- (cualquiera funciona)
     tn_v = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE payment_status::text='paid')::int AS ventas_pagadas,
@@ -579,9 +588,12 @@ def dropshipper_detail(
             MIN(created_at) FILTER (WHERE payment_status::text='paid')::text AS primera_venta,
             COALESCE(AVG(total) FILTER (WHERE payment_status::text='paid'),0)::float AS ticket_promedio
         FROM public.tienda_nube_orders
-        WHERE user_id = :uid
+        WHERE (
+              user_id = :uid
+           OR (:dni IS NOT NULL AND "number" LIKE :num_prefix)
+        )
           AND created_at >= NOW() - make_interval(days => :d)
-    """, {"uid": int(user_id), "d": int(days)}) or [(0, 0, 0, None, None, 0)]
+    """, {"uid": int(user_id), "d": int(days), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or [(0, 0, 0, None, None, 0)]
     tnv = tn_v[0]
     tn_kpi = {
         "ventas_pagadas": max(int(tnv[0] or 0), tn_orders_paid),
@@ -775,7 +787,8 @@ def dropshipper_detail(
                            o."dateCreated"::text AS fecha,
                            COALESCE(p.gmv,0)::float AS total,
                            COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
-                           COALESCE(o."shipping_cost",0)::float AS shipping_cost
+                           COALESCE(o."shipping_cost",0)::float AS shipping_cost,
+                           o."number" AS number
                     FROM mercado_libre_dev."OrderMercadoLibre" o
                     LEFT JOIN (
                         SELECT "orderId", SUM("totalAmount")::float AS gmv
@@ -792,6 +805,7 @@ def dropshipper_detail(
                         "total": float(er[4] or 0),
                         "profit_unidrop": float(er[5] or 0),
                         "shipping_cost": float(er[6] or 0),
+                        "number": er[7] or "",
                     }
             except Exception as e:
                 log.warning("dropshipper enrich ml orders fail: %s", e)
@@ -804,6 +818,7 @@ def dropshipper_detail(
         orders.append({
             "id": info.get("id"),
             "ml_order_id": ml_id,
+            "number": info.get("number") or "",
             "status": info.get("status") or "paid (via Talo)",
             "fecha": info.get("fecha") or intent_fecha,
             "total": round(float(info.get("total") or 0), 2),
@@ -811,6 +826,28 @@ def dropshipper_detail(
             "shipping_cost": round(float(info.get("shipping_cost") or 0), 2),
             "synced_in_oml": ml_id in enrich,
         })
+
+    # Ultimas ventas TN (tienda_nube_orders) - linkage por user_id o number prefix.
+    # Esta seccion antes no existia en el detail: solo veiamos KPIs agregados.
+    last_tn_orders = q(eng, """
+        SELECT tno.tienda_nube_id, tno."number", tno.created_at::text AS fecha,
+               tno.payment_status::text AS status,
+               COALESCE(tno.total, 0)::float AS total
+        FROM public.tienda_nube_orders tno
+        WHERE (
+              tno.user_id = :uid
+           OR (:dni IS NOT NULL AND tno."number" LIKE :num_prefix)
+        )
+        ORDER BY tno.created_at DESC NULLS LAST
+        LIMIT 50
+    """, {"uid": int(user_id), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or []
+    tn_orders_list = [{
+        "id": int(r[0]) if r[0] else None,
+        "number": r[1] or "",
+        "fecha": r[2],
+        "status": r[3] or "",
+        "total": round(float(r[4] or 0), 2),
+    } for r in last_tn_orders]
 
     # Ultimos 50 pagos Talo
     last_pagos = q(eng, """
@@ -852,6 +889,7 @@ def dropshipper_detail(
         "publicaciones": pubs,
         "monthly": monthly_series,
         "ultimas_ventas": orders,
+        "ultimas_ventas_tn": tn_orders_list,  # tabla TN con `number` para link a Unidrop
         "ultimos_pagos": pagos_list,
         # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
         "top_clientes_finales": top_clientes_finales,

@@ -102,11 +102,20 @@ type DropshipperDetail = {
   ultimas_ventas: {
     id: number;
     ml_order_id: string;
+    number?: string;
     status: string;
     fecha: string;
     total: number;
     profit_unidrop: number;
     shipping_cost: number;
+    synced_in_oml?: boolean;
+  }[];
+  ultimas_ventas_tn?: {
+    id: number;
+    number: string;
+    status: string;
+    fecha: string;
+    total: number;
   }[];
   ultimos_pagos: {
     id: number;
@@ -553,7 +562,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2">ML Order</th>
+                    <th className="text-left px-3 py-2">Number · DROP</th>
+                    <th className="text-left px-2 py-2">ML Order</th>
                     <th className="text-left px-2 py-2">Estado</th>
                     <th className="text-left px-2 py-2">Fecha</th>
                     <th className="text-right px-2 py-2">Total</th>
@@ -563,26 +573,43 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 <tbody>
                   {data.ultimas_ventas.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="text-center text-text-muted py-6">
+                      <td colSpan={6} className="text-center text-text-muted py-6">
                         Sin ventas registradas
                       </td>
                     </tr>
                   ) : (
                     data.ultimas_ventas.map((o) => (
-                      <tr key={o.id} className="border-t border-border hover:bg-soft/40">
+                      <tr key={o.id ?? o.ml_order_id} className="border-t border-border hover:bg-soft/40">
                         <td className="px-3 py-1.5 font-mono">
+                          {o.number ? (
+                            <a
+                              href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
+                              title="Abrir en panel Unidrop"
+                            >
+                              {o.number}
+                              <ExternalLink size={9} />
+                            </a>
+                          ) : (
+                            <span className="text-text-muted italic text-[10px]">sin sync OML</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono">
                           {o.ml_order_id ? (
                             <a
                               href={`https://www.mercadolibre.com.ar/ventas/${o.ml_order_id}/detalle`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-primary hover:underline"
+                              className="inline-flex items-center gap-1 text-text-muted hover:text-primary hover:underline text-[10px]"
+                              title="Abrir en Mercado Libre"
                             >
                               {o.ml_order_id}
                               <ExternalLink size={9} />
                             </a>
                           ) : (
-                            <span>{o.id}</span>
+                            <span className="text-text-muted text-[10px]">—</span>
                           )}
                         </td>
                         <td className="px-2 py-1.5">
@@ -600,6 +627,59 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               </table>
             </div>
           </div>
+
+          {/* Últimas ventas Tienda Nube */}
+          {data.ultimas_ventas_tn && data.ultimas_ventas_tn.length > 0 && (
+            <div className="bg-surface border border-border rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-border">
+                <h3 className="text-sm font-bold text-text">Últimas ventas en Tienda Nube</h3>
+                <p className="text-[11px] text-text-muted">{data.ultimas_ventas_tn.length} órdenes TN del dropshipper · click para abrir en panel Unidrop</p>
+              </div>
+              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Number · DROP</th>
+                      <th className="text-left px-2 py-2">TN ID</th>
+                      <th className="text-left px-2 py-2">Estado</th>
+                      <th className="text-left px-2 py-2">Fecha</th>
+                      <th className="text-right px-2 py-2">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.ultimas_ventas_tn.map((o) => (
+                      <tr key={o.id} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-3 py-1.5 font-mono">
+                          {o.number ? (
+                            <a
+                              href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
+                              title="Abrir en panel Unidrop"
+                            >
+                              {o.number}
+                              <ExternalLink size={9} />
+                            </a>
+                          ) : (
+                            <span className="text-text-muted text-[10px]">—</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 font-mono text-[10px] text-text-muted">{o.id}</td>
+                        <td className="px-2 py-1.5">
+                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.status)}`}>
+                            {o.status || "-"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Últimos pagos Talo */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
