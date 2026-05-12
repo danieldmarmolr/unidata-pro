@@ -250,48 +250,81 @@ def cs_unistore(period: str = "30d", channel: str = "all", from_iso: str | None 
     },
     } for r in cohort_rows]
 
-    # ---------- Estados de cliente + RFM ----------
-    # Nuevo: 1 orden · 2da compra: 2 · Convertido a Recurrente: 3 · Recurrente: 4+
-    # Recuperado: tuvo gap > 180d entre compras y volvió.
+    # ---------- Estados de cliente con CHURN-OVERRIDE (cadencia personal) ----------
+    # Lifecycle ampliado:
+    #   Nuevo / 2da compra / Conv. a Recurrente / Recurrente   (en ritmo personal)
+    #   En riesgo            (recency 1.2x-2x cadencia personal)
+    #   Churn pendiente      (2x-3x)
+    #   Churn confirmado     (>3x)
+    #   Recuperado           (tuvo gap historico >180d y volvio reciente)
+    # Cadencia personal = promedio ponderado: 0.6*ult + 0.3*ant + 0.1*pre-ant.
     customer_states = q(eng, """
-    WITH stats AS (
-    SELECT "customerId" AS cid,
-    COUNT(*) AS orders,
-    MIN("createdAt") AS first_order,
-    MAX("createdAt") AS last_order,
-    SUM(total)::float AS total_spent
-    FROM tienda_nube."Order"
-    WHERE "paymentStatus"='paid' AND "customerId" IS NOT NULL
-    GROUP BY 1
+    WITH base AS (
+        SELECT "customerId" AS cid, "createdAt"::date AS d, total::float AS amount
+        FROM tienda_nube."Order"
+        WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
     ),
     gaps AS (
-    SELECT "customerId" AS cid,
-    MAX(EXTRACT(DAY FROM ("createdAt" - prev_at))) AS max_gap_days
-    FROM (
-    SELECT "customerId", "createdAt",
-    LAG("createdAt") OVER (PARTITION BY "customerId" ORDER BY "createdAt") AS prev_at
-    FROM tienda_nube."Order"
-    WHERE "paymentStatus"='paid' AND "customerId" IS NOT NULL
-    ) x WHERE prev_at IS NOT NULL
-    GROUP BY 1
+        SELECT cid, (d - prev_d) AS gap_days,
+               ROW_NUMBER() OVER (PARTITION BY cid ORDER BY d DESC) AS rev_rn
+        FROM (
+            SELECT cid, d,
+                   LAG(d) OVER (PARTITION BY cid ORDER BY d) AS prev_d
+            FROM base
+        ) x WHERE prev_d IS NOT NULL
+    ),
+    cadence AS (
+        SELECT cid,
+               COUNT(*) AS gap_count,
+               MAX(CASE WHEN rev_rn = 1 THEN gap_days END) AS g_last,
+               MAX(CASE WHEN rev_rn = 2 THEN gap_days END) AS g_prev,
+               MAX(CASE WHEN rev_rn = 3 THEN gap_days END) AS g_prev2,
+               MAX(gap_days) AS max_gap_days
+        FROM gaps GROUP BY cid
+    ),
+    cadence_calc AS (
+        SELECT cid, gap_count, max_gap_days,
+               CASE
+                 WHEN gap_count >= 3 THEN (0.6 * g_last + 0.3 * g_prev + 0.1 * g_prev2)::numeric
+                 WHEN gap_count = 2 THEN (0.7 * g_last + 0.3 * g_prev)::numeric
+                 WHEN gap_count = 1 THEN g_last::numeric
+                 ELSE NULL
+               END AS expected_gap
+        FROM cadence
+    ),
+    stats AS (
+        SELECT cid, COUNT(*) AS orders,
+               SUM(amount) AS total_spent,
+               (CURRENT_DATE - MAX(d))::int AS recency_days
+        FROM base GROUP BY cid
     ),
     classified AS (
-    SELECT s.cid, s.orders, s.first_order, s.last_order, s.total_spent,
-    COALESCE(g.max_gap_days, 0) AS max_gap_days,
-    CASE
-    WHEN s.orders = 1 THEN 'Nuevo'
-    WHEN s.orders = 2 THEN '2da compra'
-    WHEN s.orders = 3 THEN 'Convertido a Recurrente'
-    WHEN s.orders >= 4 AND COALESCE(g.max_gap_days,0) > 180 THEN 'Recuperado'
-    WHEN s.orders >= 4 THEN 'Recurrente'
-    ELSE 'Otros'
-    END AS estado
-    FROM stats s
-    LEFT JOIN gaps g ON g.cid = s.cid
+        SELECT s.cid, s.orders, s.total_spent, s.recency_days,
+               c.expected_gap, COALESCE(c.max_gap_days, 0) AS max_gap_days,
+               CASE
+                 -- 1 sola compra: cadencia desconocida, marcamos Nuevo si reciente
+                 WHEN s.orders = 1 AND s.recency_days <= 60 THEN 'Nuevo'
+                 WHEN s.orders = 1 AND s.recency_days > 90 THEN 'Churn pendiente'
+                 WHEN s.orders = 1 THEN 'Nuevo'
+                 -- Recuperado: tuvo gap historico > 180d y volvio reciente
+                 WHEN COALESCE(c.max_gap_days,0) > 180 AND s.recency_days <= 60 THEN 'Recuperado'
+                 -- Churn-aware classification (con cadencia personal)
+                 WHEN c.expected_gap IS NOT NULL AND c.expected_gap > 0 THEN
+                   CASE
+                     WHEN s.recency_days::numeric / c.expected_gap > 3.0 THEN 'Churn confirmado'
+                     WHEN s.recency_days::numeric / c.expected_gap > 2.0 THEN 'Churn pendiente'
+                     WHEN s.recency_days::numeric / c.expected_gap > 1.2 THEN 'En riesgo'
+                     WHEN s.orders = 2 THEN '2da compra'
+                     WHEN s.orders = 3 THEN 'Convertido a Recurrente'
+                     WHEN s.orders >= 4 THEN 'Recurrente'
+                   END
+                 ELSE 'Otros'
+               END AS estado
+        FROM stats s LEFT JOIN cadence_calc c ON c.cid = s.cid
     )
     SELECT estado, COUNT(*)::int AS clientes,
-    COALESCE(AVG(total_spent),0)::float AS ticket_promedio,
-    COALESCE(SUM(total_spent),0)::float AS revenue_total
+           COALESCE(AVG(total_spent),0)::float AS ticket_promedio,
+           COALESCE(SUM(total_spent),0)::float AS revenue_total
     FROM classified
     GROUP BY estado
     ORDER BY clientes DESC
@@ -669,27 +702,74 @@ def cs_unidrop(period: str = "30d", channel: str = "all", from_iso: str | None =
     cards.append({"label": "LTV promedio", "value": round(ltv, 0), "prefix": "$ ", "hint": "Revenue total / customer"})
     cards.append({"label": "Customers en riesgo", "value": at_risk, "hint": "Sin comprar hace 90-180d"})
 
-    # ----- Customer status mix (Nuevo / 2da / Recurrente) -----
+    # ----- Customer status mix con CHURN-OVERRIDE — DROPSHIPPERS Unidrop -----
+    # Event = PaymentIntent PROCESSED. Cliente = dropshipper (public.User).
+    # Cadencia personal por dropshipper (promedio ponderado), churn override.
     rows = q(eng, """
-    WITH per_cust AS (
-    SELECT contact_identification, COUNT(*) AS n,
-    SUM(total)::float AS rev
-    FROM public.tienda_nube_orders
-    WHERE payment_status::text = 'paid'
-    AND contact_identification IS NOT NULL
-    GROUP BY 1
+    WITH base AS (
+        SELECT cpa."userId" AS cid, pi."createdAt"::date AS d,
+               COALESCE(pi."paidAmount",0)::float AS amount
+        FROM public."PaymentIntent" pi
+        INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE pi."status" = 'PROCESSED'
+    ),
+    gaps AS (
+        SELECT cid, (d - prev_d) AS gap_days,
+               ROW_NUMBER() OVER (PARTITION BY cid ORDER BY d DESC) AS rev_rn
+        FROM (
+            SELECT cid, d,
+                   LAG(d) OVER (PARTITION BY cid ORDER BY d) AS prev_d
+            FROM base
+        ) x WHERE prev_d IS NOT NULL
+    ),
+    cadence AS (
+        SELECT cid, COUNT(*) AS gap_count,
+               MAX(CASE WHEN rev_rn = 1 THEN gap_days END) AS g_last,
+               MAX(CASE WHEN rev_rn = 2 THEN gap_days END) AS g_prev,
+               MAX(CASE WHEN rev_rn = 3 THEN gap_days END) AS g_prev2,
+               MAX(gap_days) AS max_gap_days
+        FROM gaps GROUP BY cid
+    ),
+    cadence_calc AS (
+        SELECT cid, gap_count, max_gap_days,
+               CASE
+                 WHEN gap_count >= 3 THEN (0.6 * g_last + 0.3 * g_prev + 0.1 * g_prev2)::numeric
+                 WHEN gap_count = 2 THEN (0.7 * g_last + 0.3 * g_prev)::numeric
+                 WHEN gap_count = 1 THEN g_last::numeric
+                 ELSE NULL
+               END AS expected_gap
+        FROM cadence
+    ),
+    stats AS (
+        SELECT cid, COUNT(*) AS n,
+               SUM(amount) AS rev,
+               (CURRENT_DATE - MAX(d))::int AS recency_days
+        FROM base GROUP BY cid
+    ),
+    classified AS (
+        SELECT s.cid, s.n, s.rev, s.recency_days,
+               c.expected_gap, COALESCE(c.max_gap_days, 0) AS max_gap_days,
+               CASE
+                 WHEN s.n = 1 AND s.recency_days <= 60 THEN 'Nuevo'
+                 WHEN s.n = 1 AND s.recency_days > 90 THEN 'Churn pendiente'
+                 WHEN s.n = 1 THEN 'Nuevo'
+                 WHEN COALESCE(c.max_gap_days,0) > 180 AND s.recency_days <= 60 THEN 'Recuperado'
+                 WHEN c.expected_gap IS NOT NULL AND c.expected_gap > 0 THEN
+                   CASE
+                     WHEN s.recency_days::numeric / c.expected_gap > 3.0 THEN 'Churn confirmado'
+                     WHEN s.recency_days::numeric / c.expected_gap > 2.0 THEN 'Churn pendiente'
+                     WHEN s.recency_days::numeric / c.expected_gap > 1.2 THEN 'En riesgo'
+                     WHEN s.n = 2 THEN '2da compra'
+                     WHEN s.n = 3 THEN 'Convertido a Recurrente'
+                     WHEN s.n >= 4 THEN 'Recurrente'
+                   END
+                 ELSE 'Otros'
+               END AS estado
+        FROM stats s LEFT JOIN cadence_calc c ON c.cid = s.cid
     )
-    SELECT
-    CASE
-    WHEN n >= 4 THEN 'Recurrente'
-    WHEN n = 3 THEN 'Convertido a Recurrente'
-    WHEN n = 2 THEN '2da compra'
-    WHEN n = 1 THEN 'Nuevo'
-    END AS estado,
-    COUNT(*)::int AS clientes,
-    SUM(rev)::float AS revenue,
-    AVG(rev)::float AS ticket_avg
-    FROM per_cust
+    SELECT estado, COUNT(*)::int AS clientes,
+           SUM(rev)::float AS revenue, AVG(rev)::float AS ticket_avg
+    FROM classified
     GROUP BY 1 ORDER BY 2 DESC
     """) or []
     customer_status_dist = [{

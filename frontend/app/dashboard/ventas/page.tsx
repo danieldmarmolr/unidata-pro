@@ -196,9 +196,9 @@ export default function VentasPage() {
  <div className="mb-6">
  {!data.cost_data_available && (
  <div className="mb-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">
- ⚠ <strong>Costo no disponible:</strong> el campo <code>OrderItem.cost</code> esta
- vacio en los 455k registros. Sin costo no se calcula markup. Cuando se integre el
- costo (probablemente desde Digip o Contabilium) los datos aparecen automaticamente.
+ ⚠ <strong>Markup sin calcular:</strong> los SKUs de las ventas no matchean con
+ ningun lote en <a href="/dashboard/costos" className="underline font-semibold">Costos de Importación</a>.
+ Subí los costos vigentes via Importar CSV/XLSX y el markup aparece automaticamente.
  </div>
  )}
  <CategoryTable
