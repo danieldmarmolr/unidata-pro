@@ -267,7 +267,7 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  })}
  </div>
 
- <div className="grid grid-cols-1 xl:grid-cols-[1fr_360px] gap-4 mb-6">
+ <div className="grid grid-cols-1 xl:grid-cols-[3fr_2fr] gap-4 mb-6">
  <div>
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
@@ -285,8 +285,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  defaultPrimary="revenue"
  defaultSecondary="ordenes_pagas"
  caption="Evolución mensual"
- subtitle="Elegí qué métrica ver como barras (eje izq) y opcionalmente otra como línea (eje der) · ej: Revenue + Ticket promedio para ver si subió el AOV"
- height={320}
+ subtitle="Elegí qué métrica ver como barras (eje izq) y opcionalmente otra como línea (eje der)"
+ height={260}
  />
  )}
  </div>
@@ -419,6 +419,12 @@ type JourneyEvent = {
   gap_days: number | null;
   cumulative_revenue: number;
   cumulative_units: number;
+  stage?: string;
+  gap_expected?: number | null;
+  gap_ratio?: number;
+  gap_health?: "en_ritmo" | "en_riesgo" | "churn_pendiente" | "churn_confirmado" | null;
+  gap_health_label?: string | null;
+  transition_narrative?: string | null;
   churn_break?: boolean;
   churn_ratio?: number;
 };
@@ -477,7 +483,7 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
   const sc = statusColors[data.status] || statusColors.sin_compras;
 
   return (
-    <div className="bg-surface border border-border rounded-xl p-4 flex flex-col h-full max-h-[420px] overflow-hidden">
+    <div className="bg-surface border border-border rounded-xl p-4 flex flex-col h-full max-h-[640px] overflow-hidden">
       <div className="flex items-center justify-between gap-2 mb-3">
         <div>
           <div className="text-sm font-bold text-text">Su historia con nosotros</div>
@@ -531,7 +537,7 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
         </div>
       )}
 
-      {/* Timeline — most-recent-first */}
+      {/* Timeline vertical — most-recent-first */}
       <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2 flex items-center gap-1.5">
         <span>Timeline</span>
         <span className="text-text-muted/60 normal-case font-normal">(más reciente → primera)</span>
@@ -539,48 +545,95 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
           {data.total_paid_orders} compras · ${data.total_revenue.toLocaleString("es-AR")}
         </span>
       </div>
-      <div className="flex-1 overflow-y-auto pr-1 space-y-2">
-        {data.events.map((e) => {
-          const isChurn = !!e.churn_break;
+      <div className="flex-1 overflow-y-auto pr-1">
+        {data.events.map((e, idx) => {
+          const isLast = idx === data.events.length - 1;
           return (
-            <div
-              key={e.order_id}
-              className={`relative pl-4 border-l-2 last:border-transparent ${
-                isChurn ? "border-red-300" : "border-border"
-              }`}
-            >
-              <div
-                className={`absolute -left-[5px] top-1 w-2 h-2 rounded-full ${
-                  isChurn ? "bg-red-600 ring-2 ring-red-200" : "bg-primary"
-                }`}
-              />
-              <div className="flex items-baseline justify-between gap-2">
-                <div className="text-xs font-bold text-text">{e.label}</div>
-                <div className="text-[10px] text-text-muted font-mono">#{e.number}</div>
-              </div>
-              <div className="text-[10px] text-text-muted">
-                {e.date} · <strong className="text-text">$ {e.total.toLocaleString("es-AR")}</strong> · {e.units} u.
-              </div>
-              {e.gap_days != null && (
-                <div className="text-[10px] mt-0.5">
-                  <span
-                    className={`inline-block px-1.5 py-0.5 rounded font-semibold ${
-                      isChurn
-                        ? "bg-red-100 text-red-900 border border-red-300"
-                        : "bg-soft text-text-muted"
-                    }`}
-                    title={isChurn ? `${e.churn_ratio}× la cadencia personal — quiebre de patrón` : undefined}
-                  >
-                    +{e.gap_days}d {isChurn && `(${e.churn_ratio}× cadencia — rotura)`}
-                  </span>
-                </div>
-              )}
-            </div>
+            <JourneyEventCard key={e.order_id} event={e} isLast={isLast} />
           );
         })}
       </div>
     </div>
   );
+}
+
+// ============================================================
+// JourneyEventCard — card por evento + barra vertical de gap coloreada
+// ============================================================
+const STAGE_COLOR_MAP: Record<string, { bg: string; border: string; text: string; dot: string }> = {
+  "Nuevo":               { bg: "bg-blue-50",    border: "border-blue-300",    text: "text-blue-900",    dot: "bg-blue-500"   },
+  "Segunda compra":      { bg: "bg-cyan-50",    border: "border-cyan-300",    text: "text-cyan-900",    dot: "bg-cyan-500"   },
+  "Conv. a Recurrente":  { bg: "bg-violet-50",  border: "border-violet-300",  text: "text-violet-900",  dot: "bg-violet-500" },
+  "Recurrente":          { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-900", dot: "bg-emerald-500" },
+};
+
+const GAP_HEALTH_MAP: Record<string, { color: string; bar: string; label: string }> = {
+  en_ritmo:         { color: "text-emerald-700", bar: "bg-emerald-400", label: "En ritmo"           },
+  en_riesgo:        { color: "text-amber-800",   bar: "bg-amber-400",   label: "En riesgo"          },
+  churn_pendiente:  { color: "text-orange-800",  bar: "bg-orange-500",  label: "Churn pendiente"    },
+  churn_confirmado: { color: "text-red-800",     bar: "bg-red-600",     label: "Churn confirmado"   },
+};
+
+function JourneyEventCard({ event: e, isLast }: { event: JourneyEvent; isLast: boolean }) {
+  const stageMeta = STAGE_COLOR_MAP[e.stage || ""] || STAGE_COLOR_MAP["Nuevo"];
+  const gh = e.gap_health ? GAP_HEALTH_MAP[e.gap_health] : null;
+  // Barra de gap proporcional pero capada a 80px
+  const barHeight = e.gap_days != null
+    ? Math.min(80, 12 + Math.max(0, e.gap_days) * 0.6)
+    : 0;
+
+  return (
+    <div className="relative">
+      {/* Card del evento */}
+      <div className={`rounded-lg border ${stageMeta.border} ${stageMeta.bg} p-2 mb-0`}>
+        <div className="flex items-baseline justify-between gap-2 mb-0.5">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${stageMeta.dot}`} />
+            <span className="text-xs font-bold text-text">{e.label}</span>
+            <span className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${stageMeta.text} ${stageMeta.bg} border ${stageMeta.border}`}>
+              {e.stage || "—"}
+            </span>
+          </div>
+          <span className="text-[10px] text-text-muted font-mono">#{e.number}</span>
+        </div>
+        <div className="text-[10px] text-text-muted ml-3.5">
+          {e.date} · <strong className="text-text">$ {e.total.toLocaleString("es-AR")}</strong> · {e.units}u
+        </div>
+        {e.transition_narrative && idx0FirstPurchase(e) && (
+          <div className={`text-[10px] mt-1 ml-3.5 italic ${gh?.color ?? "text-text-muted"}`}>
+            {e.transition_narrative}
+          </div>
+        )}
+      </div>
+
+      {/* Barra vertical del gap hacia el siguiente evento (en orden DESC, el "anterior" en la lista) */}
+      {!isLast && e.gap_days != null && (
+        <div className="flex items-stretch gap-2 ml-2 my-0.5">
+          <div
+            className={`w-1 rounded-full ${gh?.bar ?? "bg-zinc-300"}`}
+            style={{ height: barHeight }}
+          />
+          <div className="flex-1 flex items-center text-[10px]">
+            <div className="flex flex-col gap-0.5">
+              <span className={`font-bold ${gh?.color ?? "text-text-muted"}`}>
+                {gh?.label ?? "—"} · {e.gap_days}d
+              </span>
+              {e.gap_expected != null && (
+                <span className="text-text-muted">
+                  esperado ~{e.gap_expected}d · {e.gap_ratio ? `${e.gap_ratio.toFixed(1)}× cadencia` : ""}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// helper — primera compra no muestra narrativa de transicion (no hay gap previo)
+function idx0FirstPurchase(_e: JourneyEvent): boolean {
+  return true; // always render narrative if backend devolvio una (la 1ra compra trae texto de welcome)
 }
 
 // ============================================================

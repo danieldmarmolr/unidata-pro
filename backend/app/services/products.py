@@ -641,6 +641,13 @@ def customer_journey(customer_id: int) -> dict:
             gaps.append(gap)
         total_revenue += total
         total_units += units
+        # Stage lifecycle al momento de ESTA compra (segun # de compras hasta aca)
+        n_so_far = idx + 1
+        if n_so_far == 1: stage = "Nuevo"
+        elif n_so_far == 2: stage = "Segunda compra"
+        elif n_so_far == 3: stage = "Conv. a Recurrente"
+        else: stage = "Recurrente"
+
         events.append({
             "order_id": order_id,
             "number": number,
@@ -649,6 +656,7 @@ def customer_journey(customer_id: int) -> dict:
             "total": round(total, 2),
             "units": units,
             "gap_days": gap,
+            "stage": stage,
             "cumulative_revenue": round(total_revenue, 2),
             "cumulative_units": total_units,
         })
@@ -787,6 +795,67 @@ def customer_journey(customer_id: int) -> dict:
                 ev["churn_ratio"] = round(g / expected_gap_days, 1)
             else:
                 ev["churn_break"] = False
+
+    # Computar gap_health POR EVENTO: que le paso al cliente durante el gap
+    # que precede a ESTA compra. Si el gap supero 1.2x/2x/3x del expected en
+    # ese momento, el cliente estuvo en en_riesgo / churn_pendiente / churn_confirmado
+    # ANTES de hacer esta compra (= "recuperacion" de ese estado al comprar).
+    pop_base = _population_first_to_second_gap_unistore()
+    for i, ev in enumerate(events):
+        g = ev.get("gap_days")
+        if g is None:
+            # Primera compra: no hay gap previo
+            ev["gap_health"] = None
+            ev["gap_health_label"] = None
+            ev["gap_expected"] = None
+            ev["transition_narrative"] = "Primera compra: arranca el ciclo. Bienvenida + survey."
+            continue
+        # Calcular expected_gap en EL MOMENTO de esta compra (con datos hasta i-1)
+        prior_gaps = [x["gap_days"] for x in events[:i] if x.get("gap_days") is not None]
+        if len(prior_gaps) >= 3:
+            exp = 0.6 * prior_gaps[-1] + 0.3 * prior_gaps[-2] + 0.1 * prior_gaps[-3]
+        elif len(prior_gaps) == 2:
+            exp = 0.7 * prior_gaps[-1] + 0.3 * prior_gaps[-2]
+        elif len(prior_gaps) == 1:
+            exp = float(prior_gaps[-1])
+        else:
+            exp = pop_base  # 2da compra: comparar contra mediana poblacional
+        ev["gap_expected"] = round(exp, 1) if exp else None
+        if not exp or exp <= 0:
+            ev["gap_health"] = None
+            ev["gap_health_label"] = None
+            ev["transition_narrative"] = None
+            continue
+        ratio = g / exp
+        ev["gap_ratio"] = round(ratio, 2)
+        prev_stage = events[i - 1]["stage"]
+        if ratio > 3.0:
+            ev["gap_health"] = "churn_confirmado"
+            ev["gap_health_label"] = "Churn confirmado"
+            ev["transition_narrative"] = (
+                f"Durante este gap se fugo del patron: {prev_stage} → Churn confirmado "
+                f"({g}d vs ~{round(exp)}d esperados). Volvio a comprar = RECUPERACION."
+            )
+        elif ratio > 2.0:
+            ev["gap_health"] = "churn_pendiente"
+            ev["gap_health_label"] = "Churn pendiente"
+            ev["transition_narrative"] = (
+                f"Durante este gap entro en Churn pendiente: {prev_stage} → Churn pendiente "
+                f"({g}d vs ~{round(exp)}d). Volvio a comprar a tiempo."
+            )
+        elif ratio > 1.2:
+            ev["gap_health"] = "en_riesgo"
+            ev["gap_health_label"] = "En riesgo"
+            ev["transition_narrative"] = (
+                f"Durante este gap quedo En riesgo: {prev_stage} → {prev_stage} · En riesgo "
+                f"({g}d vs ~{round(exp)}d). Recupero comprando."
+            )
+        else:
+            ev["gap_health"] = "en_ritmo"
+            ev["gap_health_label"] = "En ritmo"
+            ev["transition_narrative"] = (
+                f"Compra dentro del ritmo esperado ({g}d vs ~{round(exp)}d)."
+            )
 
     # Order events DESC (most-recent first) para el sidebar storytelling
     events_desc = list(reversed(events))
