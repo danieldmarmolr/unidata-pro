@@ -70,14 +70,35 @@ def pagos_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
         "hint": "PaymentTransaction sobre ordenes" + (f" - canal {channel.upper()}" if channel != "all" else ""),
     })
 
-    # --- Cantidad transacciones ---
+    # --- Ordenes pagadas (TN orders + ML orders unfolded de PaymentIntent arrays) ---
+    # A diferencia de "Transacciones" (que es un evento de pago), aca contamos
+    # cuantas ordenes reales de venta se cubrieron con esos pagos. Un PT puede
+    # cubrir 1 o N ordenes (paymentintent.orderIds o mlOrderIds).
+    orders_tn = int(scalar(eng, f"""
+        SELECT COALESCE(SUM(COALESCE(array_length(pi."orderIds",1),0)),0)::int
+        FROM public."PaymentTransaction" pt
+        LEFT JOIN public."PaymentIntent" pi ON pi."paymentTransactionId" = pt.id
+        WHERE pt."createdAt" >= NOW() - make_interval(days => :days)
+        {chf}
+    """, p) or 0)
+    orders_ml = int(scalar(eng, f"""
+        SELECT COALESCE(SUM(COALESCE(array_length(pi."mlOrderIds",1),0)),0)::int
+        FROM public."PaymentTransaction" pt
+        LEFT JOIN public."PaymentIntent" pi ON pi."paymentTransactionId" = pt.id
+        WHERE pt."createdAt" >= NOW() - make_interval(days => :days)
+        {chf}
+    """, p) or 0)
     n_tx = int(scalar(eng, f"""
         SELECT COUNT(*) FROM public."PaymentTransaction" pt
         LEFT JOIN public."PaymentIntent" pi ON pi."paymentTransactionId" = pt.id
         WHERE pt."createdAt" >= NOW() - make_interval(days => :days)
         {chf}
     """, p) or 0)
-    cards.append({"label": "Transacciones", "value": n_tx})
+    cards.append({
+        "label": "Ordenes pagadas",
+        "value": orders_tn + orders_ml,
+        "hint": f"TN: {orders_tn:,}  /  ML: {orders_ml:,}  -  en {n_tx:,} transacciones",
+    })
 
     # --- Tasa de exito ---
     success_lc = "(" + ", ".join([f"'{s.lower()}'" for s in SUCCESS_STATES]) + ")"
@@ -121,15 +142,19 @@ def pagos_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     daily_volume = [{"date": r[0].strftime("%Y-%m-%d") if r[0] else "",
                      "value": float(r[1] or 0)} for r in rows]
 
-    # --- Distribucion por canal (siempre full, no filtra por chf) ---
+    # --- Distribucion por canal: volumen + ordenes (no transacciones) ---
+    # Mostramos cuantas ordenes (TN/ML) cubrio cada categoria, ademas del volumen.
     rows = q(eng, """
         SELECT
             CASE
-                WHEN pi."mlOrderIds" IS NOT NULL AND array_length(pi."mlOrderIds",1) > 0 THEN 'Orden MELI'
-                WHEN pi."orderIds" IS NOT NULL AND array_length(pi."orderIds",1) > 0 THEN 'Orden TN'
+                WHEN pi."mlOrderIds" IS NOT NULL AND array_length(pi."mlOrderIds",1) > 0 THEN 'Ordenes MELI'
+                WHEN pi."orderIds" IS NOT NULL AND array_length(pi."orderIds",1) > 0 THEN 'Ordenes TN'
                 ELSE 'Suscripcion / Otros'
             END AS canal,
-            COUNT(*)::int AS n,
+            COALESCE(SUM(
+                COALESCE(array_length(pi."orderIds",1),0)
+              + COALESCE(array_length(pi."mlOrderIds",1),0)
+            ),0)::int AS ordenes,
             COALESCE(SUM(pt.amount),0)::float AS volumen
         FROM public."PaymentTransaction" pt
         LEFT JOIN public."PaymentIntent" pi ON pi."paymentTransactionId" = pt.id
@@ -139,7 +164,7 @@ def pagos_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     channel_breakdown = [{
         "category": r[0],
         "value": float(r[2] or 0),
-        "extra": {"transacciones": int(r[1] or 0)},
+        "extra": {"ordenes": int(r[1] or 0)},
     } for r in rows]
 
     # --- Distribucion estados ---

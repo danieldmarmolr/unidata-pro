@@ -121,7 +121,7 @@ export default function PagosPage() {
               subtitle="TaloPay procesa ordenes TN, ordenes MELI y suscripciones · breakdown completo del periodo"
               data={data.channel_breakdown}
               formatter="currency"
-              extraColumns={[{ key: "transacciones", label: "Trans", format: "number" }]}
+              extraColumns={[{ key: "ordenes", label: "Ordenes", format: "number" }]}
               showProgress={true}
             />
           </div>
