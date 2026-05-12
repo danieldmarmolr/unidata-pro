@@ -954,11 +954,16 @@ def dropshipper_unified_orders(
 
     # 1) Bajamos los intents PROCESSED del user + sus arrays de IDs
     intent_filter = "AND pi.id = :intent_id" if intent_id else ""
+    # PaymentIntent.mlOrderIds y .orderIds son bigint[]. Los expandimos via
+    # subselect para devolverlos como text[] de forma segura sin pelearnos con
+    # COALESCE cross-type.
     intents = q(eng, f"""
         SELECT pi.id,
                pi."createdAt"::text,
-               COALESCE(pi."mlOrderIds", ARRAY[]::text[]) AS ml_ids,
-               COALESCE(pi."orderIds",   ARRAY[]::text[]) AS tn_ids,
+               (SELECT COALESCE(array_agg(x::text), ARRAY[]::text[])
+                  FROM unnest(COALESCE(pi."mlOrderIds", ARRAY[]::bigint[])) AS x) AS ml_ids,
+               (SELECT COALESCE(array_agg(x::text), ARRAY[]::text[])
+                  FROM unnest(COALESCE(pi."orderIds",   ARRAY[]::bigint[])) AS x) AS tn_ids,
                COALESCE(pi."paidAmount",0)::float AS paid
         FROM public."PaymentIntent" pi
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
