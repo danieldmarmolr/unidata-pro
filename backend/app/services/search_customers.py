@@ -174,9 +174,14 @@ def search_unidrop_dropshippers(
             ") "
         )
 
-    # Patron normal y patron sin espacios (asi 'tiendapi' matchea 'Tienda Pini')
-    pat = f"%{qstr}%"
-    pat_collapsed = "%" + qstr.replace(" ", "") + "%"
+    # SEARCH-V2: concatenamos todos los campos searcheables en un solo texto
+    # y hacemos un solo ILIKE. Tambien una version sin espacios para que
+    # 'tiendapi' matchee 'Tienda Pini'.
+    pat = f"%{qstr.lower()}%"
+    pat_collapsed = "%" + qstr.lower().replace(" ", "") + "%"
+
+    log.info("[search-unidrop] q=%r pat=%r pat_collapsed=%r days=%d only_active=%s",
+             qstr, pat, pat_collapsed, int(days), only_active_in_period)
 
     rows = q(eng, f"""
         SELECT u.id,
@@ -212,17 +217,26 @@ def search_unidrop_dropshippers(
         FROM public."User" u
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
         WHERE (
-              u.name ILIKE :pat
-           OR u.fantasy_name ILIKE :pat
-           OR REPLACE(u.fantasy_name, ' ', '') ILIKE :pat_collapsed
-           OR REPLACE(u.name, ' ', '') ILIKE :pat_collapsed
-           OR u.email ILIKE :pat
-           OR u.phone ILIKE :pat
-           OR u.dni ILIKE :pat
-           OR u.cuit ILIKE :pat
-           OR mla.nickname ILIKE :pat
-           OR mla.nickname ILIKE :pat_collapsed
-           OR ({'u.id = :uid' if id_candidate is not None else 'FALSE'})
+            -- Match plano (lowercase)
+            LOWER(
+              COALESCE(u.name,'') || ' ' ||
+              COALESCE(u.fantasy_name,'') || ' ' ||
+              COALESCE(u.email,'') || ' ' ||
+              COALESCE(u.phone,'') || ' ' ||
+              COALESCE(u.dni,'') || ' ' ||
+              COALESCE(u.cuit,'') || ' ' ||
+              COALESCE(mla.nickname,'')
+            ) LIKE :pat
+            -- Match sin espacios (asi 'tiendapi' encuentra 'Tienda Pini')
+            OR LOWER(
+              REPLACE(
+                COALESCE(u.name,'') ||
+                COALESCE(u.fantasy_name,'') ||
+                COALESCE(u.email,'') ||
+                COALESCE(mla.nickname,''),
+              ' ', '')
+            ) LIKE :pat_collapsed
+            OR ({'u.id = :uid' if id_candidate is not None else 'FALSE'})
         )
         {period_filter}
         ORDER BY (tn_revenue_periodo) DESC NULLS LAST, u."createdAt" DESC NULLS LAST
@@ -234,6 +248,7 @@ def search_unidrop_dropshippers(
         "d": int(days),
         "lim": int(limit),
     }) or []
+    log.info("[search-unidrop] rows=%d", len(rows))
 
     out = [{
         "id": int(r[0] or 0),
