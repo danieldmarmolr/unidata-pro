@@ -418,6 +418,18 @@ def get_rfm_flows(_: Annotated[str, Depends(current_user)]) -> dict:
     return _b()
 
 
+@router.get("/rfm-flows/customers")
+def get_rfm_flows_customers(
+    _: Annotated[str, Depends(current_user)],
+    from_seg: Annotated[str, Query(alias="from")],
+    to_seg: Annotated[str, Query(alias="to")],
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict:
+    """Lista de clientes para una transicion from->to especifica.
+    Para que las acciones sugeridas tengan a quien aplicar."""
+    return rfm_flows_svc.rfm_flows_customers(from_seg, to_seg, limit=limit)
+
+
 @router.get("/forecast-batch")
 def get_forecast_batch(
     _: Annotated[str, Depends(current_user)],

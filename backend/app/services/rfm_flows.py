@@ -127,12 +127,17 @@ def rfm_flows_mom() -> dict:
             transitions[key] = {
                 "from": key[0], "to": key[1],
                 "count": 0, "revenue_a": 0.0, "revenue_b": 0.0,
+                "customer_ids": [],
             }
         transitions[key]["count"] += 1
         if "previous" in periods:
             transitions[key]["revenue_a"] += periods["previous"]["revenue"]
         if "current" in periods:
             transitions[key]["revenue_b"] += periods["current"]["revenue"]
+        # Guardamos los IDs para hacer drill-down despues. Capamos a 500 para
+        # mantener el payload manejable en transiciones gigantes.
+        if len(transitions[key]["customer_ids"]) < 500:
+            transitions[key]["customer_ids"].append(int(cid))
 
     # Lista ordenada por count desc
     flows = sorted(transitions.values(), key=lambda x: -x["count"])
@@ -177,4 +182,84 @@ def rfm_flows_mom() -> dict:
         "previous_month_start": (today - dt.timedelta(days=60)).isoformat(),
         "total_customers": len(by_customer),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+def rfm_flows_customers(from_seg: str, to_seg: str, limit: int = 100) -> dict:
+    """Devuelve la lista de clientes de una transicion FROM->TO especifica.
+
+    Re-corre rfm_flows_mom (es cacheable a nivel router) y extrae los IDs
+    de la transicion pedida. Despues hace una query a tienda_nube.Customer
+    para enriquecer con nombre, email, ordenes y revenue del periodo.
+    """
+    base = rfm_flows_mom()
+    flows = base.get("flows", [])
+    target = next((f for f in flows if f["from"] == from_seg and f["to"] == to_seg), None)
+    if not target:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": 0}
+
+    ids = target.get("customer_ids", [])[:limit]
+    if not ids:
+        return {"from": from_seg, "to": to_seg, "customers": [], "total": int(target.get("count", 0))}
+
+    eng = get_engine("unistore")
+    rows = q(eng, """
+        WITH ids AS (SELECT UNNEST(:ids::int[]) AS id),
+             ord_curr AS (
+               SELECT o."customerId" AS cid,
+                      COUNT(*)::int AS orders_cur,
+                      MAX(o."createdAt")::date AS last_cur,
+                      COALESCE(SUM(o.total),0)::float AS rev_cur
+               FROM tienda_nube."Order" o
+               WHERE o."paymentStatus"='paid'
+                 AND o."createdAt" >= NOW() - INTERVAL '30 days'
+                 AND o."customerId" = ANY(:ids::int[])
+               GROUP BY o."customerId"
+             ),
+             ord_prev AS (
+               SELECT o."customerId" AS cid,
+                      COUNT(*)::int AS orders_prev,
+                      MAX(o."createdAt")::date AS last_prev,
+                      COALESCE(SUM(o.total),0)::float AS rev_prev
+               FROM tienda_nube."Order" o
+               WHERE o."paymentStatus"='paid'
+                 AND o."createdAt" >= NOW() - INTERVAL '60 days'
+                 AND o."createdAt" <  NOW() - INTERVAL '30 days'
+                 AND o."customerId" = ANY(:ids::int[])
+               GROUP BY o."customerId"
+             )
+        SELECT ids.id,
+               COALESCE(c.name, c.email, 'Customer ' || ids.id::text) AS nombre,
+               c.email,
+               COALESCE(oc.orders_cur, 0) AS orders_cur,
+               COALESCE(op.orders_prev, 0) AS orders_prev,
+               COALESCE(oc.rev_cur, 0)::float AS rev_cur,
+               COALESCE(op.rev_prev, 0)::float AS rev_prev,
+               oc.last_cur::text AS last_cur,
+               op.last_prev::text AS last_prev
+        FROM ids
+        LEFT JOIN tienda_nube."Customer" c ON c.id = ids.id
+        LEFT JOIN ord_curr oc ON oc.cid = ids.id
+        LEFT JOIN ord_prev op ON op.cid = ids.id
+        ORDER BY (COALESCE(oc.rev_cur,0) + COALESCE(op.rev_prev,0)) DESC NULLS LAST
+    """, {"ids": ids}) or []
+
+    customers = [{
+        "customer_id": int(r[0]),
+        "nombre": r[1] or "",
+        "email": r[2] or "",
+        "orders_cur": int(r[3] or 0),
+        "orders_prev": int(r[4] or 0),
+        "revenue_cur": round(float(r[5] or 0), 2),
+        "revenue_prev": round(float(r[6] or 0), 2),
+        "last_cur": r[7],
+        "last_prev": r[8],
+    } for r in rows]
+
+    return {
+        "from": from_seg,
+        "to": to_seg,
+        "customers": customers,
+        "total": int(target.get("count", 0)),
+        "showing": len(customers),
     }

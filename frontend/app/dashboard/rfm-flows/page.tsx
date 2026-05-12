@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, TrendingUp, TrendingDown, Activity, Info } from "lucide-react";
+import Link from "next/link";
+import { ArrowRight, TrendingUp, TrendingDown, Activity, Info, ExternalLink } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
@@ -39,6 +40,8 @@ export default function RfmFlowsPage() {
     staleTime: 10 * 60_000,
   });
   const [popupKey, setPopupKey] = useState<string | null>(null);
+  // Cuando esta seteado, mostramos el popup de TRANSICION (con customers + ambas acciones)
+  const [flowPopup, setFlowPopup] = useState<{ from: string; to: string } | null>(null);
 
   return (
     <>
@@ -129,7 +132,12 @@ export default function RfmFlowsPage() {
                       (f.from === "_nuevo" || f.from === "hibernating" || f.from === "lost") &&
                       ["champions", "loyal", "potential_loyalist"].includes(f.to);
                     return (
-                      <tr key={i} className={"border-t border-border hover:bg-soft transition " + (isCritical ? "bg-red-50/40" : isWin ? "bg-emerald-50/40" : "")}>
+                      <tr
+                        key={i}
+                        onClick={() => setFlowPopup({ from: f.from, to: f.to })}
+                        className={"border-t border-border hover:bg-soft transition cursor-pointer " + (isCritical ? "bg-red-50/40" : isWin ? "bg-emerald-50/40" : "")}
+                        title="Click para ver los clientes de esta transicion"
+                      >
                         <td className="px-4 py-2.5">
                           <SegmentBadge id={f.from} seg={fromSeg} onClick={() => setPopupKey(f.from)} />
                         </td>
@@ -172,12 +180,23 @@ export default function RfmFlowsPage() {
         )}
       </div>
 
-      {/* Popup educativo segmento */}
+      {/* Popup educativo segmento (al tocar un badge individual) */}
       {popupKey && data && data.segments[popupKey] && (
         <SegmentInfoPopup
           seg={data.segments[popupKey]}
           action={data.actions?.[popupKey]}
           onClose={() => setPopupKey(null)}
+        />
+      )}
+
+      {/* Popup transicion (al tocar una fila): ambos segmentos + lista de clientes */}
+      {flowPopup && data && (
+        <FlowTransitionPopup
+          fromKey={flowPopup.from}
+          toKey={flowPopup.to}
+          segments={data.segments}
+          actions={data.actions}
+          onClose={() => setFlowPopup(null)}
         />
       )}
     </>
@@ -229,7 +248,158 @@ function SegmentInfoPopup({
   );
 }
 
+function FlowTransitionPopup({
+  fromKey, toKey, segments, actions, onClose,
+}: {
+  fromKey: string;
+  toKey: string;
+  segments: Record<string, { label: string; color: string; icon: string; desc: string }>;
+  actions?: Record<string, SegmentAction>;
+  onClose: () => void;
+}) {
+  type CustResp = {
+    from: string;
+    to: string;
+    total: number;
+    showing?: number;
+    customers: {
+      customer_id: number;
+      nombre: string;
+      email: string;
+      orders_cur: number;
+      orders_prev: number;
+      revenue_cur: number;
+      revenue_prev: number;
+      last_cur: string | null;
+      last_prev: string | null;
+    }[];
+  };
+  const { data, isLoading } = useQuery<CustResp>({
+    queryKey: ["rfm-flows-customers", fromKey, toKey],
+    queryFn: () => api(`/api/dashboards/rfm-flows/customers?from=${encodeURIComponent(fromKey)}&to=${encodeURIComponent(toKey)}&limit=100`),
+    staleTime: 60_000,
+  });
+
+  const fromSeg = segments[fromKey];
+  const toSeg = segments[toKey];
+  const fromLabel = fromKey === "_nuevo" ? "Nuevo este mes" : fromKey === "_inactivo" ? "No compro este mes" : fromSeg?.label ?? fromKey;
+  const toLabel = toKey === "_nuevo" ? "Nuevo este mes" : toKey === "_inactivo" ? "No compro este mes" : toSeg?.label ?? toKey;
+  const fromColor = fromSeg?.color ?? (fromKey === "_nuevo" ? "#3b82f6" : "#94a3b8");
+  const toColor = toSeg?.color ?? (toKey === "_nuevo" ? "#3b82f6" : "#94a3b8");
+  const fromAction = actions?.[fromKey];
+  const toAction = actions?.[toKey];
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div
+        className="bg-surface border-2 rounded-2xl shadow-2xl w-[min(960px,96vw)] max-h-[92vh] overflow-hidden flex flex-col"
+        style={{ borderColor: toColor + "60" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header: from -> to */}
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: fromColor + "60", background: fromColor + "15" }}>
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: fromColor }} />
+              <span className="text-xs font-bold">{fromLabel}</span>
+            </div>
+            <ArrowRight size={16} className="text-text-muted" />
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border" style={{ borderColor: toColor + "60", background: toColor + "15" }}>
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: toColor }} />
+              <span className="text-xs font-bold">{toLabel}</span>
+            </div>
+            {data && (
+              <span className="text-xs text-text-muted">
+                <strong className="text-text">{data.total}</strong> clientes en esta transicion
+                {data.showing && data.showing < data.total ? ` · mostrando ${data.showing}` : ""}
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} className="text-text-muted hover:text-text px-2 py-1 rounded">x</button>
+        </div>
+
+        {/* Acciones FROM + TO en 2 columnas */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border-b border-border">
+          <div className="p-4 bg-soft/30 md:border-r md:border-border">
+            <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">Eran (mes previo)</div>
+            <div className="text-sm font-bold text-text">{fromLabel}</div>
+            {fromAction && (
+              <>
+                <div className="text-xs text-text-muted mt-1.5">{fromAction.que_es}</div>
+              </>
+            )}
+          </div>
+          <div className="p-4" style={{ background: `${toColor}10` }}>
+            <div className="text-[10px] uppercase tracking-wider font-bold mb-1" style={{ color: toColor }}>Ahora son (mes actual) -&gt; QUE HACER</div>
+            <div className="text-sm font-bold text-text">{toLabel}</div>
+            {toAction ? (
+              <div className="text-xs text-text mt-1.5 leading-relaxed">{toAction.que_hacer}</div>
+            ) : (
+              <div className="text-xs text-text-muted italic mt-1.5">Sin accion definida para este segmento todavia.</div>
+            )}
+          </div>
+        </div>
+
+        {/* Lista de customers */}
+        <div className="flex-1 overflow-y-auto">
+          {isLoading && (
+            <div className="p-5 space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-9 bg-soft rounded animate-pulse" />
+              ))}
+            </div>
+          )}
+          {data && data.customers.length === 0 && (
+            <div className="py-8 text-center text-text-muted text-sm">
+              No hay clientes detallados disponibles para esta transicion (el conteo global es {data.total}).
+            </div>
+          )}
+          {data && data.customers.length > 0 && (
+            <table className="w-full text-xs">
+              <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                <tr>
+                  <th className="text-left px-4 py-2">Cliente</th>
+                  <th className="text-right px-2 py-2">Ord. mes ant.</th>
+                  <th className="text-right px-2 py-2">Ord. mes act.</th>
+                  <th className="text-right px-2 py-2">Revenue ant.</th>
+                  <th className="text-right px-2 py-2">Revenue act.</th>
+                  <th className="text-right px-2 py-2 w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.customers.map((c) => (
+                  <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40">
+                    <td className="px-4 py-2">
+                      <Link href={`/dashboard/customer/${c.customer_id}`} className="block">
+                        <div className="text-primary hover:underline font-semibold truncate max-w-[260px]">{c.nombre}</div>
+                        {c.email && <div className="text-[10px] text-text-muted font-mono truncate max-w-[260px]">{c.email}</div>}
+                      </Link>
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.orders_prev)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.orders_cur)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums text-text-muted">{c.revenue_prev > 0 ? formatCurrency(c.revenue_prev) : "—"}</td>
+                    <td className="px-2 py-2 text-right tabular-nums font-semibold">{c.revenue_cur > 0 ? formatCurrency(c.revenue_cur) : "—"}</td>
+                    <td className="px-2 py-2 text-right">
+                      <Link href={`/dashboard/customer/${c.customer_id}`} className="inline-flex items-center text-primary opacity-60 hover:opacity-100">
+                        <ExternalLink size={12} />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SegmentBadge({ id, seg, onClick }: { id: string; seg?: { label: string; color: string; icon: string }; onClick?: () => void }) {
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onClick?.();
+  };
   // Casos especiales que no estan en SEGMENTS - no clickeables (no tienen accion)
   if (id === "_nuevo") {
     return (
@@ -253,7 +423,7 @@ function SegmentBadge({ id, seg, onClick }: { id: string; seg?: { label: string;
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={handleClick}
       className="inline-flex items-center gap-1.5 text-xs font-semibold cursor-pointer hover:bg-soft hover:rounded px-1 py-0.5 transition"
       title={`${seg.label} — click para ver que hacer`}
     >
