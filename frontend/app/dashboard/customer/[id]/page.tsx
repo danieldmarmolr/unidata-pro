@@ -301,38 +301,8 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
  </>
  ) : (
  <>
- {/* Ordenes con expandible */}
- <div className="bg-surface border border-border rounded-xl p-5">
- <div className="text-sm font-bold text-text mb-1">Ordenes (ultimas 50)</div>
- <div className="text-xs text-text-muted mb-3">Click en una fila para ver los items · click en ↗ abre el detalle TN-style</div>
- <div className="overflow-x-auto">
- <table className="w-full text-sm">
- <thead>
- <tr className="text-left text-[10px] uppercase tracking-wider text-text-muted">
- <th className="px-3 py-2">#</th>
- <th className="px-3 py-2">Numero</th>
- <th className="px-3 py-2">Fecha</th>
- <th className="px-3 py-2">Estado del pedido</th>
- <th className="px-3 py-2 text-right">Total</th>
- <th className="px-3 py-2 text-center"></th>
- </tr>
- </thead>
- <tbody>
- {data.orders.map((o, i) => (
- <ExpandableOrderRow
- key={i}
- order={o}
- idx={i + 1}
- onOpenDetail={setOrderDetailId}
- />
- ))}
- {data.orders.length === 0 && (
- <tr><td colSpan={8} className="py-8 text-center text-text-muted text-sm">Sin ordenes.</td></tr>
- )}
- </tbody>
- </table>
- </div>
- </div>
+ {/* Ordenes con expandible + filtros */}
+ <CustomerOrdersTable orders={data.orders} onOpenDetail={setOrderDetailId} />
 
  {/* Top productos comprados con thumbs */}
  <div className="bg-surface border border-border rounded-xl p-5">
@@ -608,6 +578,132 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// CustomerOrdersTable — tabla de ordenes con filtros por pago + estado pedido
+// ============================================================
+function CustomerOrdersTable({
+  orders, onOpenDetail,
+}: {
+  orders: CategoryValue[];
+  onOpenDetail: (id: number) => void;
+}) {
+  const [payFilter, setPayFilter] = useState<"all" | "paid" | "pending" | "voided" | "refunded">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "closed" | "cancelled">("all");
+
+  // Conteos
+  const counts = orders.reduce(
+    (acc, o) => {
+      const pay = String(o.extra?.payment ?? "").toLowerCase();
+      const st = String(o.extra?.status ?? "").toLowerCase();
+      acc.byPay[pay] = (acc.byPay[pay] ?? 0) + 1;
+      acc.byStatus[st] = (acc.byStatus[st] ?? 0) + 1;
+      return acc;
+    },
+    { byPay: {} as Record<string, number>, byStatus: {} as Record<string, number> },
+  );
+
+  const filtered = orders.filter((o) => {
+    const pay = String(o.extra?.payment ?? "").toLowerCase();
+    const st = String(o.extra?.status ?? "").toLowerCase();
+    if (payFilter !== "all" && pay !== payFilter) return false;
+    if (statusFilter !== "all" && st !== statusFilter) return false;
+    return true;
+  });
+
+  const pillBase = "px-2 py-0.5 text-[10px] font-bold rounded-md transition";
+  const pillActive = "bg-surface shadow text-text";
+  const pillIdle = "text-text-muted hover:text-text";
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-5">
+      <div className="flex items-baseline justify-between flex-wrap gap-2 mb-1">
+        <div>
+          <div className="text-sm font-bold text-text">Ordenes (ultimas 50)</div>
+          <div className="text-xs text-text-muted">
+            Click una fila para ver items · click en ↗ abre el detalle TN-style · mostrando {filtered.length} / {orders.length}
+          </div>
+        </div>
+      </div>
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Pago:</span>
+        <div className="inline-flex bg-soft rounded-md p-0.5 border border-border">
+          <button className={`${pillBase} ${payFilter === "all" ? pillActive : pillIdle}`} onClick={() => setPayFilter("all")}>
+            Todos ({orders.length})
+          </button>
+          <button className={`${pillBase} ${payFilter === "paid" ? pillActive : pillIdle}`} onClick={() => setPayFilter("paid")}>
+            Pagadas ({counts.byPay["paid"] ?? 0})
+          </button>
+          <button className={`${pillBase} ${payFilter === "pending" ? pillActive : pillIdle}`} onClick={() => setPayFilter("pending")}>
+            Pendientes ({counts.byPay["pending"] ?? 0})
+          </button>
+          {(counts.byPay["voided"] ?? 0) > 0 && (
+            <button className={`${pillBase} ${payFilter === "voided" ? pillActive : pillIdle}`} onClick={() => setPayFilter("voided")}>
+              Voided ({counts.byPay["voided"]})
+            </button>
+          )}
+          {(counts.byPay["refunded"] ?? 0) > 0 && (
+            <button className={`${pillBase} ${payFilter === "refunded" ? pillActive : pillIdle}`} onClick={() => setPayFilter("refunded")}>
+              Refunded ({counts.byPay["refunded"]})
+            </button>
+          )}
+        </div>
+
+        <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold ml-2">Estado:</span>
+        <div className="inline-flex bg-soft rounded-md p-0.5 border border-border">
+          <button className={`${pillBase} ${statusFilter === "all" ? pillActive : pillIdle}`} onClick={() => setStatusFilter("all")}>
+            Todos
+          </button>
+          <button className={`${pillBase} ${statusFilter === "open" ? pillActive : pillIdle}`} onClick={() => setStatusFilter("open")}>
+            Abierta ({counts.byStatus["open"] ?? 0})
+          </button>
+          <button className={`${pillBase} ${statusFilter === "closed" ? pillActive : pillIdle}`} onClick={() => setStatusFilter("closed")}>
+            Cerrada ({counts.byStatus["closed"] ?? 0})
+          </button>
+          {(counts.byStatus["cancelled"] ?? 0) > 0 && (
+            <button className={`${pillBase} ${statusFilter === "cancelled" ? pillActive : pillIdle}`} onClick={() => setStatusFilter("cancelled")}>
+              Cancelada ({counts.byStatus["cancelled"]})
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-wider text-text-muted">
+              <th className="px-3 py-2">#</th>
+              <th className="px-3 py-2">Numero</th>
+              <th className="px-3 py-2">Fecha</th>
+              <th className="px-3 py-2">Estado del pedido</th>
+              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2 text-center"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.map((o, i) => (
+              <ExpandableOrderRow
+                key={`${o.extra?.id ?? i}`}
+                order={o}
+                idx={i + 1}
+                onOpenDetail={onOpenDetail}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-8 text-center text-text-muted text-sm">
+                  {orders.length === 0 ? "Sin ordenes." : "No hay ordenes con esos filtros."}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );

@@ -526,6 +526,48 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
 
 # ===================== CUSTOMER 360 =====================
 
+# Cache de la mediana poblacional (gap 1ra->2da compra) - se recalcula cada hora
+_POP_GAP_CACHE: dict[str, tuple[float, dt.datetime]] = {}
+_POP_GAP_TTL = dt.timedelta(hours=1)
+
+
+def _population_first_to_second_gap_unistore() -> float | None:
+    """Mediana de dias entre 1ra y 2da compra de los customers Unistore TN.
+
+    Sirve como cadencia 'baseline' para clientes con 1 sola compra: si su recency
+    supera 1.2x/2x/3x de esta mediana, ya entra en En riesgo / Churn pendiente /
+    Churn confirmado a pesar de no tener cadencia personal todavia.
+    """
+    cached = _POP_GAP_CACHE.get("unistore")
+    if cached and (dt.datetime.now() - cached[1]) < _POP_GAP_TTL:
+        return cached[0]
+    try:
+        eng = get_engine("unistore")
+        rows = q(eng, """
+            WITH ranked AS (
+              SELECT "customerId" AS cid, "createdAt"::date AS d,
+                     ROW_NUMBER() OVER (PARTITION BY "customerId" ORDER BY "createdAt") AS rn
+              FROM tienda_nube."Order"
+              WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+            ),
+            first_two AS (
+              SELECT cid,
+                     MAX(CASE WHEN rn = 1 THEN d END) AS d1,
+                     MAX(CASE WHEN rn = 2 THEN d END) AS d2
+              FROM ranked WHERE rn <= 2 GROUP BY cid
+            )
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (d2 - d1)) AS median_days
+            FROM first_two WHERE d2 IS NOT NULL AND (d2 - d1) > 0
+        """) or []
+        if rows and rows[0] and rows[0][0] is not None:
+            val = float(rows[0][0])
+            _POP_GAP_CACHE["unistore"] = (val, dt.datetime.now())
+            return val
+    except Exception:
+        pass
+    return None
+
+
 def customer_journey(customer_id: int) -> dict:
     """Storytelling de un cliente Unistore: timeline + cadencia personal.
 
@@ -647,6 +689,21 @@ def customer_journey(customer_id: int) -> dict:
     n_orders = len(events)
     max_gap_hist = max(gaps) if gaps else 0
     cs_action = ""
+    # Para clientes con 1 sola compra usamos la MEDIANA POBLACIONAL de gap
+    # 1ra->2da de Unistore como baseline. Asi un cliente "Nuevo" con recency
+    # alta no queda eternamente en Nuevo: si paso 2x la mediana ya es churn.
+    pop_baseline = None
+    if expected_gap_days is None and n_orders == 1:
+        pop_baseline = _population_first_to_second_gap_unistore()
+        if pop_baseline and days_since_last is not None:
+            expected_gap_days = pop_baseline
+            weighted_breakdown = [{
+                "weight": 1.0, "gap_days": round(pop_baseline, 1),
+                "label": "mediana poblacional 1ra->2da compra"
+            }]
+            if prev_date is not None:
+                expected_next_date = (prev_date + dt.timedelta(days=round(pop_baseline))).isoformat()
+
     if days_since_last is None or expected_gap_days is None:
         status, status_label = "primera_compra", "Primera compra"
         cs_action = "Welcome flow + survey de primera compra"
@@ -656,21 +713,27 @@ def customer_journey(customer_id: int) -> dict:
         )
     else:
         ratio = days_since_last / expected_gap_days if expected_gap_days > 0 else 0
+        # Lifecycle stage (independiente de health)
+        if n_orders == 1: stage = "Nuevo"
+        elif n_orders == 2: stage = "Segunda compra"
+        elif n_orders == 3: stage = "Conv. a Recurrente"
+        else: stage = "Recurrente"
+
         # Recuperado: tuvo gap historico > 180d y volvio reciente (ratio bajo)
         if max_gap_hist > 180 and days_since_last <= 60:
             status, status_label = "recuperado", "Recuperado"
             cs_action = "Welcome back + entender por que volvio para replicarlo"
         elif ratio > 3.0:
-            status, status_label = "churn_confirmado", "Churn confirmado"
+            status, status_label = "churn_confirmado", f"{stage} · Churn confirmado"
             cs_action = "Campana de recuperacion + outreach management directo"
         elif ratio > 2.0:
-            status, status_label = "churn_pendiente", "Churn pendiente"
+            status, status_label = "churn_pendiente", f"{stage} · Churn pendiente"
             cs_action = "Outreach personal CS + descuento fuerte ahora"
         elif ratio > 1.2:
-            status, status_label = "en_riesgo", "En riesgo"
+            status, status_label = "en_riesgo", f"{stage} · En riesgo"
             cs_action = "Email recordatorio + descuento blando 1ra recompra"
         else:
-            # En ritmo: clasificar por # de compras
+            # En ritmo segun lifecycle
             if n_orders == 1:
                 status, status_label = "nuevo", "Nuevo"
                 cs_action = "Welcome flow + survey de primera compra"
@@ -703,9 +766,11 @@ def customer_journey(customer_id: int) -> dict:
             "churn_confirmado": "triplica su cadencia, se fugo del patron",
             "recuperado": "volvio despues de una fuga larga, retencion alta-prioridad",
         }.get(status, "estado evaluable")
+        cadencia_origen = "mediana poblacional 1ra->2da compra" if pop_baseline else "cadencia personal"
         narrative = (
             f"Lleva {n_orders} compras pagas por $ {total_revenue:,.0f}. "
-            f"Cadencia personal ~{expected_gap_days:.0f} d entre compras."
+            f"Cadencia esperada ~{expected_gap_days:.0f} d entre compras "
+            f"({cadencia_origen})."
             f"{diff_vs_avg} "
             f"Hace {days_since_last} d de su ultima → {ritmo_txt}. "
             f"Proxima estimada: {expected_next_date}."
