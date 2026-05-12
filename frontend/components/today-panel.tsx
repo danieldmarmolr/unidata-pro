@@ -64,7 +64,7 @@ export function TodayPanel({
           <div className="text-sm font-bold text-text">
             {title} ({fmtDateAR(data.today_date)})
           </div>
-          <div className="text-xs text-text-muted mt-0.5">vs mismo dia hace 7d / 30d / 1 ano</div>
+          <div className="text-xs text-text-muted mt-0.5">vs mismo dia de la semana hace 7d / 28d / 336d (apples-to-apples)</div>
         </div>
       </div>
       <div className={"grid gap-3 " + (compact ? "grid-cols-2 md:grid-cols-3 xl:grid-cols-6" : "grid-cols-1 md:grid-cols-2 xl:grid-cols-3")}>

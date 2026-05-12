@@ -1,8 +1,13 @@
 """
-Comparador HOY: para cada KPI calcula su valor en HOY (CURRENT_DATE),
-hace 7 dias (mismo dia de la semana anterior), hace 30 dias, hace 365 dias.
+Comparador HOY: para cada KPI calcula su valor en HOY y en ANCLAS apples-to-apples.
 
-Cada bloque devuelve {label, today, w_ago, m_ago, y_ago, deltas %}
+Los offsets son multiplos de 7 para garantizar comparacion del MISMO dia de la
+semana (martes vs martes, no martes vs domingo). Asi el ciclo semanal del retail
+no distorsiona la comparacion.
+
+- 7d   = misma semana anterior (1 sem atras, mismo dia)
+- 28d  = 4 semanas atras (~1 mes en semanas, mismo dia)
+- 336d = 48 semanas atras (~1 ano, mismo dia)
 """
 from __future__ import annotations
 
@@ -19,8 +24,8 @@ log = logging.getLogger("unidata.today")
 ANCHORS_DAYS = {
     "today": 0,
     "w_ago": 7,
-    "m_ago": 30,
-    "y_ago": 365,
+    "m_ago": 28,
+    "y_ago": 336,
 }
 
 
@@ -39,7 +44,7 @@ def _kpi_block(label: str, values: dict[str, float], *, prefix: str = "", suffix
         delta = ((base - v) / v * 100) if v > 0 else None
         out["anchors"].append({
             "key": k,
-            "label": {"w_ago": "hace 7 dias", "m_ago": "hace 30 dias", "y_ago": "hace 1 ano"}[k],
+            "label": {"w_ago": "hace 7 dias", "m_ago": "hace 28 dias", "y_ago": "hace 336 dias"}[k],
             "value": round(v, 0),
             "delta_pct": round(delta, 1) if delta is not None else None,
         })
