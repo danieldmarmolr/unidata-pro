@@ -449,6 +449,8 @@ type JourneyEvent = {
   gap_days: number | null;
   cumulative_revenue: number;
   cumulative_units: number;
+  churn_break?: boolean;
+  churn_ratio?: number;
 };
 type WeightedItem = { weight: number; gap_days: number; label: string };
 type CustomerJourney = {
@@ -464,8 +466,14 @@ type CustomerJourney = {
   total_revenue: number;
   total_units: number;
   ticket_avg: number;
-  status: "sin_compras" | "primera_compra" | "en_ritmo" | "atrasado" | "muy_atrasado";
+  status:
+    | "sin_compras" | "primera_compra"
+    | "nuevo" | "segunda_compra" | "conv_recurrente" | "recurrente"
+    | "en_riesgo" | "churn_pendiente" | "churn_confirmado" | "recuperado"
+    // Legacy compat (responses pre-deploy)
+    | "en_ritmo" | "atrasado" | "muy_atrasado";
   status_label: string;
+  cs_action?: string;
   narrative: string;
 };
 
@@ -480,14 +488,23 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
     return <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />;
   }
 
-  const statusColors: Record<CustomerJourney["status"], { bg: string; border: string; text: string; dot: string }> = {
-    sin_compras:   { bg: "bg-zinc-50",    border: "border-zinc-300",  text: "text-zinc-700",   dot: "bg-zinc-400" },
-    primera_compra:{ bg: "bg-blue-50",    border: "border-blue-300",  text: "text-blue-800",   dot: "bg-blue-500" },
-    en_ritmo:      { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-800", dot: "bg-emerald-500" },
-    atrasado:      { bg: "bg-amber-50",   border: "border-amber-300", text: "text-amber-900",  dot: "bg-amber-500" },
-    muy_atrasado:  { bg: "bg-red-50",     border: "border-red-300",   text: "text-red-900",    dot: "bg-red-600" },
+  const statusColors: Record<string, { bg: string; border: string; text: string; dot: string }> = {
+    sin_compras:       { bg: "bg-zinc-50",    border: "border-zinc-300",    text: "text-zinc-700",    dot: "bg-zinc-400"   },
+    primera_compra:    { bg: "bg-blue-50",    border: "border-blue-300",    text: "text-blue-800",    dot: "bg-blue-500"   },
+    nuevo:             { bg: "bg-blue-50",    border: "border-blue-300",    text: "text-blue-800",    dot: "bg-blue-500"   },
+    segunda_compra:    { bg: "bg-cyan-50",    border: "border-cyan-300",    text: "text-cyan-900",    dot: "bg-cyan-500"   },
+    conv_recurrente:   { bg: "bg-violet-50",  border: "border-violet-300",  text: "text-violet-900",  dot: "bg-violet-500" },
+    recurrente:        { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-800", dot: "bg-emerald-500" },
+    en_riesgo:         { bg: "bg-amber-50",   border: "border-amber-300",   text: "text-amber-900",   dot: "bg-amber-500"  },
+    churn_pendiente:   { bg: "bg-orange-50",  border: "border-orange-400",  text: "text-orange-900",  dot: "bg-orange-600" },
+    churn_confirmado:  { bg: "bg-red-50",     border: "border-red-300",     text: "text-red-900",     dot: "bg-red-600"    },
+    recuperado:        { bg: "bg-teal-50",    border: "border-teal-300",    text: "text-teal-900",    dot: "bg-teal-500"   },
+    // legacy
+    en_ritmo:          { bg: "bg-emerald-50", border: "border-emerald-300", text: "text-emerald-800", dot: "bg-emerald-500" },
+    atrasado:          { bg: "bg-amber-50",   border: "border-amber-300",   text: "text-amber-900",   dot: "bg-amber-500"  },
+    muy_atrasado:      { bg: "bg-red-50",     border: "border-red-300",     text: "text-red-900",     dot: "bg-red-600"    },
   };
-  const sc = statusColors[data.status];
+  const sc = statusColors[data.status] || statusColors.sin_compras;
 
   return (
     <div className="bg-surface border border-border rounded-xl p-4 flex flex-col h-full max-h-[420px] overflow-hidden">
@@ -532,32 +549,65 @@ function CustomerJourneyPanel({ customerId }: { customerId: number }) {
       )}
 
       {/* Narrativa */}
-      <div className="text-[11px] text-text leading-relaxed mb-3 italic">
+      <div className="text-[11px] text-text leading-relaxed mb-2 italic">
         {data.narrative}
       </div>
 
-      {/* Timeline */}
-      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-        Timeline ({data.total_paid_orders} compras · $ {data.total_revenue.toLocaleString("es-AR")})
+      {/* Accion CS sugerida */}
+      {data.cs_action && (
+        <div className={`${sc.bg} ${sc.border} border rounded-lg p-2 mb-3`}>
+          <div className="text-[9px] uppercase tracking-wider font-bold text-text-muted">Acción CS sugerida</div>
+          <div className={`text-[11px] font-semibold ${sc.text}`}>{data.cs_action}</div>
+        </div>
+      )}
+
+      {/* Timeline — most-recent-first */}
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2 flex items-center gap-1.5">
+        <span>Timeline</span>
+        <span className="text-text-muted/60 normal-case font-normal">(más reciente → primera)</span>
+        <span className="ml-auto font-normal normal-case">
+          {data.total_paid_orders} compras · ${data.total_revenue.toLocaleString("es-AR")}
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto pr-1 space-y-2">
-        {data.events.map((e, idx) => (
-          <div key={e.order_id} className="relative pl-4 border-l-2 border-border last:border-transparent">
-            <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-primary" />
-            <div className="flex items-baseline justify-between gap-2">
-              <div className="text-xs font-bold text-text">{e.label}</div>
-              <div className="text-[10px] text-text-muted font-mono">#{e.number}</div>
-            </div>
-            <div className="text-[10px] text-text-muted">
-              {e.date} · <strong className="text-text">$ {e.total.toLocaleString("es-AR")}</strong> · {e.units} u.
-            </div>
-            {e.gap_days != null && idx > 0 && (
-              <div className="text-[10px] text-text-muted mt-0.5">
-                <span className="inline-block bg-soft px-1.5 py-0.5 rounded">+{e.gap_days}d después de la anterior</span>
+        {data.events.map((e) => {
+          const isChurn = !!e.churn_break;
+          return (
+            <div
+              key={e.order_id}
+              className={`relative pl-4 border-l-2 last:border-transparent ${
+                isChurn ? "border-red-300" : "border-border"
+              }`}
+            >
+              <div
+                className={`absolute -left-[5px] top-1 w-2 h-2 rounded-full ${
+                  isChurn ? "bg-red-600 ring-2 ring-red-200" : "bg-primary"
+                }`}
+              />
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="text-xs font-bold text-text">{e.label}</div>
+                <div className="text-[10px] text-text-muted font-mono">#{e.number}</div>
               </div>
-            )}
-          </div>
-        ))}
+              <div className="text-[10px] text-text-muted">
+                {e.date} · <strong className="text-text">$ {e.total.toLocaleString("es-AR")}</strong> · {e.units} u.
+              </div>
+              {e.gap_days != null && (
+                <div className="text-[10px] mt-0.5">
+                  <span
+                    className={`inline-block px-1.5 py-0.5 rounded font-semibold ${
+                      isChurn
+                        ? "bg-red-100 text-red-900 border border-red-300"
+                        : "bg-soft text-text-muted"
+                    }`}
+                    title={isChurn ? `${e.churn_ratio}× la cadencia personal — quiebre de patrón` : undefined}
+                  >
+                    +{e.gap_days}d {isChurn && `(${e.churn_ratio}× cadencia — rotura)`}
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

@@ -641,21 +641,49 @@ def customer_journey(customer_id: int) -> dict:
     days_since_last = (today - prev_date).days if prev_date else None
     avg_gap_simple = round(sum(gaps) / len(gaps), 1) if gaps else None
 
-    # Estado
+    # Lifecycle ampliado alineado con CS overview (8 estados).
+    # ACTIVO (en ritmo) escala segun # compras
+    # OVERRIDE de Churn cuando ratio > umbral, Recuperado cuando volvio post-churn.
+    n_orders = len(events)
+    max_gap_hist = max(gaps) if gaps else 0
+    cs_action = ""
     if days_since_last is None or expected_gap_days is None:
         status, status_label = "primera_compra", "Primera compra"
+        cs_action = "Welcome flow + survey de primera compra"
         narrative = (
             f"Compro 1 sola vez ({events[-1]['date']}, $ {events[-1]['total']:,.0f}). "
             "Todavia no hay cadencia para predecir cuando volveria."
         )
     else:
         ratio = days_since_last / expected_gap_days if expected_gap_days > 0 else 0
-        if ratio <= 1.2:
-            status, status_label = "en_ritmo", "En ritmo"
-        elif ratio <= 2.0:
-            status, status_label = "atrasado", "Atrasado"
+        # Recuperado: tuvo gap historico > 180d y volvio reciente (ratio bajo)
+        if max_gap_hist > 180 and days_since_last <= 60:
+            status, status_label = "recuperado", "Recuperado"
+            cs_action = "Welcome back + entender por que volvio para replicarlo"
+        elif ratio > 3.0:
+            status, status_label = "churn_confirmado", "Churn confirmado"
+            cs_action = "Campana de recuperacion + outreach management directo"
+        elif ratio > 2.0:
+            status, status_label = "churn_pendiente", "Churn pendiente"
+            cs_action = "Outreach personal CS + descuento fuerte ahora"
+        elif ratio > 1.2:
+            status, status_label = "en_riesgo", "En riesgo"
+            cs_action = "Email recordatorio + descuento blando 1ra recompra"
         else:
-            status, status_label = "muy_atrasado", "Muy atrasado (riesgo churn)"
+            # En ritmo: clasificar por # de compras
+            if n_orders == 1:
+                status, status_label = "nuevo", "Nuevo"
+                cs_action = "Welcome flow + survey de primera compra"
+            elif n_orders == 2:
+                status, status_label = "segunda_compra", "Segunda compra"
+                cs_action = "Programa de fidelidad + cross-sell"
+            elif n_orders == 3:
+                status, status_label = "conv_recurrente", "Conv. a Recurrente"
+                cs_action = "Reconocer como leal + upsell premium"
+            else:
+                status, status_label = "recurrente", "Recurrente"
+                cs_action = "VIP perks + mantener satisfaccion"
+
         # Narrativa
         diff_vs_avg = ""
         if avg_gap_simple and expected_gap_days:
@@ -665,19 +693,42 @@ def customer_journey(customer_id: int) -> dict:
                     f" Su ritmo reciente es {'mas rapido' if d < 0 else 'mas lento'} "
                     f"que su promedio historico ({avg_gap_simple:.0f} d)."
                 )
+        ritmo_txt = {
+            "nuevo": "todavia es nuevo, esta dentro de su ventana de 2da compra",
+            "segunda_compra": "viene comprando con regularidad personal",
+            "conv_recurrente": "esta consolidado como cliente recurrente",
+            "recurrente": "es un cliente leal de la marca",
+            "en_riesgo": "se esta estirando, hay que activarlo",
+            "churn_pendiente": "pasó al doble de su ritmo personal — outreach urgente",
+            "churn_confirmado": "triplica su cadencia, se fugo del patron",
+            "recuperado": "volvio despues de una fuga larga, retencion alta-prioridad",
+        }.get(status, "estado evaluable")
         narrative = (
-            f"Lleva {len(events)} compras pagas por $ {total_revenue:,.0f}. "
-            f"En base a sus ultimos gaps su cadencia personal es "
-            f"~{expected_gap_days:.0f} dias entre compras."
+            f"Lleva {n_orders} compras pagas por $ {total_revenue:,.0f}. "
+            f"Cadencia personal ~{expected_gap_days:.0f} d entre compras."
             f"{diff_vs_avg} "
-            f"Hace {days_since_last} dias de su ultima compra → "
-            f"{'esta dentro del rango' if status == 'en_ritmo' else 'se esta estirando' if status == 'atrasado' else 'SE FUGO de su patron'}. "
-            f"Estimado proxima compra: {expected_next_date}."
+            f"Hace {days_since_last} d de su ultima → {ritmo_txt}. "
+            f"Proxima estimada: {expected_next_date}."
         )
+
+    # Detectar evento donde se rompio el patron: gap real > 2x expected.
+    # Marcamos ese evento como churn_point para que la UI lo highlight.
+    if expected_gap_days and gaps:
+        # Asociar gap a su evento (events[1..] tienen gap_days)
+        for ev in events:
+            g = ev.get("gap_days")
+            if g and expected_gap_days > 0 and g / expected_gap_days > 2.0:
+                ev["churn_break"] = True
+                ev["churn_ratio"] = round(g / expected_gap_days, 1)
+            else:
+                ev["churn_break"] = False
+
+    # Order events DESC (most-recent first) para el sidebar storytelling
+    events_desc = list(reversed(events))
 
     return {
         "customer_id": customer_id,
-        "events": events,
+        "events": events_desc,
         "gaps": gaps,
         "avg_gap_days_simple": avg_gap_simple,
         "expected_gap_days": round(expected_gap_days, 1) if expected_gap_days else None,
@@ -690,6 +741,7 @@ def customer_journey(customer_id: int) -> dict:
         "ticket_avg": round(total_revenue / len(events), 0) if events else 0,
         "status": status,
         "status_label": status_label,
+        "cs_action": cs_action,
         "narrative": narrative,
     }
 

@@ -182,8 +182,8 @@ export default function CustomerSuccessPage() {
  <>
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  <CategoryTable
- caption="Estados de cliente"
- subtitle="Click una fila para ver los customers de ese estado"
+ caption="Estados de cliente (Lifecycle + Churn)"
+ subtitle="Nuevo / 2da / Conv. a Recurrente / Recurrente · En riesgo / Churn pendiente / Churn confirmado / Recuperado · click una fila para ver los customers"
  data={data.customer_status_dist ?? []}
  formatter="number"
  extraColumns={[
@@ -283,7 +283,7 @@ export default function CustomerSuccessPage() {
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  <CategoryTable
  caption="Estados de cliente"
- subtitle="Nuevo · 2da compra · Convertido a Recurrente · Recurrente"
+ subtitle="Lifecycle ampliado · Nuevo / 2da / Conv. a Recurrente / Recurrente + En riesgo / Churn pendiente / Churn confirmado / Recuperado (cadencia personal)"
  data={data.customer_status_dist ?? []}
  formatter="number"
  extraColumns={[
