@@ -29,6 +29,7 @@ import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
+import { useTableSort, SortHeader } from "@/lib/use-table-sort";
 
 type DropshipperDetail = {
   user: {
@@ -197,11 +198,18 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const unifiedAll: UnifiedOrder[] = selectedIntent
     ? (filteredQuery.data?.items ?? [])
     : (data?.unified_orders ?? []);
-  const unifiedOrders: UnifiedOrder[] = channelFilter === "all"
+  const unifiedFiltered: UnifiedOrder[] = channelFilter === "all"
     ? unifiedAll
     : unifiedAll.filter((o) => o.origen === channelFilter);
   const countMl = unifiedAll.filter((o) => o.origen === "ml").length;
   const countTn = unifiedAll.filter((o) => o.origen === "tn").length;
+  const unifiedSorted = useTableSort<UnifiedOrder>(unifiedFiltered, "fecha", "desc");
+  const unifiedOrders = unifiedSorted.rows;
+  // Sort para Pagos Talo
+  const pagosSorted = useTableSort<NonNullable<typeof data>["ultimos_pagos"][number]>(
+    data?.ultimos_pagos ?? [],
+    "fecha", "desc",
+  );
 
   if (isLoading) {
     return (
@@ -652,15 +660,15 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
-                    <th className="text-left px-2 py-2">Origen</th>
-                    <th className="text-left px-2 py-2">Number · DROP</th>
-                    <th className="text-left px-2 py-2">Cliente final</th>
-                    <th className="text-left px-2 py-2">Fecha</th>
-                    <th className="text-right px-2 py-2">Mercadería</th>
-                    <th className="text-right px-2 py-2">Envío</th>
-                    <th className="text-right px-2 py-2">Total</th>
-                    <th className="text-center px-2 py-2">Envío</th>
-                    <th className="text-center px-2 py-2">Pago</th>
+                    <th className="text-left px-2 py-2"><SortHeader col="origen" label="Origen" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="number" label="Number · DROP" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="buyer_name" label="Cliente final" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="merch_cost" label="Mercadería" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="shipping_cost" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-center px-2 py-2"><SortHeader col="shipping_status" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-center px-2 py-2"><SortHeader col="payment_status" label="Pago" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -749,23 +757,23 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2">ID</th>
-                    <th className="text-left px-2 py-2">Estado</th>
-                    <th className="text-left px-2 py-2">Fecha</th>
-                    <th className="text-right px-2 py-2">Pagado</th>
-                    <th className="text-right px-2 py-2">Pendiente</th>
-                    <th className="text-right px-2 py-2">Origen</th>
+                    <th className="text-left px-3 py-2"><SortHeader col="id" label="ID" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="status" label="Estado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="paid" label="Pagado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="pending" label="Pendiente" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="ml_orders" label="Origen" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.ultimos_pagos.length === 0 ? (
+                  {pagosSorted.rows.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center text-text-muted py-6">
                         Sin pagos registrados
                       </td>
                     </tr>
                   ) : (
-                    data.ultimos_pagos.map((p) => {
+                    pagosSorted.rows.map((p) => {
                       const isSelected = selectedIntent === p.id;
                       const canFilter = p.status?.toLowerCase() === "processed" && (p.ml_orders + p.tn_orders) > 0;
                       return (

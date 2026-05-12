@@ -9,6 +9,7 @@ import { DailyRevenueChart } from "@/components/sparkline";
 import { InteractiveMetricChart, type MetricDef } from "@/components/interactive-metric-chart";
 import { OrderDetailModal } from "@/components/order-detail-modal";
 import { api } from "@/lib/api";
+import { useTableSort, SortHeader } from "@/lib/use-table-sort";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { ArrowLeft, Mail, MapPin, Smartphone, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { OrderStatusPipeline } from "@/components/order-status-pipeline";
@@ -667,6 +668,16 @@ function CustomerOrdersTable({
     if (statusFilter !== "all" && st !== statusFilter) return false;
     return true;
   });
+  // Aplanar para sort: extraer fields del extra a top-level
+  const flat = filtered.map((o) => ({
+    ...o,
+    _numero: String(o.category ?? ""),
+    _fecha: String(o.extra?.fecha ?? ""),
+    _total: Number(o.value ?? 0),
+    _payment: String(o.extra?.payment ?? ""),
+    _status: String(o.extra?.status ?? ""),
+  }));
+  const sortRows = useTableSort<typeof flat[number]>(flat, "_fecha", "desc");
 
   const pillBase = "px-2 py-0.5 text-[10px] font-bold rounded-md transition";
   const pillActive = "bg-surface shadow text-text";
@@ -732,15 +743,15 @@ function CustomerOrdersTable({
           <thead>
             <tr className="text-left text-[10px] uppercase tracking-wider text-text-muted">
               <th className="px-3 py-2">#</th>
-              <th className="px-3 py-2">Numero</th>
-              <th className="px-3 py-2">Fecha</th>
-              <th className="px-3 py-2">Estado del pedido</th>
-              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-2"><SortHeader col="_numero" label="Numero" sortBy={sortRows.sortBy} sortDir={sortRows.sortDir} onToggle={sortRows.toggle} /></th>
+              <th className="px-3 py-2"><SortHeader col="_fecha" label="Fecha" sortBy={sortRows.sortBy} sortDir={sortRows.sortDir} onToggle={sortRows.toggle} /></th>
+              <th className="px-3 py-2"><SortHeader col="_status" label="Estado del pedido" sortBy={sortRows.sortBy} sortDir={sortRows.sortDir} onToggle={sortRows.toggle} /></th>
+              <th className="px-3 py-2 text-right"><SortHeader col="_total" label="Total" sortBy={sortRows.sortBy} sortDir={sortRows.sortDir} onToggle={sortRows.toggle} /></th>
               <th className="px-3 py-2 text-center"></th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((o, i) => (
+            {sortRows.rows.map((o, i) => (
               <ExpandableOrderRow
                 key={`${o.extra?.id ?? i}`}
                 order={o}
@@ -748,7 +759,7 @@ function CustomerOrdersTable({
                 onOpenDetail={onOpenDetail}
               />
             ))}
-            {filtered.length === 0 && (
+            {sortRows.rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="py-8 text-center text-text-muted text-sm">
                   {orders.length === 0 ? "Sin ordenes." : "No hay ordenes con esos filtros."}

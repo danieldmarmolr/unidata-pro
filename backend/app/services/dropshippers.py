@@ -1098,45 +1098,52 @@ def dropshipper_unified_orders(
                 "enriched": False,
             })
 
-    # 3) Enrich TN
-    if safe_tn:
-        ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]"
-        try:
-            erows = q(eng, f"""
-                SELECT tno.tienda_nube_id::text AS internal_id,
-                       tno."number",
-                       tno.created_at::text AS fecha,
-                       tno.payment_status::text AS payment_status,
-                       COALESCE(tno.status::text, '') AS status,
-                       COALESCE(tno.total,0)::float AS total,
-                       COALESCE(tno.shipping_cost,0)::float AS shipping_cost,
-                       COALESCE(tno.shipping_status::text,'') AS shipping_status,
-                       COALESCE(tno.contact_name, '') AS buyer_name
-                FROM public.tienda_nube_orders tno
-                WHERE tno.tienda_nube_id::text = ANY({ids_lit})
-            """) or []
-            for er in erows:
-                key_intent = tn_id_to_intent.get(er[0])
-                tn_rows.append({
-                    "origen": "tn",
-                    "internal_id": int(er[0]) if er[0] and er[0].isdigit() else None,
-                    "external_id": er[0] or "",
-                    "number": er[1] or "",
-                    "fecha": er[2],
-                    "status": er[4] or "",
-                    "payment_status": er[3] or "",
-                    "shipping_status": er[7] or "",
-                    "total": round(float(er[5] or 0), 2),
-                    "merch_cost": 0.0,
-                    "shipping_cost": round(float(er[6] or 0), 2),
-                    "profit_unidrop": 0.0,
-                    "buyer_name": er[8] or "",
-                    "shipping_type": "",
-                    "intent_id": key_intent,
-                    "enriched": True,
-                })
-        except Exception as e:
-            log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
+    # 3) Enrich TN — linkage doble: (a) via pi.orderIds (safe_tn) y (b) directo
+    # por user_id en tienda_nube_orders. La (b) captura TN orders del dropshipper
+    # aunque todavia no esten vinculadas a un PaymentIntent.
+    tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]" if safe_tn else "ARRAY[]::text[]"
+    try:
+        # Solo columnas que confirmamos existen en tienda_nube_orders (otras
+        # como shipping_status / shipping_cost pueden no existir en este schema)
+        erows = q(eng, f"""
+            SELECT tno.tienda_nube_id::text AS internal_id,
+                   tno."number",
+                   tno.created_at::text AS fecha,
+                   tno.payment_status::text AS payment_status,
+                   COALESCE(tno.total,0)::float AS total,
+                   COALESCE(tno.contact_name, '') AS buyer_name,
+                   COALESCE(tno.billing_province,'') AS provincia,
+                   COALESCE(tno.contact_identification,'') AS dni
+            FROM public.tienda_nube_orders tno
+            WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})
+               OR tno.user_id = :uid
+            ORDER BY tno.created_at DESC NULLS LAST
+            LIMIT 200
+        """, {"uid": int(user_id)}) or []
+        log.info("unified_orders TN enrich uid=%s safe_tn=%d rows=%d",
+                 user_id, len(safe_tn), len(erows))
+        for er in erows:
+            key_intent = tn_id_to_intent.get(er[0])
+            tn_rows.append({
+                "origen": "tn",
+                "internal_id": int(er[0]) if er[0] and er[0].isdigit() else None,
+                "external_id": er[0] or "",
+                "number": er[1] or "",
+                "fecha": er[2],
+                "status": er[3] or "",
+                "payment_status": er[3] or "",
+                "shipping_status": "",
+                "total": round(float(er[4] or 0), 2),
+                "merch_cost": 0.0,
+                "shipping_cost": 0.0,
+                "profit_unidrop": 0.0,
+                "buyer_name": er[5] or "",
+                "shipping_type": "",
+                "intent_id": key_intent,
+                "enriched": True,
+            })
+    except Exception as e:
+        log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
