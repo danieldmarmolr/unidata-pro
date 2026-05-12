@@ -22,6 +22,7 @@ import {
   LogOut,
   UserCog,
   UserCircle,
+  Bell,
   HeartHandshake,
   Sparkles,
   RotateCcw,
@@ -68,6 +69,7 @@ const ONLY_GERENCIA: Role[] = ["admin", "gerencia"];
 const ITEMS: NavItem[] = [
   { label: "Inicio",           href: "/dashboard/home",           icon: LayoutDashboard, group: "Principal", roles: ALL },
   { label: "Mi perfil",        href: "/dashboard/perfil",         icon: UserCircle,      group: "Principal", roles: ALL },
+  { label: "Notificaciones",   href: "/dashboard/notificaciones", icon: Bell,            group: "Principal", roles: ALL },
   { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },

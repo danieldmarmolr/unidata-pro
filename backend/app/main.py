@@ -81,6 +81,9 @@ app.include_router(skus_api.router)
 from app.api import exports as exports_api
 app.include_router(exports_api.router)
 
+from app.api import notifications as notifications_api
+app.include_router(notifications_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

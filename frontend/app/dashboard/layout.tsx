@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
 import { Sidebar } from "@/components/sidebar";
 import { OnboardingGate } from "@/components/onboarding-modal";
+import { AlertBanner } from "@/components/alert-banner";
 import { getToken } from "@/lib/api";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -54,6 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </button>
 
       <main className="flex-1 flex flex-col min-w-0 lg:pt-0 pt-14 overflow-hidden">
+        <AlertBanner />
         <OnboardingGate>{children}</OnboardingGate>
       </main>
     </div>
