@@ -1098,11 +1098,10 @@ def dropshipper_unified_orders(
                 "enriched": False,
             })
 
-    # 3) Enrich TN — linkage doble via UNION ALL (la version anterior con
-    # OR ANY(...) OR user_id rompia por interaccion del parser SQLAlchemy).
-    # Brazo (a): orders cuyos tienda_nube_id estan en pi.orderIds[]
-    # Brazo (b): orders cuyo user_id = uid (cliente del dropshipper en TN)
-    # Dedup por tienda_nube_id se hace en Python al final.
+    # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
+    # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()
+    # con ANY(ARRAY[...]::text[]). Bajamos a single-WHERE por query, que
+    # confirmamos funciona con count=11 del debug anterior.)
     uid_int = int(user_id)
     base_select = """
         SELECT tno.tienda_nube_id::text AS internal_id,
@@ -1115,25 +1114,42 @@ def dropshipper_unified_orders(
                COALESCE(tno.contact_identification,'') AS dni
         FROM public.tienda_nube_orders tno
     """
-    parts: list[str] = []
+    erows_all: list = []
+    erows_by_intent: list = []
+    erows_by_user: list = []
+    # Brazo (b) — por user_id. Sabemos que funciona (count=11).
+    try:
+        erows_by_user = q(eng, f"""
+            {base_select}
+            WHERE tno.user_id = {uid_int}
+            ORDER BY tno.created_at DESC NULLS LAST
+            LIMIT 200
+        """) or []
+    except Exception as e:
+        log.warning("unified_orders TN by_user fail uid=%s: %s", user_id, str(e)[:200])
+    # Brazo (a) — por tienda_nube_id IN safe_tn (opcional)
     if safe_tn:
         tn_ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_tn) + "]::text[]"
-        parts.append(f"{base_select} WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})")
-    parts.append(f"{base_select} WHERE tno.user_id = {uid_int}")
-    union_sql = " UNION ALL ".join(parts) + " ORDER BY fecha DESC NULLS LAST LIMIT 400"
+        try:
+            erows_by_intent = q(eng, f"""
+                {base_select}
+                WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})
+                LIMIT 200
+            """) or []
+        except Exception as e:
+            log.warning("unified_orders TN by_intent fail uid=%s: %s", user_id, str(e)[:200])
+    # Merge + dedup por internal_id (user-link primero, intent-link agrega lo que falte)
+    seen_ids: set[str] = set()
+    erows = []
+    for er in (erows_by_user + erows_by_intent):
+        k = er[0] or ""
+        if k in seen_ids: continue
+        seen_ids.add(k)
+        erows.append(er)
+    erows = erows[:200]
+    log.info("unified_orders TN uid=%s by_user=%d by_intent=%d total_dedup=%d",
+             user_id, len(erows_by_user), len(erows_by_intent), len(erows))
     try:
-        erows = q(eng, union_sql) or []
-        # Dedup por internal_id manteniendo el primer registro
-        seen_ids: set[str] = set()
-        dedup_rows: list = []
-        for er in erows:
-            k = er[0] or ""
-            if k in seen_ids: continue
-            seen_ids.add(k)
-            dedup_rows.append(er)
-        erows = dedup_rows[:200]
-        log.info("unified_orders TN enrich uid=%s safe_tn=%d rows=%d (dedup)",
-                 user_id, len(safe_tn), len(erows))
         for er in erows:
             key_intent = tn_id_to_intent.get(er[0])
             tn_rows.append({
