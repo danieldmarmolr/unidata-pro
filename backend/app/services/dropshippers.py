@@ -1176,24 +1176,46 @@ def dropshipper_unified_orders(
     except Exception as e:
         log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
 
-    # Enriquecer buyer_name con una query defensiva (si la col contact_name no
-    # existe, q() devuelve None y seguimos con buyer_name vacio).
+    # Enriquecer buyer_name + shipping_cost con queries defensivas
+    # (si una col no existe, q() devuelve None y seguimos sin esa data)
     if tn_rows:
         ids_for_enrich = ",".join("'" + str(r["internal_id"]) + "'" for r in tn_rows if r.get("internal_id"))
         if ids_for_enrich:
+            # Buyer name (con fallback a contact_identification = DNI)
             try:
                 buyer_rows = q(eng, f"""
-                    SELECT tienda_nube_id::text, COALESCE(contact_name, '')
+                    SELECT tienda_nube_id::text,
+                           COALESCE(NULLIF(contact_name, ''), contact_identification, '')
                     FROM public.tienda_nube_orders
                     WHERE tienda_nube_id::text IN ({ids_for_enrich})
                 """) or []
                 buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
                 for r in tn_rows:
                     iid = str(r.get("internal_id") or "")
-                    if iid in buyer_map:
+                    if iid in buyer_map and buyer_map[iid]:
                         r["buyer_name"] = buyer_map[iid]
             except Exception:
-                pass  # col puede no existir, ignoramos
+                pass
+            # Shipping cost — probar variantes de nombre de columna
+            for col_name in ["shipping_cost", "shippingCost", "shipping_amount", "shipping_total"]:
+                try:
+                    ship_rows = q(eng, f"""
+                        SELECT tienda_nube_id::text, COALESCE({col_name}, 0)::float
+                        FROM public.tienda_nube_orders
+                        WHERE tienda_nube_id::text IN ({ids_for_enrich})
+                          AND {col_name} IS NOT NULL
+                    """) or []
+                    if ship_rows:
+                        ship_map = {sr[0]: float(sr[1] or 0) for sr in ship_rows if sr[0]}
+                        for r in tn_rows:
+                            iid = str(r.get("internal_id") or "")
+                            if iid in ship_map:
+                                r["shipping_cost"] = round(ship_map[iid], 2)
+                        log.info("unified_orders TN shipping_cost OK col=%s rows=%d",
+                                 col_name, len(ship_rows))
+                        break  # primera col que funciona gana
+                except Exception:
+                    continue
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
