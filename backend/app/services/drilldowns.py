@@ -838,11 +838,11 @@ def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | 
         eng = get_engine("unidev")
     except Exception:
         return _serialize([], [])
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = "d.fecha_creacion >= NOW() - make_interval(days => :d) "
-    p: dict = {"d": days}
+    win = resolve_window(period, from_iso, to_iso)
+    where = "d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts"
+    p: dict = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
     if modelo != "all":
-        where += " AND d.modelo_negocio = :m "
+        where += " AND d.modelo_negocio = :m"
         p["m"] = modelo
     rows = q(eng, f"""
         SELECT d.devolucion_id, d.fecha_creacion::text, d.estado_general,

@@ -33,7 +33,7 @@ export function getCardDrill(label: string, ctx: Ctx = {}): KpiDrill | undefined
   // SaaS / Unidrop users
   if (lc.includes("usuarios totales")) return { endpoint: `/api/drilldowns/saas/users-all${qs({ segment: seg })}`, title: "Usuarios totales", filename: "usuarios.csv" };
   if (lc.includes("suscripciones activas")) return { endpoint: `/api/drilldowns/saas/users-active${qs({ segment: seg })}`, title: "Suscripciones activas", filename: "subs_activas.csv" };
-  if (lc.includes("nuevos usuarios")) return { endpoint: `/api/drilldowns/saas/users-new${qs({ period, segment: seg, from: ctx.customFrom, to: ctx.customTo })}`, title: `Nuevos usuarios (${period})`, filename: `nuevos_${period}.csv` };
+  if (lc.includes("nuevos usuarios") || lc.includes("usuarios nuevos")) return { endpoint: `/api/drilldowns/saas/users-new${qs({ period, segment: seg, from: ctx.customFrom, to: ctx.customTo })}`, title: `Nuevos usuarios (${period})`, filename: `nuevos_${period}.csv` };
   if (lc.includes("usuarios churneados") || lc.includes("churn")) return { endpoint: `/api/drilldowns/saas/users-churned${qs({ period, segment: seg, from: ctx.customFrom, to: ctx.customTo })}`, title: "Usuarios en churn", filename: `churn_${period}.csv` };
   if (lc.includes("vencer")) return { endpoint: `/api/drilldowns/saas/users-expiring${qs({ days: "7", segment: seg })}`, title: "Suscripciones a vencer (7 dias)", filename: "vencer_7d.csv" };
   if (lc.includes("tiendas")) return { endpoint: `/api/drilldowns/saas/tn-credentials`, title: "Tiendas TN conectadas", filename: "tiendas_tn.csv" };
@@ -113,7 +113,7 @@ export function getCardDrill(label: string, ctx: Ctx = {}): KpiDrill | undefined
     return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Monto de devoluciones (${period})`, filename: `monto_devoluciones_${period}.csv` };
   }
   if (lc.includes("abiertas") || lc.includes("pendientes")) {
-    return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Devoluciones abiertas`, filename: `dev_abiertas.csv` };
+    return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period: "90d", modelo: ctx.modelo })}`, title: `Devoluciones abiertas (actualmente)`, filename: `dev_abiertas.csv`, subtitle: "Estado actual · sin filtro de periodo" };
   }
   if (lc.includes("resueltas") || lc.includes("cerradas")) {
     return { endpoint: `/api/drilldowns/devoluciones/list${qs({ period, modelo: ctx.modelo, from: ctx.customFrom, to: ctx.customTo })}`, title: `Devoluciones resueltas`, filename: `dev_resueltas.csv` };
