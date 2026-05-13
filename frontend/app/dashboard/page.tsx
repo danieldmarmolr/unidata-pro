@@ -236,6 +236,36 @@ function UnidevMiniTable({
   );
 }
 
+function UnidevDrillCell({ m, drill }: { m: UnitMetric; drill: ReturnType<typeof getCardDrill> }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="bg-white/70 rounded-lg p-3 border border-rose-100 hover:border-rose-400 hover:bg-white transition text-left group"
+      >
+        <div className="text-[9px] uppercase tracking-wider text-rose-700/70 font-bold truncate">{m.label}</div>
+        <div className="text-base font-extrabold text-rose-900 mt-0.5 tabular-nums">
+          {m.prefix ?? ""}{typeof m.value === "number" ? formatNumber(m.value) : m.value}{m.suffix ?? ""}
+        </div>
+        <div className="text-[9px] text-rose-600 opacity-0 group-hover:opacity-100 transition mt-0.5">
+          Ver detalle →
+        </div>
+      </button>
+      {open && drill && (
+        <DrillDownModal
+          title={drill.title ?? m.label}
+          subtitle={drill.subtitle ?? ""}
+          endpoint={drill.endpoint}
+          filename={drill.filename ?? "devolucion.csv"}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
 function SearchIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -362,15 +392,56 @@ export default function ExecutiveDashboardPage() {
           </div>
         )}
 
-        {/* Analisis Unidev: causas + resoluciones + SKUs con mas devs */}
+        {/* Analisis post-venta: causas + resoluciones + SKUs con mas devs (Unidev) */}
         {data?.unidev_analysis && (
           <div className="bg-rose-50/30 border border-rose-200 rounded-xl p-5 mb-6">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-xs font-bold uppercase tracking-wider text-rose-900">
-                Analisis Unidev · {periodLabel}
-              </span>
-              <span className="text-[11px] text-rose-700/80">causas, resoluciones y SKUs con mas devoluciones</span>
+            <div className="flex items-start justify-between gap-3 mb-4 flex-wrap">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                    Analisis post-venta · {periodLabel}
+                  </span>
+                  <span className="text-[10px] bg-rose-200/60 text-rose-800 px-2 py-0.5 rounded-full font-semibold">
+                    Unidev
+                  </span>
+                </div>
+                <div className="text-[11px] text-rose-700/70 mt-0.5">
+                  Causas de falla · tipo de resolucion · SKUs con mas devoluciones del periodo
+                </div>
+              </div>
+              <a
+                href="/dashboard/devoluciones"
+                className="text-[11px] text-rose-700 font-semibold hover:text-rose-900 transition flex items-center gap-1 shrink-0"
+              >
+                Ver analisis completo →
+              </a>
             </div>
+            {/* Mini KPIs de devoluciones */}
+            {data.unit_health && (() => {
+              const unidev = data.unit_health.find((u: UnitHealth) => u.unit === "unidev");
+              if (!unidev) return null;
+              return (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+                  {unidev.metrics.map((m) => {
+                    const drill = getCardDrill(m.label, { period, customFrom, customTo });
+                    const cell = (
+                      <div className="bg-white/70 rounded-lg p-3 border border-rose-100">
+                        <div className="text-[9px] uppercase tracking-wider text-rose-700/70 font-bold truncate">{m.label}</div>
+                        <div className="text-base font-extrabold text-rose-900 mt-0.5 tabular-nums">
+                          {m.prefix ?? ""}{typeof m.value === "number" ? formatNumber(m.value) : m.value}{m.suffix ?? ""}
+                        </div>
+                      </div>
+                    );
+                    if (drill) {
+                      return (
+                        <UnidevDrillCell key={m.label} m={m} drill={drill} />
+                      );
+                    }
+                    return <div key={m.label}>{cell}</div>;
+                  })}
+                </div>
+              );
+            })()}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <UnidevMiniTable title="Top causas (motivos de falla)" rows={data.unidev_analysis.top_motivos} color="#f43f5e" suffix=" unid" extraKey="items" extraLabel="items" />
               <UnidevMiniTable title="Tipo de resolucion preferida" rows={data.unidev_analysis.top_resoluciones} color="#fb923c" suffix=" devs" />
