@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from cachetools import TTLCache, cached
 from fastapi import APIRouter, Depends, Query
 
-from app.auth.security import current_user
+from app.auth.security import current_user, require_area
 from app.services import customer_success as cs_svc
 from app.services import devoluciones as dev_svc
 from app.services import envios as envios_svc
@@ -32,12 +32,13 @@ _cache: TTLCache = TTLCache(maxsize=64, ttl=60)
 
 @router.get("/saas/unidrop")
 def get_saas_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     segment: Annotated[Literal["all", "b2b", "b2c"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["ventas", "marketing"])
     key = f"saas-uni:{period}:{segment}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -47,12 +48,13 @@ def get_saas_unidrop(
 
 @router.get("/logistica/unistore")
 def get_logistica_unistore(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     area: Annotated[str, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["logistica"])
     key = f"log-uni:{period}:{area}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -62,11 +64,12 @@ def get_logistica_unistore(
 
 @router.get("/finanzas/unistore")
 def get_finanzas_unistore(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["finanzas", "administracion"])
     key = f"fin-uni:{period}::{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -76,11 +79,12 @@ def get_finanzas_unistore(
 
 @router.get("/marketing/unistore")
 def get_marketing_unistore(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["marketing"])
     key = f"mkt-uni:{period}::{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -90,11 +94,12 @@ def get_marketing_unistore(
 
 @router.get("/marketing/unidrop")
 def get_marketing_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["marketing"])
     key = f"mkt-drp:{period}::{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -104,12 +109,13 @@ def get_marketing_unidrop(
 
 @router.get("/pagos/unidrop")
 def get_pagos(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["finanzas", "administracion"])
     key = f"pagos:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -119,12 +125,13 @@ def get_pagos(
 
 @router.get("/sales/unidrop")
 def get_sales_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["ventas"])
     key = f"sales-drp:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -134,11 +141,12 @@ def get_sales_unidrop(
 
 @router.get("/logistica/unidrop")
 def get_logistica_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["logistica"])
     key = f"log-drp:{period}::{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -148,11 +156,12 @@ def get_logistica_unidrop(
 
 @router.get("/finanzas/unidrop")
 def get_finanzas_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["finanzas", "administracion"])
     key = f"fin-drp:{period}::{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -162,12 +171,13 @@ def get_finanzas_unidrop(
 
 @router.get("/devoluciones")
 def get_devoluciones(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     modelo: Annotated[Literal["all", "unistore", "unidrop", "unifull"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["cs", "logistica"])
     key = f"dev:{period}:{modelo}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -177,12 +187,13 @@ def get_devoluciones(
 
 @router.get("/subscriptions-meli")
 def get_subs_meli(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     plan: Annotated[str, Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["finanzas", "administracion", "ventas"])
     key = f"subs-meli:{period}:{plan}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -193,12 +204,13 @@ def get_subs_meli(
 @router.get("/cs/{unit}")
 def get_cs(
     unit: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["cs"])
     unit = unit.lower()
     key = f"cs:{unit}:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
@@ -213,7 +225,7 @@ def get_cs(
 
 @router.get("/geo")
 def get_geo(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -232,7 +244,7 @@ def get_geo(
 @router.get("/geo/province/{province}")
 def get_geo_province(
     province: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -245,7 +257,7 @@ def get_geo_province(
 
 
 @router.get("/story")
-def get_story(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_story(user: Annotated[dict, Depends(current_user)]) -> dict:
     key = "story-today"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -258,7 +270,7 @@ _dropshippers_cache: TTLCache = TTLCache(maxsize=256, ttl=180)  # 3 min
 
 @router.get("/dropshippers")
 def get_dropshippers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     plan: Annotated[str, Query()] = "all",
     riesgo: Annotated[str, Query()] = "all",
     actividad: Annotated[str, Query()] = "all",
@@ -272,6 +284,7 @@ def get_dropshippers(
     """Listado de dropshippers Unidrop con caching agresivo (3 min TTL).
     Default limit reducido a 500 - la UI hace pagination/filter del lado cliente.
     """
+    require_area(user, ["ventas", "cs"])
     cache_key = f"dropshippers:{plan}:{riesgo}:{actividad}:{canal}:{search or ''}:{limit}:{period}:{from_iso or ''}:{to_iso or ''}"
     cached_val = _dropshippers_cache.get(cache_key)
     if cached_val is not None:
@@ -285,7 +298,8 @@ def get_dropshippers(
 
 
 @router.get("/dropshippers/cohorts")
-def get_dropshippers_cohorts(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_dropshippers_cohorts(user: Annotated[dict, Depends(current_user)]) -> dict:
+    require_area(user, ["ventas", "cs"])
     return dropshippers_svc.cohort_signups()
 
 
@@ -295,12 +309,13 @@ _drop_detail_cache: TTLCache = TTLCache(maxsize=512, ttl=120)  # 2 min
 @router.get("/dropshippers/{user_id}")
 def get_dropshipper_detail(
     user_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Vista 360 de un dropshipper Unidrop con cache 2 min."""
+    require_area(user, ["ventas", "cs"])
     cache_key = f"drop-detail:{user_id}:{period}:{from_iso or ''}:{to_iso or ''}"
     cached_val = _drop_detail_cache.get(cache_key)
     if cached_val is not None:
@@ -341,13 +356,14 @@ from app.services import end_consumers_unidrop as ec_unidrop_svc
 @router.get("/unidrop/end-consumer/{dni}")
 def get_unidrop_end_consumer(
     dni: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     """Vista 360 del CLIENTE FINAL Unidrop (la persona que compra al dropshipper).
 
     Pivot por DNI (`tienda_nube_orders.contact_identification`). Agrega ordenes
     cross-dropshipper para ver el journey completo del comprador.
     """
+    require_area(user, ["ventas", "cs"])
     return ec_unidrop_svc.end_consumer_detail_unidrop(dni)
 
 
@@ -359,7 +375,7 @@ from app.services import search_customers as search_svc
 
 @router.get("/search/unistore-customers")
 def search_unistore_customers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     q: Annotated[str, Query(min_length=1, max_length=120)] = "",
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "12m",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
@@ -369,6 +385,7 @@ def search_unistore_customers(
 ) -> dict:
     """Busqueda rapida de clientes Unistore por texto (nombre/email/tel/id).
     Con period + only_active=true devuelve solo los que compraron en la ventana."""
+    require_area(user, ["cs", "ventas"])
     return search_svc.search_unistore_customers(
         q, period=period, from_iso=from_iso, to_iso=to_iso,
         only_active_in_period=only_active, limit=limit,
@@ -377,7 +394,7 @@ def search_unistore_customers(
 
 @router.get("/search/unidrop-dropshippers")
 def search_unidrop_dropshippers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     q: Annotated[str, Query(min_length=1, max_length=120)] = "",
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "12m",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
@@ -386,6 +403,7 @@ def search_unidrop_dropshippers(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict:
     """Busqueda rapida de dropshippers Unidrop por texto (nombre/fantasy/email/dni/cuit)."""
+    require_area(user, ["cs", "ventas"])
     return search_svc.search_unidrop_dropshippers(
         q, period=period, from_iso=from_iso, to_iso=to_iso,
         only_active_in_period=only_active, limit=limit,
@@ -412,11 +430,12 @@ from app.services import sku_omnichannel as sku_omni_svc
 @router.get("/sku-omnichannel/{sku}")
 def get_sku_omnichannel(
     sku: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     """Vista 360 de un SKU en los 4 canales del grupo:
     Unistore TN, Unistore MELI (Fox Electronics), Unidrop TN, Unidrop MELI.
     UNIDATA orquesta las consultas a las 2 bases con sus 4 esquemas distintos."""
+    require_area(user, ["ventas", "compras"])
     key = f"sku-omnichannel-{sku}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -426,13 +445,14 @@ def get_sku_omnichannel(
 
 @router.get("/sku-optimizer")
 def get_sku_optimizer(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """SKU Optimizer: combos + reposicion urgente + liquidar + pricing.
     unit=unistore (default): TN retail + digip stock.
     unit=unidrop: TN de dropshippers; reposicion y liquidar referencian
     stock de Unistore (no propio)."""
+    require_area(user, ["ventas", "compras"])
     key = f"sku-optimizer-{unit}-v1"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -442,12 +462,13 @@ def get_sku_optimizer(
 
 @router.get("/rfm-flows")
 def get_rfm_flows(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """Migracion de segmentos RFM mes a mes (Sankey).
     unit=unistore: clientes finales TN
     unit=unidrop:  dropshippers Unidrop (PaymentIntent ground truth)"""
+    require_area(user, ["cs", "marketing"])
     key = f"rfm-flows-{unit}-v2"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -459,13 +480,14 @@ def get_rfm_flows(
 
 @router.get("/rfm-flows/customers")
 def get_rfm_flows_customers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     from_seg: Annotated[str, Query(alias="from")],
     to_seg: Annotated[str, Query(alias="to")],
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """Lista de customers (clientes o dropshippers) para una transicion FROM->TO."""
+    require_area(user, ["cs", "marketing"])
     if unit == "unidrop":
         return rfm_flows_svc.rfm_flows_customers_unidrop(from_seg, to_seg, limit=limit)
     return rfm_flows_svc.rfm_flows_customers(from_seg, to_seg, limit=limit)
@@ -473,11 +495,12 @@ def get_rfm_flows_customers(
 
 @router.get("/forecast-batch")
 def get_forecast_batch(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     top_n: Annotated[int, Query(ge=10, le=500)] = 100,
 ) -> dict:
     """Forecast batch: prediccion 30d/60d para top SKUs por demanda.
     Devuelve PO sugerida si stock < forecast. Metodo: velocidad 90d + tendencia."""
+    require_area(user, ["ventas", "compras"])
     key = f"forecast-batch:{top_n}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -486,9 +509,10 @@ def get_forecast_batch(
 
 
 @router.get("/cancel-nlp")
-def get_cancel_nlp(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_cancel_nlp(user: Annotated[dict, Depends(current_user)]) -> dict:
     """Clustering simple de motivos de cancelacion (90d).
     Cruza cancel_reason enum + lexicon manual sobre notas libres."""
+    require_area(user, ["cs", "it_data"])
     key = "cancel-nlp-v1"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -498,12 +522,13 @@ def get_cancel_nlp(_: Annotated[str, Depends(current_user)]) -> dict:
 
 @router.get("/dev-nlp")
 def get_dev_nlp(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=7, le=365)] = 90,
 ) -> dict:
     """Clustering de causas de devoluciones (Unidev) usando lexicon manual.
     Analiza devolucion_items_fallas.descripcion (texto libre) y agrupa en
     causas operativas + top SKUs afectados por causa."""
+    require_area(user, ["cs", "it_data"])
     key = f"dev-nlp-{period_days}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -513,7 +538,7 @@ def get_dev_nlp(
 
 @router.get("/products/abc")
 def get_products_abc(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -521,140 +546,154 @@ def get_products_abc(
 ) -> dict:
     """Clasificacion ABC (Pareto 80/15/5) por revenue.
     unit=unistore: TN del retail. unit=unidrop: TN de dropshippers."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.abc_analysis(period, from_iso, to_iso, unit=unit)
 
 
 @router.get("/products/abc-xyz")
 def get_products_abc_xyz(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Matriz ABC x XYZ (importancia x volatilidad) con accion sugerida por cuadrante."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.abc_xyz_matrix(period, from_iso, to_iso)
 
 
 @router.get("/products/rotation")
 def get_products_rotation(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
 ) -> dict:
     """Days of Inventory por SKU. Buckets: rapido / normal / lento / muerto."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.inventory_rotation(period=period)
 
 
 @router.get("/products/stockout-risk")
 def get_products_stockout(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     threshold_days: Annotated[int, Query(ge=1, le=180)] = 14,
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
 ) -> dict:
     """SKUs en riesgo de agotamiento en menos de threshold_days dias."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.stockout_risk(threshold_days, period)
 
 
 @router.get("/products/cross-sell")
 def get_products_cross_sell(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     top_n: Annotated[int, Query(ge=5, le=100)] = 30,
 ) -> dict:
     """Top pares de SKUs comprados juntos (market basket simple)."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.cross_sell_pairs(period=period, top_n=top_n)
 
 
 @router.get("/products/trends")
 def get_products_trends(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=7, le=180)] = 30,
 ) -> dict:
     """SKUs con growth/decline > 30% comparando periodo actual vs anterior identico."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.product_trends(period_days)
 
 
 @router.get("/products/returns-rate")
 def get_products_returns_rate(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=7, le=365)] = 90,
 ) -> dict:
     """% de devoluciones por SKU sobre ventas (calidad / expectativa)."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.returns_rate_by_sku(period_days)
 
 
 @router.get("/products/abc-margen")
 def get_products_abc_margen(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """ABC pero por margen estimado (no solo revenue)."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.abc_margin(period, from_iso, to_iso)
 
 
 @router.get("/products/lifecycle")
 def get_products_lifecycle(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=30, le=730)] = 180,
 ) -> dict:
     """Lifecycle stage por SKU: nuevo / growth / maduro / declive / dormido."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.product_lifecycle(period_days)
 
 
 @router.get("/products/price-elasticity")
 def get_products_price_elasticity(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=60, le=730)] = 180,
 ) -> dict:
     """Elasticidad-precio por SKU usando regresion simple."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.price_elasticity(period_days)
 
 
 @router.get("/products/cannibalization")
 def get_products_cannibalization(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=30, le=365)] = 90,
 ) -> dict:
     """Pares de SKUs donde uno sustituye al otro en mismos clientes."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.cannibalization_pairs(period_days)
 
 
 @router.get("/products/forecast/{sku}")
 def get_products_forecast(
     sku: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     days_history: Annotated[int, Query(ge=14, le=365)] = 90,
     days_ahead: Annotated[int, Query(ge=7, le=180)] = 30,
 ) -> dict:
     """Forecast ventas proximos N dias por SKU (linear regression + exp smoothing)."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.forecast_sku(sku, days_history, days_ahead)
 
 
 @router.get("/products/stockout-simulator")
 def get_products_stockout_sim(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     demand_change_pct: Annotated[float, Query(ge=-100, le=500)] = 0,
     days_to_simulate: Annotated[int, Query(ge=7, le=180)] = 30,
 ) -> dict:
     """Simula stockouts si la demanda cambia X% en los proximos N dias."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.stockout_simulator(demand_change_pct, days_to_simulate)
 
 
 @router.get("/products/affinity")
 def get_products_affinity(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=30, le=365)] = 90,
     min_support: Annotated[int, Query(ge=2, le=50)] = 5,
     top_n: Annotated[int, Query(ge=10, le=200)] = 50,
 ) -> dict:
     """Lift + confidence para pares de SKUs (mejor que co-ocurrencia simple)."""
+    require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.affinity_score_pairs(period_days, min_support, top_n)
 
 
 @router.get("/customers-vip")
 def get_customers_vip(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     tier: Annotated[Literal["all", "gold", "silver", "bronze"], Query()] = "all",
 ) -> dict:
     """Lista de clientes Unistore VIP con tier y razon. Drilldown compatible.
@@ -662,26 +701,29 @@ def get_customers_vip(
     Reglas: cliente VIP si lifetime >= 300k OR orden_max >= 300k OR
     (>=4 ordenes Y ticket promedio >= 75k). Tiers: bronze 300k-1M /
     silver 1M-5M / gold > 5M lifetime."""
+    require_area(user, ["cs", "ventas"])
     return vip_svc.list_vip_customers(tier)
 
 
 @router.get("/customers-vip/overview")
-def get_customers_vip_overview(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_customers_vip_overview(user: Annotated[dict, Depends(current_user)]) -> dict:
     """KPI summary: count + lifetime por tier para cards gerenciales."""
+    require_area(user, ["cs", "ventas"])
     return vip_svc.vip_overview()
 
 
 @router.get("/customers/{customer_id}/vip-status")
 def get_customer_vip_status(
     customer_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     """Status VIP de un customer especifico (para mostrar en perfil 360)."""
+    require_area(user, ["cs", "ventas"])
     return vip_svc.get_customer_vip_status(customer_id)
 
 
 @router.get("/notifications")
-def get_notifications(_: Annotated[str, Depends(current_user)]) -> dict:
+def get_notifications(user: Annotated[dict, Depends(current_user)]) -> dict:
     """Notificaciones in-app derivadas de business rules en runtime.
     Sin tabla de notifications - se calculan por request con cache de 60s."""
     cache_key = "notifications-all"
@@ -693,41 +735,44 @@ def get_notifications(_: Annotated[str, Depends(current_user)]) -> dict:
 
 @router.get("/envios-meli-unidrop")
 def get_envios_meli_unidrop(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Distribucion de ordenes MELI de Unidrop por modo de envio:
     Mercado Envios FULL / ME2 / Cross Docking / Drop Off / Flex / Pickup / Personalizado."""
+    require_area(user, ["logistica"])
     return envios_meli_svc.envios_meli_unidrop(period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/envios-unistore")
 def get_envios_unistore(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Distribucion de ordenes Unistore por canal de envio:
     OCA / Correo Argentino / Unifast / Retiro / Moto / Andreani / Personalizado."""
+    require_area(user, ["logistica"])
     return envios_uni_svc.envios_unistore_overview(period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/stock-heatmap")
 def get_stock_heatmap(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     top_skus: Annotated[int, Query(ge=10, le=100)] = 30,
 ) -> dict:
     """Heatmap de stock SKU x area de deposito (Digip).
     Identifica concentracion logistica y zonas con bajo surtido."""
+    require_area(user, ["logistica", "compras"])
     return stock_svc.stock_heatmap(top_skus=top_skus)
 
 
 @router.get("/rfm")
 def get_rfm(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=30, le=730)] = 365,
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
@@ -735,6 +780,7 @@ def get_rfm(
     unit=unistore: clientes finales TN paid (tienda_nube.Customer/Order).
     unit=unidrop:  dropshippers (public.User) por ventas combinadas MELI + TN.
     Devuelve segments + top_by_segment + actions (que hacer con cada segmento)."""
+    require_area(user, ["cs", "marketing"])
     if unit == "unidrop":
         result = rfm_svc.rfm_overview_unidrop(period_days=period_days)
     else:
@@ -757,7 +803,7 @@ def get_rfm_segment_customers(
 
 @router.get("/cohorts")
 def get_cohorts(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
@@ -770,12 +816,13 @@ def get_cohorts(
     'Posible churn' (clientes recurrentes que excedieron 1.5x su gap promedio
     o 60d) y 'Perdidos' (>365d sin compras) son alertas accionables.
     """
+    require_area(user, ["cs", "ventas"])
     return cohorts_svc.cohorts_overview(period, from_iso, to_iso, unit=unit)
 
 
 @router.get("/cohorts/customers")
 def get_cohort_customers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     state: Annotated[str, Query()],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
@@ -783,12 +830,13 @@ def get_cohort_customers(
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """Drill: lista de clientes/dropshippers en el estado dado para abrir en modal."""
+    require_area(user, ["cs", "ventas"])
     return cohorts_svc.cohort_customers(state, period, from_iso, to_iso, unit=unit)
 
 
 @router.get("/lotes")
 def get_lotes(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     proveedor: Annotated[str | None, Query()] = None,
     origen: Annotated[str | None, Query()] = None,
     lote: Annotated[str | None, Query()] = None,
@@ -800,6 +848,7 @@ def get_lotes(
     Devuelve KPIs agregados (Total Costos, Facturacion, Markup, Cobertura, Consumo)
     + lista de lotes con sus metricas individuales.
     """
+    require_area(user, ["compras", "finanzas"])
     filters = {
         "proveedor": proveedor,
         "origen": origen,
@@ -813,9 +862,10 @@ def get_lotes(
 @router.get("/lotes/{lote_id}/detail")
 def get_lote_detail(
     lote_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     """Detalle del lote: KPIs + items con su estado de consumo + atribucion de ventas."""
+    require_area(user, ["compras", "finanzas"])
     detail = lotes_svc.lote_detail(lote_id)
     if not detail:
         from fastapi import HTTPException
@@ -825,7 +875,7 @@ def get_lote_detail(
 
 @router.get("/today")
 def get_today(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop", "all"], Query()] = "all",
     context: Annotated[Literal["default", "cs", "productos", "logistica"], Query()] = "default",
 ) -> dict:
@@ -847,12 +897,13 @@ def get_today(
 
 @router.get("/products")
 def get_products(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["ventas", "compras"])
     key = f"prod:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -863,13 +914,14 @@ def get_products(
 @router.get("/products/sku/{sku}")
 def get_product_detail(
     sku: str,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Product 360 con periodo filtrable (afecta solo la seccion
     recent_orders; el resto de KPIs son lifetime)."""
+    require_area(user, ["ventas", "compras"])
     key = f"prod-sku:{sku}:{period}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -880,8 +932,9 @@ def get_product_detail(
 @router.get("/customers/{customer_id}")
 def get_customer_detail(
     customer_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    require_area(user, ["cs", "ventas"])
     key = f"cust:{customer_id}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -905,12 +958,13 @@ def get_customer_journey(
 
 @router.get("/envios/unidrop")
 def get_envios(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     courier: Annotated[Literal["all", "oca", "lightdata"], Query()] = "all",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
+    require_area(user, ["logistica"])
     key = f"env:{period}:{courier}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
