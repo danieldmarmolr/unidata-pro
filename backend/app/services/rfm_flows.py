@@ -20,6 +20,7 @@ import logging
 from app.db.engines import get_engine
 from app.services._utils import q
 from app.services.rfm_analytics import _classify_segment, _quintile_score, SEGMENTS, SEGMENT_ACTIONS
+from app.utils.tz import today_ar
 
 log = logging.getLogger("unidata.rfm_flows")
 
@@ -77,7 +78,7 @@ def rfm_flows_mom() -> dict:
     current_rev_dist = sorted([d["current"]["revenue"] for d in by_customer.values() if "current" in d])
 
     # Recency: dias desde ultima compra desde fecha de cohorte
-    today = dt.date.today()
+    today = today_ar()
     current_recency_dist = sorted([
         (today - d["current"]["last"]).days
         for d in by_customer.values()
@@ -237,7 +238,7 @@ def rfm_flows_mom_unidrop() -> dict:
 
     current_orders_dist = sorted([d["current"]["orders"] for d in by_customer.values() if "current" in d])
     current_rev_dist = sorted([d["current"]["revenue"] for d in by_customer.values() if "current" in d])
-    today = dt.date.today()
+    today = today_ar()
     current_recency_dist = sorted([
         (today - d["current"]["last"]).days
         for d in by_customer.values()

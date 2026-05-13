@@ -36,6 +36,11 @@ export function fmtArDateTime(s: string | null | undefined, opts?: { withSeconds
   return d.toLocaleString("es-AR", fmt).replace(",", "");
 }
 
+/** Devuelve "YYYY-MM-DD" de hoy en AR (no el UTC del server). Usar para max/default de date pickers. */
+export function todayArIso(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: AR_TZ });
+}
+
 /** Devuelve solo "08/05/2026" en AR. */
 export function fmtArDate(s: string | null | undefined): string {
   if (!s) return "—";

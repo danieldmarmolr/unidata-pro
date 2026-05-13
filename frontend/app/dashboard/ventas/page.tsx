@@ -18,6 +18,7 @@ import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { fmtArDateTime } from "@/lib/dates";
 import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { SalesOverview } from "@/lib/types";
 
@@ -92,7 +93,7 @@ export default function VentasPage() {
  </div>
  {data && (
  <div className="text-xs text-text-muted">
- Datos al {new Date(data.generated_at).toLocaleString("es-AR")}
+ Datos al {fmtArDateTime(data.generated_at)}
  {isFetching && " · refrescando..."}
  </div>
  )}
