@@ -90,14 +90,21 @@ export async function api<T = unknown>(
   return (await res.json()) as T;
 }
 
-export async function login(email: string, password: string) {
+export class Requires2FAError extends Error {
+  constructor() { super("2FA requerido"); }
+}
+
+export async function login(email: string, password: string, totpCode?: string) {
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, totp_code: totpCode ?? null }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
+    if (res.headers.get("X-Requires-2FA") === "true" || (data?.detail as string)?.includes("2FA requerido")) {
+      throw new Requires2FAError();
+    }
     throw new Error(data?.detail ?? "Credenciales invalidas");
   }
   const data = (await res.json()) as { access_token: string; user: AuthUser };
