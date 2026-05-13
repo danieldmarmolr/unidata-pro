@@ -7,7 +7,7 @@ import { FileDown } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
-import { RevenueChart, CHANNEL_COLORS } from "@/components/revenue-chart";
+import { RevenueChart, DONUT_COLORS, DONUT_TO_SERIES } from "@/components/revenue-chart";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { IntegrationHealthList } from "@/components/integration-health";
@@ -475,9 +475,12 @@ export default function ExecutiveDashboardPage() {
                 caption={`Mix de revenue · ${periodLabel}`}
                 data={(data.revenue_mix ?? []).map((r) => ({ name: r.category, value: r.value }))}
                 height={300}
-                colorMap={CHANNEL_COLORS}
-                highlightName={selectedChannel}
-                onSliceClick={(d) => setSelectedChannel((prev) => prev === d.name ? null : d.name)}
+                colorMap={DONUT_COLORS}
+                highlightName={selectedChannel ? (Object.entries(DONUT_TO_SERIES).find(([, v]) => v === selectedChannel)?.[0] ?? null) : null}
+                onSliceClick={(d) => {
+                  const seriesLabel = DONUT_TO_SERIES[d.name] ?? null;
+                  setSelectedChannel((prev) => prev === seriesLabel ? null : seriesLabel);
+                }}
               />
             )}
           </div>

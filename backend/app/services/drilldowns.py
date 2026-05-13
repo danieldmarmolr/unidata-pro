@@ -839,9 +839,9 @@ def subs_meli_active(plan: str | None = None) -> dict:
 
 def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     try:
-        eng = get_engine("unidev")
+        eng = get_engine("unistore")  # devoluciones vive en unistore_api (mismo cluster RDS)
     except Exception as e:
-        log.warning("devoluciones_list: no engine unidev: %s", e)
+        log.warning("devoluciones_list: no engine unistore: %s", e)
         return _serialize([], [])
     win = resolve_window(period, from_iso, to_iso)
     where = "d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts"

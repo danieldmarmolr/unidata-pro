@@ -14,17 +14,37 @@ import {
 import type { TimeSeries } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
+// Keyed by exact backend labels de revenue_by_channel
 export const CHANNEL_COLORS: Record<string, string> = {
-  "Unistore TN": "#7a3eae",
-  "Unidrop TN": "#a259ff",
-  "Unistore ML": "#f97316",
-  "Unidrop ML": "#f59e0b",
-  "Suscripciones": "#06b6d4",
+  "Unistore - Tienda Nube": "#7a3eae",
+  "Unidrop - Tienda Nube": "#a259ff",
+  "Unistore - Mercado Libre": "#f97316",
+  "Unidrop - Mercado Libre": "#f59e0b",
+  "Unidrop - Suscripciones MELI": "#06b6d4",
+};
+
+// Colores para el donut (revenue_mix) — misma paleta, distintos nombres
+export const DONUT_COLORS: Record<string, string> = {
+  "TN Unistore (retail propio)": "#7a3eae",
+  "TN Unidrop (dropshippers)": "#a259ff",
+  "ML Unistore (Fox Electronics)": "#f97316",
+  "ML Unidrop (dropshippers)": "#f59e0b",
+  "Suscripciones MELI (Unidrop)": "#06b6d4",
+};
+
+// Mapeo donut name → series label del trend chart
+export const DONUT_TO_SERIES: Record<string, string> = {
+  "TN Unistore (retail propio)": "Unistore - Tienda Nube",
+  "ML Unistore (Fox Electronics)": "Unistore - Mercado Libre",
+  "TN Unidrop (dropshippers)": "Unidrop - Tienda Nube",
+  "ML Unidrop (dropshippers)": "Unidrop - Mercado Libre",
+  "Suscripciones MELI (Unidrop)": "Unidrop - Suscripciones MELI",
 };
 
 const FALLBACK_COLORS = ["#7a3eae", "#a259ff", "#f59e0b", "#f97316", "#06b6d4", "#10b981", "#ef4444"];
 
 function getColor(label: string, idx: number): string {
+  if (CHANNEL_COLORS[label]) return CHANNEL_COLORS[label];
   for (const [key, color] of Object.entries(CHANNEL_COLORS)) {
     if (label.toLowerCase().includes(key.toLowerCase())) return color;
   }
