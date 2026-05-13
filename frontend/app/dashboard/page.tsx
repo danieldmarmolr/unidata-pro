@@ -17,6 +17,7 @@ import { api, getToken } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { ExecutiveOverview, CategoryValue, KpiCard as KpiCardT } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { fmtArDateTime, todayArIso } from "@/lib/dates";
 
 type TodayAnchor = { key: string; label: string; value: number; delta_pct: number | null };
 type TodayBlock = { label: string; prefix?: string; suffix?: string; hint?: string; today: number; anchors: TodayAnchor[] };
@@ -286,7 +287,7 @@ export default function ExecutiveDashboardPage() {
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      const ym = new Date().toISOString().slice(0, 7);
+      const ym = todayArIso().slice(0, 7);
       a.href = url;
       a.download = `unidata_reporte_${ym}.pdf`;
       a.click();
@@ -462,7 +463,7 @@ export default function ExecutiveDashboardPage() {
 
         {data && (
           <div className="mt-6 text-xs text-text-muted text-right">
-            Datos generados: {new Date(data.generated_at).toLocaleString("es-AR")}
+            Datos generados: {fmtArDateTime(data.generated_at)}
             {isFetching && " · refrescando..."}
           </div>
         )}

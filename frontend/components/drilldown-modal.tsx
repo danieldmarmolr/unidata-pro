@@ -394,7 +394,7 @@ function formatCell(col: string, v: unknown): string {
     return String(v);
   }
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) {
-    try { return new Date(v).toLocaleString("es-AR"); } catch { return v; }
+    try { return fmtArDateTime(v); } catch { return v; }
   }
   const s = String(v);
   return s.length > 80 ? s.slice(0, 77) + "..." : s;

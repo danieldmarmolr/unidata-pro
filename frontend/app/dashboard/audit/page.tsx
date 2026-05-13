@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/utils";
+import { fmtArDateTime } from "@/lib/dates";
 import { CheckCircle2, XCircle } from "lucide-react";
 
 type Entry = {
@@ -65,7 +66,7 @@ export default function AuditPage() {
                   return (
                     <tr key={e.id} className="border-t border-border hover:bg-soft transition">
                       <td className="px-3 py-2 whitespace-nowrap text-text-muted">
-                        {new Date(e.ts).toLocaleString("es-AR")}
+                        {fmtArDateTime(e.ts)}
                       </td>
                       <td className="px-3 py-2 font-semibold">{e.user}</td>
                       <td className="px-3 py-2 uppercase text-primary">{e.unit}</td>
