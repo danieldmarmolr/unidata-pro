@@ -331,12 +331,13 @@ _drop_unified_cache: TTLCache = TTLCache(maxsize=512, ttl=120)  # 2 min
 @router.get("/dropshippers/{user_id}/unified-orders")
 def get_dropshipper_unified_orders(
     user_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     intent_id: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
 ) -> dict:
     """Vista unificada de ordenes ML + TN. Si intent_id es no-null, filtra a las
     ordenes de ese PaymentIntent (click-to-filter del frontend)."""
+    require_area(user, ["ventas", "cs"])
     cache_key = f"drop-unified:{user_id}:{intent_id or ''}:{limit}"
     cached_val = _drop_unified_cache.get(cache_key)
     if cached_val is not None:
@@ -791,13 +792,14 @@ def get_rfm(
 
 @router.get("/rfm/segment-customers")
 def get_rfm_segment_customers(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     segment: Annotated[str, Query()],
     unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
     period_days: Annotated[int, Query(ge=30, le=730)] = 365,
 ) -> dict:
     """Lista COMPLETA de clientes en un segmento RFM con email/contacto.
     Usado por modal RFM para exportar CSV / generar accion CS."""
+    require_area(user, ["cs", "marketing"])
     return rfm_svc.rfm_segment_customers(segment, unit=unit, period_days=period_days)
 
 
@@ -945,10 +947,11 @@ def get_customer_detail(
 @router.get("/customers/{customer_id}/journey")
 def get_customer_journey(
     customer_id: int,
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     """Timeline + cadencia personal con promedio ponderado.
     Para el sidebar storytelling de la vista 360."""
+    require_area(user, ["cs", "ventas"])
     key = f"cust-journey:{customer_id}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
