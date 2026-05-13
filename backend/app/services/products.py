@@ -526,6 +526,360 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
 
 # ===================== CUSTOMER 360 =====================
 
+# Cache de la mediana poblacional (gap 1ra->2da compra) - se recalcula cada hora
+_POP_GAP_CACHE: dict[str, tuple[float, dt.datetime]] = {}
+_POP_GAP_TTL = dt.timedelta(hours=1)
+
+
+def _population_first_to_second_gap_unistore() -> float | None:
+    """Mediana de dias entre 1ra y 2da compra de los customers Unistore TN.
+
+    Sirve como cadencia 'baseline' para clientes con 1 sola compra: si su recency
+    supera 1.2x/2x/3x de esta mediana, ya entra en En riesgo / Churn pendiente /
+    Churn confirmado a pesar de no tener cadencia personal todavia.
+    """
+    cached = _POP_GAP_CACHE.get("unistore")
+    if cached and (dt.datetime.now() - cached[1]) < _POP_GAP_TTL:
+        return cached[0]
+    try:
+        eng = get_engine("unistore")
+        rows = q(eng, """
+            WITH ranked AS (
+              SELECT "customerId" AS cid, "createdAt"::date AS d,
+                     ROW_NUMBER() OVER (PARTITION BY "customerId" ORDER BY "createdAt") AS rn
+              FROM tienda_nube."Order"
+              WHERE "paymentStatus" = 'paid' AND "customerId" IS NOT NULL
+            ),
+            first_two AS (
+              SELECT cid,
+                     MAX(CASE WHEN rn = 1 THEN d END) AS d1,
+                     MAX(CASE WHEN rn = 2 THEN d END) AS d2
+              FROM ranked WHERE rn <= 2 GROUP BY cid
+            )
+            SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY (d2 - d1)) AS median_days
+            FROM first_two WHERE d2 IS NOT NULL AND (d2 - d1) > 0
+        """) or []
+        if rows and rows[0] and rows[0][0] is not None:
+            val = float(rows[0][0])
+            _POP_GAP_CACHE["unistore"] = (val, dt.datetime.now())
+            return val
+    except Exception:
+        pass
+    return None
+
+
+def customer_journey(customer_id: int) -> dict:
+    """Storytelling de un cliente Unistore: timeline + cadencia personal.
+
+    A diferencia de un "promedio de gap" generico, calcula la cadencia personal
+    con promedio ponderado (mas peso a la ultima compra que al promedio
+    historico). Esto detecta:
+      - El cliente cuyo gap "real" se acorto (esta comprando mas seguido)
+      - El cliente que se estiro vs SU ritmo (no vs el promedio de la base)
+
+    Ponderacion:
+      g >= 3 gaps: 0.6 ultimo + 0.3 anterior + 0.1 anterior-anterior
+      g == 2:     0.7 ultimo + 0.3 anterior
+      g == 1:     ultimo
+      g == 0:     None (no se puede predecir, todavia primera compra)
+
+    Estado:
+      - "primera_compra": no hay gap
+      - "en_ritmo":      dias_desde_ultima <= expected_gap * 1.2
+      - "atrasado":      expected_gap*1.2 < dias <= expected_gap * 2
+      - "muy_atrasado":  dias > expected_gap * 2  (riesgo churn alto)
+    """
+    eng = get_engine("unistore")
+
+    rows = q(eng, """
+        SELECT o.id,
+               o."createdAt"::date AS d,
+               o.total::float,
+               COALESCE(it.units, 0)::int AS units,
+               o.number
+        FROM tienda_nube."Order" o
+        LEFT JOIN (
+          SELECT "orderId", SUM(quantity)::int AS units
+          FROM tienda_nube."OrderItem"
+          GROUP BY "orderId"
+        ) it ON it."orderId" = o.id
+        WHERE o."customerId" = :cid AND o."paymentStatus" = 'paid'
+        ORDER BY o."createdAt" ASC
+    """, {"cid": customer_id}) or []
+
+    if not rows:
+        return {
+            "customer_id": customer_id,
+            "events": [],
+            "gaps": [],
+            "expected_gap_days": None,
+            "expected_next_date": None,
+            "days_since_last": None,
+            "status": "sin_compras",
+            "status_label": "Sin compras pagadas",
+            "narrative": "Aun no hizo su primera compra paga.",
+        }
+
+    today = dt.date.today()
+    events: list[dict] = []
+    gaps: list[int] = []
+    prev_date: dt.date | None = None
+    total_revenue = 0.0
+    total_units = 0
+
+    labels_ord = ["1ra compra", "2da compra", "3ra compra", "4ta compra", "5ta compra"]
+
+    for idx, r in enumerate(rows):
+        order_id = int(r[0])
+        d = r[1]
+        total = float(r[2] or 0)
+        units = int(r[3] or 0)
+        number = str(r[4] or order_id)
+        gap = None
+        if prev_date is not None:
+            gap = (d - prev_date).days
+            gaps.append(gap)
+        total_revenue += total
+        total_units += units
+        # Stage lifecycle al momento de ESTA compra (segun # de compras hasta aca)
+        n_so_far = idx + 1
+        if n_so_far == 1: stage = "Nuevo"
+        elif n_so_far == 2: stage = "Segunda compra"
+        elif n_so_far == 3: stage = "Conv. a Recurrente"
+        else: stage = "Recurrente"
+
+        events.append({
+            "order_id": order_id,
+            "number": number,
+            "label": labels_ord[idx] if idx < len(labels_ord) else f"{idx+1}a compra",
+            "date": d.isoformat(),
+            "total": round(total, 2),
+            "units": units,
+            "gap_days": gap,
+            "stage": stage,
+            "cumulative_revenue": round(total_revenue, 2),
+            "cumulative_units": total_units,
+        })
+        prev_date = d
+
+    # Cadencia personal con promedio ponderado
+    expected_gap_days: float | None = None
+    expected_next_date: str | None = None
+    weighted_breakdown: list[dict] = []
+    if len(gaps) >= 3:
+        g_last, g_prev, g_prev2 = gaps[-1], gaps[-2], gaps[-3]
+        expected_gap_days = 0.6 * g_last + 0.3 * g_prev + 0.1 * g_prev2
+        weighted_breakdown = [
+            {"weight": 0.6, "gap_days": g_last, "label": "ultimo gap"},
+            {"weight": 0.3, "gap_days": g_prev, "label": "ant. gap"},
+            {"weight": 0.1, "gap_days": g_prev2, "label": "pre-ant. gap"},
+        ]
+    elif len(gaps) == 2:
+        g_last, g_prev = gaps[-1], gaps[-2]
+        expected_gap_days = 0.7 * g_last + 0.3 * g_prev
+        weighted_breakdown = [
+            {"weight": 0.7, "gap_days": g_last, "label": "ultimo gap"},
+            {"weight": 0.3, "gap_days": g_prev, "label": "ant. gap"},
+        ]
+    elif len(gaps) == 1:
+        expected_gap_days = float(gaps[-1])
+        weighted_breakdown = [{"weight": 1.0, "gap_days": gaps[-1], "label": "unico gap"}]
+
+    if expected_gap_days is not None and prev_date is not None:
+        expected_next_date = (prev_date + dt.timedelta(days=round(expected_gap_days))).isoformat()
+
+    days_since_last = (today - prev_date).days if prev_date else None
+    avg_gap_simple = round(sum(gaps) / len(gaps), 1) if gaps else None
+
+    # Lifecycle ampliado alineado con CS overview (8 estados).
+    # ACTIVO (en ritmo) escala segun # compras
+    # OVERRIDE de Churn cuando ratio > umbral, Recuperado cuando volvio post-churn.
+    n_orders = len(events)
+    max_gap_hist = max(gaps) if gaps else 0
+    cs_action = ""
+    # Para clientes con 1 sola compra usamos la MEDIANA POBLACIONAL de gap
+    # 1ra->2da de Unistore como baseline. Asi un cliente "Nuevo" con recency
+    # alta no queda eternamente en Nuevo: si paso 2x la mediana ya es churn.
+    pop_baseline = None
+    if expected_gap_days is None and n_orders == 1:
+        pop_baseline = _population_first_to_second_gap_unistore()
+        if pop_baseline and days_since_last is not None:
+            expected_gap_days = pop_baseline
+            weighted_breakdown = [{
+                "weight": 1.0, "gap_days": round(pop_baseline, 1),
+                "label": "mediana poblacional 1ra->2da compra"
+            }]
+            if prev_date is not None:
+                expected_next_date = (prev_date + dt.timedelta(days=round(pop_baseline))).isoformat()
+
+    if days_since_last is None or expected_gap_days is None:
+        status, status_label = "primera_compra", "Primera compra"
+        cs_action = "Welcome flow + survey de primera compra"
+        narrative = (
+            f"Compro 1 sola vez ({events[-1]['date']}, $ {events[-1]['total']:,.0f}). "
+            "Todavia no hay cadencia para predecir cuando volveria."
+        )
+    else:
+        ratio = days_since_last / expected_gap_days if expected_gap_days > 0 else 0
+        # Lifecycle stage (independiente de health)
+        if n_orders == 1: stage = "Nuevo"
+        elif n_orders == 2: stage = "Segunda compra"
+        elif n_orders == 3: stage = "Conv. a Recurrente"
+        else: stage = "Recurrente"
+
+        # Recuperado: tuvo gap historico > 180d y volvio reciente (ratio bajo)
+        if max_gap_hist > 180 and days_since_last <= 60:
+            status, status_label = "recuperado", "Recuperado"
+            cs_action = "Welcome back + entender por que volvio para replicarlo"
+        elif ratio > 3.0:
+            status, status_label = "churn_confirmado", f"{stage} · Churn confirmado"
+            cs_action = "Campana de recuperacion + outreach management directo"
+        elif ratio > 2.0:
+            status, status_label = "churn_pendiente", f"{stage} · Churn pendiente"
+            cs_action = "Outreach personal CS + descuento fuerte ahora"
+        elif ratio > 1.2:
+            status, status_label = "en_riesgo", f"{stage} · En riesgo"
+            cs_action = "Email recordatorio + descuento blando 1ra recompra"
+        else:
+            # En ritmo segun lifecycle
+            if n_orders == 1:
+                status, status_label = "nuevo", "Nuevo"
+                cs_action = "Welcome flow + survey de primera compra"
+            elif n_orders == 2:
+                status, status_label = "segunda_compra", "Segunda compra"
+                cs_action = "Programa de fidelidad + cross-sell"
+            elif n_orders == 3:
+                status, status_label = "conv_recurrente", "Conv. a Recurrente"
+                cs_action = "Reconocer como leal + upsell premium"
+            else:
+                status, status_label = "recurrente", "Recurrente"
+                cs_action = "VIP perks + mantener satisfaccion"
+
+        # Narrativa
+        diff_vs_avg = ""
+        if avg_gap_simple and expected_gap_days:
+            d = expected_gap_days - avg_gap_simple
+            if abs(d) >= 3:
+                diff_vs_avg = (
+                    f" Su ritmo reciente es {'mas rapido' if d < 0 else 'mas lento'} "
+                    f"que su promedio historico ({avg_gap_simple:.0f} d)."
+                )
+        ritmo_txt = {
+            "nuevo": "todavia es nuevo, esta dentro de su ventana de 2da compra",
+            "segunda_compra": "viene comprando con regularidad personal",
+            "conv_recurrente": "esta consolidado como cliente recurrente",
+            "recurrente": "es un cliente leal de la marca",
+            "en_riesgo": "se esta estirando, hay que activarlo",
+            "churn_pendiente": "pasó al doble de su ritmo personal — outreach urgente",
+            "churn_confirmado": "triplica su cadencia, se fugo del patron",
+            "recuperado": "volvio despues de una fuga larga, retencion alta-prioridad",
+        }.get(status, "estado evaluable")
+        cadencia_origen = "mediana poblacional 1ra->2da compra" if pop_baseline else "cadencia personal"
+        narrative = (
+            f"Lleva {n_orders} compras pagas por $ {total_revenue:,.0f}. "
+            f"Cadencia esperada ~{expected_gap_days:.0f} d entre compras "
+            f"({cadencia_origen})."
+            f"{diff_vs_avg} "
+            f"Hace {days_since_last} d de su ultima → {ritmo_txt}. "
+            f"Proxima estimada: {expected_next_date}."
+        )
+
+    # Detectar evento donde se rompio el patron: gap real > 2x expected.
+    # Marcamos ese evento como churn_point para que la UI lo highlight.
+    if expected_gap_days and gaps:
+        # Asociar gap a su evento (events[1..] tienen gap_days)
+        for ev in events:
+            g = ev.get("gap_days")
+            if g and expected_gap_days > 0 and g / expected_gap_days > 2.0:
+                ev["churn_break"] = True
+                ev["churn_ratio"] = round(g / expected_gap_days, 1)
+            else:
+                ev["churn_break"] = False
+
+    # Computar gap_health POR EVENTO: que le paso al cliente durante el gap
+    # que precede a ESTA compra. Si el gap supero 1.2x/2x/3x del expected en
+    # ese momento, el cliente estuvo en en_riesgo / churn_pendiente / churn_confirmado
+    # ANTES de hacer esta compra (= "recuperacion" de ese estado al comprar).
+    pop_base = _population_first_to_second_gap_unistore()
+    for i, ev in enumerate(events):
+        g = ev.get("gap_days")
+        if g is None:
+            # Primera compra: no hay gap previo
+            ev["gap_health"] = None
+            ev["gap_health_label"] = None
+            ev["gap_expected"] = None
+            ev["transition_narrative"] = "Primera compra: arranca el ciclo. Bienvenida + survey."
+            continue
+        # Calcular expected_gap en EL MOMENTO de esta compra (con datos hasta i-1)
+        prior_gaps = [x["gap_days"] for x in events[:i] if x.get("gap_days") is not None]
+        if len(prior_gaps) >= 3:
+            exp = 0.6 * prior_gaps[-1] + 0.3 * prior_gaps[-2] + 0.1 * prior_gaps[-3]
+        elif len(prior_gaps) == 2:
+            exp = 0.7 * prior_gaps[-1] + 0.3 * prior_gaps[-2]
+        elif len(prior_gaps) == 1:
+            exp = float(prior_gaps[-1])
+        else:
+            exp = pop_base  # 2da compra: comparar contra mediana poblacional
+        ev["gap_expected"] = round(exp, 1) if exp else None
+        if not exp or exp <= 0:
+            ev["gap_health"] = None
+            ev["gap_health_label"] = None
+            ev["transition_narrative"] = None
+            continue
+        ratio = g / exp
+        ev["gap_ratio"] = round(ratio, 2)
+        prev_stage = events[i - 1]["stage"]
+        if ratio > 3.0:
+            ev["gap_health"] = "churn_confirmado"
+            ev["gap_health_label"] = "Churn confirmado"
+            ev["transition_narrative"] = (
+                f"Durante este gap se fugo del patron: {prev_stage} → Churn confirmado "
+                f"({g}d vs ~{round(exp)}d esperados). Volvio a comprar = RECUPERACION."
+            )
+        elif ratio > 2.0:
+            ev["gap_health"] = "churn_pendiente"
+            ev["gap_health_label"] = "Churn pendiente"
+            ev["transition_narrative"] = (
+                f"Durante este gap entro en Churn pendiente: {prev_stage} → Churn pendiente "
+                f"({g}d vs ~{round(exp)}d). Volvio a comprar a tiempo."
+            )
+        elif ratio > 1.2:
+            ev["gap_health"] = "en_riesgo"
+            ev["gap_health_label"] = "En riesgo"
+            ev["transition_narrative"] = (
+                f"Durante este gap quedo En riesgo: {prev_stage} → {prev_stage} · En riesgo "
+                f"({g}d vs ~{round(exp)}d). Recupero comprando."
+            )
+        else:
+            ev["gap_health"] = "en_ritmo"
+            ev["gap_health_label"] = "En ritmo"
+            ev["transition_narrative"] = (
+                f"Compra dentro del ritmo esperado ({g}d vs ~{round(exp)}d)."
+            )
+
+    # Order events DESC (most-recent first) para el sidebar storytelling
+    events_desc = list(reversed(events))
+
+    return {
+        "customer_id": customer_id,
+        "events": events_desc,
+        "gaps": gaps,
+        "avg_gap_days_simple": avg_gap_simple,
+        "expected_gap_days": round(expected_gap_days, 1) if expected_gap_days else None,
+        "expected_next_date": expected_next_date,
+        "weighted_breakdown": weighted_breakdown,
+        "days_since_last": days_since_last,
+        "total_paid_orders": len(events),
+        "total_revenue": round(total_revenue, 2),
+        "total_units": total_units,
+        "ticket_avg": round(total_revenue / len(events), 0) if events else 0,
+        "status": status,
+        "status_label": status_label,
+        "cs_action": cs_action,
+        "narrative": narrative,
+    }
+
+
 def customer_detail(customer_id: int) -> dict:
     """Vista 360 de un customer Unistore: orders, productos, cancelaciones, RFM."""
     eng = get_engine("unistore")
@@ -654,18 +1008,36 @@ def customer_detail(customer_id: int) -> dict:
         },
     } for r in rows]
 
+    # BUGFIX: el LEFT JOIN OrderItem inflaba los counts de ordenes (contaba 1
+    # fila por item). Ahora calculamos ordenes y items por separado y los
+    # combinamos por mes. ordenes_pagas = COUNT DISTINCT orders paid del mes.
     rows = q(eng, """
-        SELECT date_trunc('month', o."createdAt")::date AS mes,
-               COUNT(*)::int AS ordenes_total,
-               COUNT(*) FILTER (WHERE o."paymentStatus" = 'paid')::int AS ordenes_pagas,
-               COUNT(*) FILTER (WHERE o.status = 'cancelled')::int AS ordenes_canceladas,
-               COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN o.total ELSE 0 END),0)::float AS revenue,
-               COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN oi.quantity ELSE 0 END),0)::int AS units,
-               COUNT(DISTINCT oi.sku) FILTER (WHERE o."paymentStatus"='paid')::int AS skus_distintos
-        FROM tienda_nube."Order" o
-        LEFT JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
-        WHERE o."customerId" = :cid
-        GROUP BY 1 ORDER BY 1
+        WITH ord AS (
+          SELECT date_trunc('month', o."createdAt")::date AS mes,
+                 COUNT(*)::int                                                 AS ordenes_total,
+                 COUNT(*) FILTER (WHERE o."paymentStatus" = 'paid')::int       AS ordenes_pagas,
+                 COUNT(*) FILTER (WHERE o.status = 'cancelled')::int           AS ordenes_canceladas,
+                 COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN o.total ELSE 0 END),0)::float AS revenue
+          FROM tienda_nube."Order" o
+          WHERE o."customerId" = :cid
+          GROUP BY 1
+        ),
+        items AS (
+          SELECT date_trunc('month', o."createdAt")::date AS mes,
+                 COALESCE(SUM(oi.quantity),0)::int                AS units,
+                 COUNT(DISTINCT oi.sku)::int                      AS skus_distintos
+          FROM tienda_nube."Order" o
+          INNER JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
+          WHERE o."customerId" = :cid AND o."paymentStatus" = 'paid'
+          GROUP BY 1
+        )
+        SELECT ord.mes, ord.ordenes_total, ord.ordenes_pagas, ord.ordenes_canceladas,
+               ord.revenue,
+               COALESCE(items.units, 0)         AS units,
+               COALESCE(items.skus_distintos,0) AS skus_distintos
+        FROM ord
+        LEFT JOIN items USING (mes)
+        ORDER BY ord.mes
     """, {"cid": customer_id}) or []
     monthly_trend = [{
         "date": r[0].strftime("%Y-%m") if r[0] else "",

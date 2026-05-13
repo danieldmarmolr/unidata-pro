@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { clearToken, getUser, type AuthUser } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -83,12 +83,16 @@ const ITEMS: NavItem[] = [
     areas: ["cs"],
     children: [
       { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
+      { label: "Bandeja CS",          href: "/dashboard/cs-acciones",icon: Target         },
       { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
       { label: "Segmentacion RFM",    href: "/dashboard/rfm",        icon: Target         },
       { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows", icon: Repeat        },
       { label: "NLP Cancelaciones",     href: "/dashboard/cancel-nlp", icon: AlertTriangle },
     ],
   },
+  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Cross", roles: ONLY_GERENCIA, areas: ["ventas"] },
+  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica"] },
+  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
   {
     label: "Producto",
@@ -103,13 +107,31 @@ const ITEMS: NavItem[] = [
       { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles    },
       { label: "Forecast demanda",    href: "/dashboard/forecast",            icon: TrendingUp  },
       { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
+      { label: "Heatmap stock",       href: "/dashboard/stock-heatmap",       icon: Warehouse   },
     ],
   },
-  { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Unistore", roles: ALL, areas: ["ventas"] },
-  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Unistore", roles: ALL, areas: ["logistica"] },
-  { label: "Envios por canal", href: "/dashboard/envios-unistore", icon: Package,        group: "Unistore", roles: ALL, areas: ["logistica"] },
-  { label: "Heatmap stock",    href: "/dashboard/stock-heatmap",  icon: Warehouse,       group: "Unistore", roles: ["admin", "gerencia", "analista"], areas: ["logistica", "compras"] },
-  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Unistore", roles: ALL, areas: ["finanzas", "administracion"] },
+  // UNISTORE — todo lo que la BD de Unistore permite, locked a unistore_api
+  { label: "Ventas",           href: "/dashboard/ventas?unit=unistore",     icon: TrendingUp,     group: "Unistore", roles: ALL, areas: ["ventas"] },
+  { label: "Logistica",        href: "/dashboard/logistica?unit=unistore",  icon: Truck,          group: "Unistore", roles: ALL, areas: ["logistica"] },
+  { label: "Customer Success", href: "/dashboard/cs?unit=unistore",         icon: HeartHandshake, group: "Unistore", roles: ALL, areas: ["cs"] },
+  { label: "Cohortes",         href: "/dashboard/cohortes?unit=unistore",   icon: Users,          group: "Unistore", roles: ALL, areas: ["cs", "ventas"] },
+  { label: "Segmentacion RFM", href: "/dashboard/rfm?unit=unistore",        icon: Target,         group: "Unistore", roles: ALL, areas: ["cs", "marketing"] },
+  { label: "RFM Flows",        href: "/dashboard/rfm-flows?unit=unistore",  icon: Repeat,         group: "Unistore", roles: ALL, areas: ["cs", "marketing"] },
+  { label: "Marketing",        href: "/dashboard/marketing?unit=unistore",  icon: Megaphone,      group: "Unistore", roles: ALL, areas: ["marketing"] },
+  { label: "Finanzas",         href: "/dashboard/finanzas?unit=unistore",   icon: Wallet,         group: "Unistore", roles: ALL, areas: ["finanzas", "administracion"] },
+  { label: "Buscar clientes",  href: "/dashboard/clientes?unit=unistore",   icon: Users,          group: "Unistore", roles: ALL },
+  { label: "Envios por canal", href: "/dashboard/envios-unistore",          icon: Package,        group: "Unistore", roles: ALL, areas: ["logistica"] },
+
+  // UNIDROP — todo lo que la BD de Unidrop permite, locked a unidrop_api
+  { label: "Ventas",           href: "/dashboard/ventas?unit=unidrop",      icon: TrendingUp,     group: "Unidrop", roles: ALL, areas: ["ventas"] },
+  { label: "Logistica",        href: "/dashboard/logistica?unit=unidrop",   icon: Truck,          group: "Unidrop", roles: ALL, areas: ["logistica"] },
+  { label: "Customer Success", href: "/dashboard/cs?unit=unidrop",          icon: HeartHandshake, group: "Unidrop", roles: ALL, areas: ["cs"] },
+  { label: "Cohortes",         href: "/dashboard/cohortes?unit=unidrop",    icon: Users,          group: "Unidrop", roles: ALL, areas: ["cs", "ventas"] },
+  { label: "Segmentacion RFM", href: "/dashboard/rfm?unit=unidrop",         icon: Target,         group: "Unidrop", roles: ALL, areas: ["cs", "marketing"] },
+  { label: "RFM Flows",        href: "/dashboard/rfm-flows?unit=unidrop",   icon: Repeat,         group: "Unidrop", roles: ALL, areas: ["cs", "marketing"] },
+  { label: "Marketing",        href: "/dashboard/marketing?unit=unidrop",   icon: Megaphone,      group: "Unidrop", roles: ALL, areas: ["marketing"] },
+  { label: "Finanzas",         href: "/dashboard/finanzas?unit=unidrop",    icon: Wallet,         group: "Unidrop", roles: ALL, areas: ["finanzas", "administracion"] },
+  { label: "Buscar dropshippers", href: "/dashboard/clientes?unit=unidrop", icon: Users,          group: "Unidrop", roles: ALL },
   { label: "SaaS Metrics",     href: "/dashboard/saas",           icon: LayoutDashboard, group: "Unidrop", roles: ALL, areas: ["ventas", "marketing"] },
   { label: "Dropshippers",     href: "/dashboard/dropshippers",   icon: Users,           group: "Unidrop", roles: ALL, areas: ["ventas", "cs"] },
   { label: "Pagos Talo",       href: "/dashboard/pagos",          icon: CreditCard,      group: "Unidrop", roles: ALL, areas: ["finanzas", "administracion"] },
@@ -148,6 +170,8 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const currentUnit = searchParams?.get("unit") || null;
   const [user, setUserState] = useState<AuthUser | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [hydrated, setHydrated] = useState(false);
@@ -212,8 +236,19 @@ export function Sidebar({
     return out;
   }, [visibleItems]);
 
-  const isActive = (href: string) =>
-    pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
+  const isActive = (href: string) => {
+    // Separar pathname y query del href
+    const [hrefPath, hrefQuery = ""] = href.split("?");
+    const hrefUnit = new URLSearchParams(hrefQuery).get("unit");
+    // Match base pathname
+    const pathMatches = pathname === hrefPath || (hrefPath !== "/dashboard" && pathname.startsWith(hrefPath));
+    if (!pathMatches) return false;
+    // Si el href no especifica unit, solo activa cuando la URL TAMPOCO especifica
+    // (asi el item "Cross" no se ilumina cuando estamos en ?unit=unistore).
+    // Si el href especifica unit, debe coincidir exactamente con la URL.
+    if (hrefUnit) return currentUnit === hrefUnit;
+    return !currentUnit;
+  };
 
   const toggle = (group: string) =>
     setCollapsed((prev) => ({ ...prev, [group]: !prev[group] }));

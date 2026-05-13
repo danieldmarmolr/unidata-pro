@@ -91,6 +91,66 @@ def _quintile_score(value: float, sorted_values: list[float], higher_is_better: 
     return score if higher_is_better else (6 - score)
 
 
+def rfm_segment_customers(segment: str, unit: str = "unistore", period_days: int = 365) -> dict:
+    """Devuelve TODOS los clientes de un segmento (no solo top 10) con email/contacto.
+
+    Usado para exportar CSV / generar accion CS. Re-corre rfm_overview pero
+    devuelve la lista completa del segmento pedido + enriquece con email
+    (Unistore: tienda_nube.Customer.email; Unidrop: public.User.email)
+    """
+    overview = rfm_overview_unidrop(period_days) if unit == "unidrop" else rfm_overview(period_days)
+    full = overview.get("_customers_by_segment", {}) or {}
+    items = full.get(segment, []) or []
+    seg_meta = next((s for s in overview.get("segments", []) if s["key"] == segment), None)
+
+    # Enriquecer con email/telefono
+    ids = [int(c["customer_id"]) for c in items]
+    contacts: dict[int, dict] = {}
+    if ids:
+        ids_literal = "ARRAY[" + ",".join(str(i) for i in ids) + "]::bigint[]"
+        if unit == "unidrop":
+            eng = get_engine("unidrop")
+            rows = q(eng, f"""
+                SELECT u.id, u.email, COALESCE(u.fantasy_name, u.name) AS nombre,
+                       u.dni::text AS dni
+                FROM public."User" u
+                WHERE u.id = ANY({ids_literal})
+            """) or []
+            for r in rows:
+                contacts[int(r[0])] = {"email": r[1] or "", "nombre": r[2] or "", "dni": r[3] or ""}
+        else:
+            eng = get_engine("unistore")
+            rows = q(eng, f"""
+                SELECT c.id, c.email, c.name, c.phone
+                FROM tienda_nube."Customer" c
+                WHERE c.id = ANY({ids_literal})
+            """) or []
+            for r in rows:
+                contacts[int(r[0])] = {"email": r[1] or "", "nombre": r[2] or "", "phone": r[3] or ""}
+
+    enriched = []
+    for c in items:
+        cid = int(c["customer_id"])
+        contact = contacts.get(cid, {})
+        enriched.append({
+            **c,
+            "email": contact.get("email", ""),
+            "phone": contact.get("phone", ""),
+            "dni": contact.get("dni", ""),
+        })
+    enriched.sort(key=lambda x: -x.get("monetary", 0))
+
+    return {
+        "segment": segment,
+        "segment_label": seg_meta["label"] if seg_meta else segment,
+        "unit": unit,
+        "period_days": period_days,
+        "total": len(enriched),
+        "customers": enriched,
+        "suggested_action": (overview.get("actions") or {}).get(segment, ""),
+    }
+
+
 def rfm_overview(period_days: int = 365) -> dict:
     """Calcula RFM para todos los clientes con compras en los ultimos N dias."""
     eng = get_engine("unistore")
@@ -194,6 +254,7 @@ def rfm_overview(period_days: int = 365) -> dict:
         },
         "segments": seg_arr,
         "top_by_segment": top_by_seg,
+        "_customers_by_segment": customers_by_seg,  # interno: usado por rfm_segment_customers
         "actions": SEGMENT_ACTIONS,
         "generated_at": now_ar().isoformat(),
     }
@@ -390,6 +451,7 @@ def rfm_overview_unidrop(period_days: int = 365) -> dict:
         },
         "segments": seg_arr,
         "top_by_segment": top_by_seg,
+        "_customers_by_segment": customers_by_seg,  # interno: usado por rfm_segment_customers
         "actions": SEGMENT_ACTIONS,
         "generated_at": now_ar().isoformat(),
     }

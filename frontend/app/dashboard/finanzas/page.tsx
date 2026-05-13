@@ -15,9 +15,9 @@ import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeries } from "@/lib/types";
 
-type Unit = "unistore" | "unidrop";
 
 type FinResp = {
   unit?: string;
@@ -37,7 +37,7 @@ export default function FinanzasPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
 
   const { data, isLoading, isFetching, error } = useQuery<FinResp>({
     queryKey: ["dashboards", "finanzas", unit, period, customFrom, customTo],
@@ -64,6 +64,8 @@ export default function FinanzasPage() {
             <Segmented<Unit>
               value={unit}
               onChange={setUnit}
+              disabled={unitLocked}
+              lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
               options={[
                 { value: "unistore", label: "Unistore" },
                 { value: "unidrop", label: "Unidrop" },

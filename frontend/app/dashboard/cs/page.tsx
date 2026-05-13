@@ -20,9 +20,9 @@ import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-o
 import { SmartSearch } from "@/components/smart-search";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
 
-type Unit = "unistore" | "unidrop";
 type Channel = "all" | "tn" | "ml";
 
 type CsResp = {
@@ -52,7 +52,7 @@ export default function CustomerSuccessPage() {
  const customTo = useGlobalFilters((s) => s.customTo);
  const _qs = periodToQuery(period, customFrom, customTo);
  const router = useRouter();
- const [unit, setUnit] = useState<Unit>("unistore");
+ const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
  const [channel, setChannel] = useState<Channel>("all");
  const [drillCustomerId, setDrillCustomerId] = useState<{ id: number; name: string } | null>(null);
  const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
@@ -81,6 +81,8 @@ export default function CustomerSuccessPage() {
  <Segmented<Unit>
  value={unit}
  onChange={setUnit}
+ disabled={unitLocked}
+ lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
  options={[
  { value: "unistore", label: "Unistore" },
  { value: "unidrop", label: "Unidrop" },
@@ -180,8 +182,8 @@ export default function CustomerSuccessPage() {
  <>
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  <CategoryTable
- caption="Estados de cliente"
- subtitle="Click una fila para ver los customers de ese estado"
+ caption="Estados de cliente (Lifecycle + Churn)"
+ subtitle="Nuevo / 2da / Conv. a Recurrente / Recurrente · En riesgo / Churn pendiente / Churn confirmado / Recuperado · click una fila para ver los customers"
  data={data.customer_status_dist ?? []}
  formatter="number"
  extraColumns={[
@@ -281,7 +283,7 @@ export default function CustomerSuccessPage() {
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  <CategoryTable
  caption="Estados de cliente"
- subtitle="Nuevo · 2da compra · Convertido a Recurrente · Recurrente"
+ subtitle="Lifecycle ampliado · Nuevo / 2da / Conv. a Recurrente / Recurrente + En riesgo / Churn pendiente / Churn confirmado / Recuperado (cadencia personal)"
  data={data.customer_status_dist ?? []}
  formatter="number"
  extraColumns={[

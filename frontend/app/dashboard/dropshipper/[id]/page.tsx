@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   XCircle,
   Clock,
+  X,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
@@ -28,6 +29,7 @@ import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
+import { useTableSort, SortHeader } from "@/lib/use-table-sort";
 
 type DropshipperDetail = {
   user: {
@@ -126,12 +128,32 @@ type DropshipperDetail = {
     ml_orders: number;
     tn_orders: number;
   }[];
+  unified_orders?: UnifiedOrder[];
   top_clientes_finales?: {
     category: string;
     value: number;
     extra?: { dni?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
   }[];
   generated_at: string;
+};
+
+type UnifiedOrder = {
+  origen: "ml" | "tn";
+  internal_id: number | null;
+  external_id: string;
+  number: string;
+  fecha: string;
+  status: string;
+  payment_status: string;
+  shipping_status: string;
+  total: number;
+  merch_cost: number;
+  shipping_cost: number;
+  profit_unidrop: number;
+  buyer_name: string;
+  shipping_type: string;
+  intent_id: number | null;
+  enriched?: boolean;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -161,6 +183,33 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
     queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}?${periodToQuery(period, customFrom, customTo)}`),
     staleTime: 60_000,
   });
+
+  // Click-to-filter: cuando se selecciona un PaymentIntent en la tabla derecha,
+  // refetcheamos unified_orders pasandole intent_id. Sin seleccion usamos los
+  // unified_orders que vienen en data (top 50 sin filtro).
+  const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
+  const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
+  const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
+    queryKey: ["dropshipper-unified", id, selectedIntent],
+    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders?intent_id=${selectedIntent}&limit=200`),
+    enabled: !!selectedIntent,
+    staleTime: 60_000,
+  });
+  const unifiedAll: UnifiedOrder[] = selectedIntent
+    ? (filteredQuery.data?.items ?? [])
+    : (data?.unified_orders ?? []);
+  const unifiedFiltered: UnifiedOrder[] = channelFilter === "all"
+    ? unifiedAll
+    : unifiedAll.filter((o) => o.origen === channelFilter);
+  const countMl = unifiedAll.filter((o) => o.origen === "ml").length;
+  const countTn = unifiedAll.filter((o) => o.origen === "tn").length;
+  const unifiedSorted = useTableSort<UnifiedOrder>(unifiedFiltered, "fecha", "desc");
+  const unifiedOrders = unifiedSorted.rows;
+  // Sort para Pagos Talo
+  const pagosSorted = useTableSort<NonNullable<typeof data>["ultimos_pagos"][number]>(
+    data?.ultimos_pagos ?? [],
+    "fecha", "desc",
+  );
 
   if (isLoading) {
     return (
@@ -551,36 +600,100 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Últimas ventas MELI */}
+        {/* Banner de filtro activo */}
+        {selectedIntent != null && (
+          <div className="mb-3 flex items-center gap-3 px-4 py-2 rounded-lg bg-amber-50 border border-amber-300 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-bold text-amber-900">
+              Filtrando por PaymentIntent <span className="font-mono">#{selectedIntent}</span>
+            </span>
+            <span className="text-amber-800">
+              {filteredQuery.isLoading
+                ? "cargando..."
+                : `${unifiedOrders.length} ${unifiedOrders.length === 1 ? "orden" : "órdenes"} en este pago`}
+            </span>
+            <button
+              onClick={() => setSelectedIntent(null)}
+              className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded border border-amber-400 bg-white hover:bg-amber-100 font-bold text-amber-900"
+            >
+              <X size={11} /> limpiar filtro
+            </button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
+          {/* Vista unificada estilo Unidrop panel */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-bold text-text">Últimas ventas en Mercado Libre</h3>
-              <p className="text-[11px] text-text-muted">{data.ultimas_ventas.length} órdenes más recientes · ordenadas por fecha</p>
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Ventas dropshipper (vista unificada)</h3>
+                <p className="text-[11px] text-text-muted">
+                  {unifiedOrders.length} órdenes {channelFilter === "all" ? "ML + TN" : channelFilter.toUpperCase()} · click en número para abrir en panel Unidrop
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {selectedIntent != null && filteredQuery.isFetching && (
+                  <span className="text-[10px] text-text-muted italic">actualizando...</span>
+                )}
+                <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
+                  <button
+                    onClick={() => setChannelFilter("all")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}
+                  >
+                    Todas ({countMl + countTn})
+                  </button>
+                  <button
+                    onClick={() => setChannelFilter("ml")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}
+                  >
+                    MELI ({countMl})
+                  </button>
+                  <button
+                    onClick={() => setChannelFilter("tn")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-emerald-100 text-emerald-900 shadow" : "text-text-muted hover:text-text")}
+                  >
+                    TN ({countTn})
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2">Number · DROP</th>
-                    <th className="text-left px-2 py-2">ML Order</th>
-                    <th className="text-left px-2 py-2">Estado</th>
-                    <th className="text-left px-2 py-2">Fecha</th>
-                    <th className="text-right px-2 py-2">Total</th>
-                    <th className="text-right px-2 py-2">Profit</th>
+                    <th className="text-left px-2 py-2"><SortHeader col="origen" label="Origen" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="number" label="Number · DROP" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="buyer_name" label="Cliente final" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="merch_cost" label="Mercadería" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="shipping_cost" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-center px-2 py-2"><SortHeader col="shipping_status" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-center px-2 py-2"><SortHeader col="payment_status" label="Pago" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.ultimas_ventas.length === 0 ? (
+                  {unifiedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="text-center text-text-muted py-6">
-                        Sin ventas registradas
+                      <td colSpan={9} className="text-center text-text-muted py-6">
+                        {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
                       </td>
                     </tr>
                   ) : (
-                    data.ultimas_ventas.map((o) => (
-                      <tr key={o.id ?? o.ml_order_id} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-3 py-1.5 font-mono">
+                    unifiedOrders.map((o, idx) => (
+                      <tr key={`${o.origen}-${o.internal_id ?? o.external_id}-${idx}`} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-2 py-1.5">
+                          <span
+                            className={
+                              "inline-block px-1.5 py-0.5 rounded text-[9px] uppercase font-bold border " +
+                              (o.origen === "ml"
+                                ? "bg-yellow-50 text-yellow-800 border-yellow-300"
+                                : "bg-emerald-50 text-emerald-800 border-emerald-300")
+                            }
+                          >
+                            {o.origen === "ml" ? "ML" : "TN"}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1.5 font-mono">
                           {o.number ? (
                             <a
                               href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
@@ -593,33 +706,37 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                               <ExternalLink size={9} />
                             </a>
                           ) : (
-                            <span className="text-text-muted italic text-[10px]">sin sync OML</span>
+                            <span className="text-text-muted italic text-[10px]">sin number</span>
+                          )}
+                          {o.external_id && (
+                            <div className="text-[9px] text-text-muted font-mono">
+                              {o.origen === "ml" ? "ML " : "TN "}{o.external_id}
+                            </div>
                           )}
                         </td>
-                        <td className="px-2 py-1.5 font-mono">
-                          {o.ml_order_id ? (
-                            <a
-                              href={`https://www.mercadolibre.com.ar/ventas/${o.ml_order_id}/detalle`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-text-muted hover:text-primary hover:underline text-[10px]"
-                              title="Abrir en Mercado Libre"
-                            >
-                              {o.ml_order_id}
-                              <ExternalLink size={9} />
-                            </a>
-                          ) : (
-                            <span className="text-text-muted text-[10px]">—</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.status)}`}>
-                            {o.status || "-"}
-                          </span>
+                        <td className="px-2 py-1.5 max-w-[160px] truncate" title={o.buyer_name}>
+                          {o.buyer_name || <span className="text-text-muted">—</span>}
                         </td>
                         <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                          {o.merch_cost > 0 ? formatCurrency(o.merch_cost) : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                          {o.shipping_cost > 0 ? formatCurrency(o.shipping_cost) : "—"}
+                        </td>
                         <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-violet-700">{formatCurrency(o.profit_unidrop)}</td>
+                        <td className="px-2 py-1.5 text-center">
+                          {o.shipping_status ? (
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.shipping_status)}`}>
+                              {o.shipping_status}
+                            </span>
+                          ) : <span className="text-text-muted text-[10px]">—</span>}
+                        </td>
+                        <td className="px-2 py-1.5 text-center">
+                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.payment_status || o.status)}`}>
+                            {o.payment_status || o.status || "—"}
+                          </span>
+                        </td>
                       </tr>
                     ))
                   )}
@@ -628,107 +745,72 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             </div>
           </div>
 
-          {/* Últimas ventas Tienda Nube */}
-          {data.ultimas_ventas_tn && data.ultimas_ventas_tn.length > 0 && (
-            <div className="bg-surface border border-border rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-border">
-                <h3 className="text-sm font-bold text-text">Últimas ventas en Tienda Nube</h3>
-                <p className="text-[11px] text-text-muted">{data.ultimas_ventas_tn.length} órdenes TN del dropshipper · click para abrir en panel Unidrop</p>
-              </div>
-              <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
-                    <tr>
-                      <th className="text-left px-3 py-2">Number · DROP</th>
-                      <th className="text-left px-2 py-2">TN ID</th>
-                      <th className="text-left px-2 py-2">Estado</th>
-                      <th className="text-left px-2 py-2">Fecha</th>
-                      <th className="text-right px-2 py-2">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.ultimas_ventas_tn.map((o) => (
-                      <tr key={o.id} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-3 py-1.5 font-mono">
-                          {o.number ? (
-                            <a
-                              href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
-                              title="Abrir en panel Unidrop"
-                            >
-                              {o.number}
-                              <ExternalLink size={9} />
-                            </a>
-                          ) : (
-                            <span className="text-text-muted text-[10px]">—</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 font-mono text-[10px] text-text-muted">{o.id}</td>
-                        <td className="px-2 py-1.5">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.status)}`}>
-                            {o.status || "-"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Últimos pagos Talo */}
+          {/* Últimos pagos Talo (interactivo: click filtra la tabla izq) */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-border">
               <h3 className="text-sm font-bold text-text">Últimos pagos a Unidrop (Talo Pay)</h3>
-              <p className="text-[11px] text-text-muted">PaymentIntents · {pg.procesados} procesados / {pg.total_intents} totales</p>
+              <p className="text-[11px] text-text-muted">
+                PaymentIntents · {pg.procesados} procesados / {pg.total_intents} totales · <strong>click en una fila</strong> para filtrar órdenes
+              </p>
             </div>
-            <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
-                    <th className="text-left px-3 py-2">ID</th>
-                    <th className="text-left px-2 py-2">Estado</th>
-                    <th className="text-left px-2 py-2">Fecha</th>
-                    <th className="text-right px-2 py-2">Pagado</th>
-                    <th className="text-right px-2 py-2">Pendiente</th>
-                    <th className="text-right px-2 py-2">Origen</th>
+                    <th className="text-left px-3 py-2"><SortHeader col="id" label="ID" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="status" label="Estado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="paid" label="Pagado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="pending" label="Pendiente" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="ml_orders" label="Origen" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.ultimos_pagos.length === 0 ? (
+                  {pagosSorted.rows.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="text-center text-text-muted py-6">
                         Sin pagos registrados
                       </td>
                     </tr>
                   ) : (
-                    data.ultimos_pagos.map((p) => (
-                      <tr key={p.id} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-3 py-1.5 font-mono text-text-muted">{p.id}</td>
-                        <td className="px-2 py-1.5">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(p.status)}`}>
-                            {p.status || "-"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(p.fecha)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700 font-semibold">
-                          {formatCurrency(p.paid)}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-rose-700">
-                          {p.pending > 0 ? formatCurrency(p.pending) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right text-[10px] text-text-muted">
-                          {p.ml_orders > 0 && <span>ML×{p.ml_orders} </span>}
-                          {p.tn_orders > 0 && <span>TN×{p.tn_orders}</span>}
-                          {p.ml_orders === 0 && p.tn_orders === 0 && "—"}
-                        </td>
-                      </tr>
-                    ))
+                    pagosSorted.rows.map((p) => {
+                      const isSelected = selectedIntent === p.id;
+                      const canFilter = p.status?.toLowerCase() === "processed" && (p.ml_orders + p.tn_orders) > 0;
+                      return (
+                        <tr
+                          key={p.id}
+                          onClick={() => canFilter && setSelectedIntent(isSelected ? null : p.id)}
+                          className={
+                            "border-t border-border transition " +
+                            (canFilter ? "cursor-pointer " : "cursor-default opacity-60 ") +
+                            (isSelected ? "bg-amber-100/60 hover:bg-amber-100" : "hover:bg-soft/40")
+                          }
+                          title={canFilter ? (isSelected ? "Click para limpiar filtro" : "Click para filtrar órdenes de este pago") : "Sin órdenes asociadas"}
+                        >
+                          <td className="px-3 py-1.5 font-mono text-text-muted">
+                            {isSelected && <span className="text-amber-700 mr-1">▶</span>}
+                            {p.id}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(p.status)}`}>
+                              {p.status || "-"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(p.fecha)}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700 font-semibold">
+                            {formatCurrency(p.paid)}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-rose-700">
+                            {p.pending > 0 ? formatCurrency(p.pending) : "—"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-[10px] text-text-muted">
+                            {p.ml_orders > 0 && <span>ML×{p.ml_orders} </span>}
+                            {p.tn_orders > 0 && <span>TN×{p.tn_orders}</span>}
+                            {p.ml_orders === 0 && p.tn_orders === 0 && "—"}
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

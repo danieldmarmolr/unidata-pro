@@ -10,8 +10,7 @@ import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-
-type Unit = "unistore" | "unidrop";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 
 type UnistoreRow = {
   id: number;
@@ -60,7 +59,7 @@ export default function ClientesPage() {
   // Buscar funciona en las DOS unidades. Cada una es una nocion distinta de
   // "cliente": Unistore = comprador final TN; Unidrop = dropshipper que opera
   // con nuestra plataforma. La pestana superior elige donde busca el query.
-  const [unit, setUnit] = useState<Unit>("unistore");
+  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [query, setQuery] = useState("");
   const [onlyActive, setOnlyActive] = useState(false);
   const [debounced, setDebounced] = useState("");
@@ -98,6 +97,8 @@ export default function ClientesPage() {
           <Segmented<Unit>
             value={unit}
             onChange={setUnit}
+            disabled={unitLocked}
+            lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
             options={[
               { value: "unistore", label: "Unistore - Compradores TN" },
               { value: "unidrop", label: "Unidrop - Dropshippers" },

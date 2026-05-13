@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
 from app.config import Settings, get_settings
-from app.db import users_db
+from app.db import users_db, areas_db
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -53,13 +53,30 @@ async def current_user(
     row = users_db.find_by_id(user_id)
     if not row or not row["is_active"]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inactivo")
+    profile = areas_db.get_user_profile(user_id)
     return {
         "id": row["id"],
         "email": row["email"],
         "name": row["name"],
         "role": row["role"],
         "is_admin": bool(row.get("is_admin")) or row["role"] == "admin",
+        "area_id": profile.get("area_id") if profile else None,
+        "area_slug": profile.get("area_slug") if profile else None,
     }
+
+
+def require_area(user: dict, areas: list[str]) -> None:
+    """Lanza 403 si el usuario no pertenece a ninguna de las areas requeridas.
+    Admin y gerencia tienen bypass completo.
+    """
+    if user.get("is_admin") or user.get("role") in ("admin", "gerencia"):
+        return
+    user_area = user.get("area_slug")
+    if not user_area or user_area not in areas:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Tu área ({user_area or 'sin área asignada'}) no tiene acceso a este recurso",
+        )
 
 
 async def require_admin(user: Annotated[dict, Depends(current_user)]) -> dict:

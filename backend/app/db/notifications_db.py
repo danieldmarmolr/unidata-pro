@@ -131,8 +131,15 @@ def count_pending(severity: str | None = None) -> int:
         where.append("severity = %s")
         params.append(severity)
     with get_conn() as c, c.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*)::int FROM it_alerts WHERE {' AND '.join(where)}", params)
-        return int(cur.fetchone()[0] or 0)
+        cur.execute(f"SELECT COUNT(*)::int AS n FROM it_alerts WHERE {' AND '.join(where)}", params)
+        row = cur.fetchone()
+        if row is None:
+            return 0
+        # Compat con tuple cursor o RealDictCursor
+        try:
+            return int(row[0] or 0)
+        except (KeyError, TypeError):
+            return int(row.get("n") or 0)
 
 
 def mark_resolved(alert_id: int, user_id: int) -> dict | None:

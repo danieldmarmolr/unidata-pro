@@ -164,14 +164,19 @@
 | BUG-017 | Cloudflare puso CNAMEs en proxy ON post-Connect | Fixed | manually changed to DNS only |
 | BUG-018 | Dropshippers list mostraba "0 ventas" para muchos dropshippers | Fixed | MAX(OML.count, PaymentIntent.count) |
 
+### ✅ Completados recientemente
+
+| ID | Story | Notas |
+|---|---|---|
+| US-412 | RFM Flows toggle Unidrop | Done · toggle Unistore/Unidrop funciona, PaymentIntent ground truth |
+| US-608 | RBAC enforcement por área | Done · sidebar + API endpoints (require_area en ~50 endpoints, bypass admin/gerencia) |
+| US-XXX | Sistema notificaciones in-app (banner + bandeja "marcar revisada") | Done · it_alerts + endpoints + bandeja + banner + botón marcar revisada |
+
 ### 🟡 Pendiente
 
 | ID | Story | Notas |
 |---|---|---|
-| US-412 | RFM Flows toggle Unidrop | Hoy solo Unistore funciona |
-| US-608 | RBAC enforcement por área | Infraestructura lista (areas + role), falta filtrado |
-| US-XXX | Sistema notificaciones in-app (banner + bandeja "marcar revisada") | Diseñado, no implementado |
-| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | En curso · Cloudflare Redirect Rule |
+| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | Cloudflare Redirect Rule pendiente (acción manual) |
 
 ---
 

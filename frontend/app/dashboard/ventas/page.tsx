@@ -18,10 +18,10 @@ import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
+import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { SalesOverview } from "@/lib/types";
 
 type Channel = "all" | "tn" | "ml";
-type Unit = "unistore" | "unidrop";
 
 type Drill =
  | { kind: "product"; productId: string; name: string }
@@ -34,7 +34,7 @@ export default function VentasPage() {
  const customTo = useGlobalFilters((s) => s.customTo);
  const _qs = periodToQuery(period, customFrom, customTo);
  const router = useRouter();
- const [unit, setUnit] = useState<Unit>("unistore");
+ const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
  const [channel, setChannel] = useState<Channel>("all");
  const [drill, setDrill] = useState<Drill | null>(null);
 
@@ -73,6 +73,8 @@ export default function VentasPage() {
  <Segmented<Unit>
  value={unit}
  onChange={setUnit}
+ disabled={unitLocked}
+ lockedHint={unitLocked ? `Fijado a ${unit}` : undefined}
  options={[
  { value: "unistore", label: "Unistore" },
  { value: "unidrop", label: "Unidrop" },
@@ -194,9 +196,9 @@ export default function VentasPage() {
  <div className="mb-6">
  {!data.cost_data_available && (
  <div className="mb-3 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">
- ⚠ <strong>Costo no disponible:</strong> el campo <code>OrderItem.cost</code> esta
- vacio en los 455k registros. Sin costo no se calcula markup. Cuando se integre el
- costo (probablemente desde Digip o Contabilium) los datos aparecen automaticamente.
+ ⚠ <strong>Markup sin calcular:</strong> los SKUs de las ventas no matchean con
+ ningun lote en <a href="/dashboard/costos" className="underline font-semibold">Costos de Importación</a>.
+ Subí los costos vigentes via Importar CSV/XLSX y el markup aparece automaticamente.
  </div>
  )}
  <CategoryTable

@@ -269,6 +269,65 @@ def sales_unistore(period: str = "30d", channel: str = "all") -> dict:
             "extra": {"orders": int(r[2] or 0)},
         } for r in rows]
 
+    # ---------- Top productos con MARKUP (costo desde Costos de Importacion) ----------
+    # Como Order.OrderItem.cost esta vacio, levantamos el costo del ultimo lote
+    # por SKU desde costs_db (Supabase, local_persistence) y lo cruzamos en
+    # Python (son DBs distintas, no podemos JOIN directo).
+    top_markup: list[dict] = []
+    cost_data_available = False
+    try:
+        from app.db import costs_db
+        latest_costs = costs_db.current_costs(limit=10000) or []
+        # Index por sku lowercase (es como costs_db indexa)
+        cost_by_sku: dict[str, dict] = {}
+        for c in latest_costs:
+            sku_key = (c.get("sku") or "").strip().lower()
+            if not sku_key:
+                continue
+            # Preferimos costo_unit_ars (incluye logistica/iva), fallback a precio_ars
+            costo_unit = c.get("costo_unit_ars") or c.get("costo_con_iva_unit_ars") or 0
+            if costo_unit:
+                cost_by_sku[sku_key] = {
+                    "costo_unit_ars": float(costo_unit),
+                    "lote": c.get("lote"),
+                    "imported_at": c.get("imported_at"),
+                }
+        # Enrich top_products
+        for tp in top_products:
+            sku = (tp.get("sku") or "").strip().lower()
+            if not sku:
+                continue
+            c = cost_by_sku.get(sku)
+            if not c:
+                continue
+            costo_unit = c["costo_unit_ars"]
+            units = int(tp.get("units") or 0)
+            revenue = float(tp.get("revenue") or 0)
+            costo_total = costo_unit * units
+            if revenue and costo_total:
+                markup_abs = revenue - costo_total
+                markup_pct = round(markup_abs / costo_total * 100, 1) if costo_total else 0
+                top_markup.append({
+                    "category": tp.get("name") or tp.get("sku") or "?",
+                    "value": revenue,
+                    "extra": {
+                        "sku": tp.get("sku"),
+                        "units": units,
+                        "revenue": revenue,
+                        "costo": round(costo_total, 0),
+                        "costo_unit": round(costo_unit, 2),
+                        "markup_abs": round(markup_abs, 0),
+                        "markup_pct": f"{markup_pct:+.1f}%",
+                        "lote": c.get("lote"),
+                    },
+                })
+        if top_markup:
+            cost_data_available = True
+            # Ordenamos por markup_abs DESC (los mas rentables primero)
+            top_markup.sort(key=lambda x: -float(x["extra"].get("markup_abs") or 0))
+    except Exception as e:
+        log.warning("sales_unistore markup enrich fail: %s", e)
+
     return {
         "period": period,
         "channel": channel,
@@ -277,6 +336,8 @@ def sales_unistore(period: str = "30d", channel: str = "all") -> dict:
         "payment_status": payment_status,
         "top_products": top_products,
         "top_provinces": top_provinces,
+        "top_markup": top_markup,
+        "cost_data_available": cost_data_available,
         "daily_revenue": daily,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
