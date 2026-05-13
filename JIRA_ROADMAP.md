@@ -118,7 +118,7 @@
 | US-409 | Pagos Talo: "Órdenes pagadas" en vez de "Transacciones" | Done | unfold mlOrderIds + orderIds |
 | US-410 | Suscripciones MELI list page | Done | |
 | US-411 | Envíos Unidrop (por modo MELI) | Done | |
-| US-412 | RFM Flows con popups (Unidrop) | Pendiente | hoy solo Unistore |
+| US-412 | RFM Flows con popups (Unidrop) | Done | toggle Unistore/Unidrop, PaymentIntent ground truth |
 
 ### 🟢 Unidev (Devoluciones)
 
@@ -139,7 +139,7 @@
 | US-605 | Stories panel en /home (cumples + aniversarios del mes) | Done | banner ámbar |
 | US-606 | Sidebar entry "Mi perfil" en grupo Principal | Done | |
 | US-607 | Admin asigna `role=gerencia` desde /admin/users (cross-area access) | Done | |
-| US-608 | RBAC enforcement por área (colaboradores ven solo su área) | Pendiente | infraestructura lista, falta enforcement |
+| US-608 | RBAC enforcement por área (colaboradores ven solo su área) | Done | sidebar + ~50 endpoints API + cs_actions |
 
 ### 🟢 Fixes críticos y bugs resueltos
 
