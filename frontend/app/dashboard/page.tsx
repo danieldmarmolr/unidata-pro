@@ -7,7 +7,7 @@ import { FileDown } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
-import { RevenueChart } from "@/components/revenue-chart";
+import { RevenueChart, CHANNEL_COLORS } from "@/components/revenue-chart";
 import { DonutChart } from "@/components/donut-chart";
 import { CategoryTable } from "@/components/generic-table";
 import { IntegrationHealthList } from "@/components/integration-health";
@@ -277,6 +277,7 @@ function SearchIcon() {
 
 export default function ExecutiveDashboardPage() {
   const [generating, setGenerating] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const router = useRouter();
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
@@ -460,7 +461,10 @@ export default function ExecutiveDashboardPage() {
             {isLoading || !data ? (
               <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
             ) : (
-              <RevenueChart series={data.revenue_by_channel} />
+              <RevenueChart
+                series={data.revenue_by_channel}
+                filterSeries={selectedChannel}
+              />
             )}
           </div>
           <div>
@@ -471,6 +475,9 @@ export default function ExecutiveDashboardPage() {
                 caption={`Mix de revenue · ${periodLabel}`}
                 data={(data.revenue_mix ?? []).map((r) => ({ name: r.category, value: r.value }))}
                 height={300}
+                colorMap={CHANNEL_COLORS}
+                highlightName={selectedChannel}
+                onSliceClick={(d) => setSelectedChannel((prev) => prev === d.name ? null : d.name)}
               />
             )}
           </div>
