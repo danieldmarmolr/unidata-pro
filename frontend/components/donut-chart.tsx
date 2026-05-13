@@ -57,7 +57,11 @@ export function DonutChart({
             stroke="#fff"
             strokeWidth={2}
             onClick={(d: any) => {
-              if (onSliceClick && d?.payload) onSliceClick({ name: d.payload.name, value: d.payload.value });
+              if (onSliceClick) {
+                const name = d?.name ?? d?.payload?.name;
+                const value = d?.value ?? d?.payload?.value ?? 0;
+                if (name != null) onSliceClick({ name, value });
+              }
             }}
             label={({ name, value, percent }) => {
               const pct = ((percent ?? 0) * 100).toFixed(0);
