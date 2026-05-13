@@ -23,8 +23,8 @@
 | Métrica | Valor |
 |---|---|
 | Stories totales | 96 |
-| Stories Done | 92 |
-| Stories pendientes | 4 |
+| Stories Done | 96 |
+| Stories pendientes | 0 |
 | Bugs críticos resueltos | 18 |
 | Últimos 14 días | 35 stories Done |
 | Avance global | ~96% |
@@ -176,7 +176,7 @@
 
 | ID | Story | Notas |
 |---|---|---|
-| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | Cloudflare Redirect Rule pendiente (acción manual) |
+| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | Done · Cloudflare Redirect Rule configurada |
 
 ---
 

@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { fmtArDateTime } from "@/lib/dates";
 import { CellRenderer } from "@/components/drilldown-modal";
 import { Download, ArrowDown, ArrowUp, RefreshCcw, Search } from "lucide-react";
 
@@ -24,8 +25,8 @@ function formatCell(col: string, v: unknown): string {
   }
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) {
     try {
-      const d = new Date(v);
-      if (!isNaN(d.getTime())) return d.toLocaleString("es-AR");
+      const formatted = fmtArDateTime(v);
+      if (formatted !== "—") return formatted;
     } catch {}
   }
   return String(v);

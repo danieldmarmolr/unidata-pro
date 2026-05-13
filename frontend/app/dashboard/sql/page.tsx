@@ -7,6 +7,7 @@ import { Segmented } from "@/components/segmented";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/utils";
+import { fmtArDateTime } from "@/lib/dates";
 import { Play, Download, Trash2, History } from "lucide-react";
 
 const Editor = dynamic(() => import("@monaco-editor/react").then((m) => m.default), {
@@ -237,7 +238,7 @@ export default function SqlPage() {
                   >
                     <div className="text-[10px] text-text-muted mb-1 flex justify-between">
                       <span className="font-bold uppercase">{h.unit}</span>
-                      <span>{new Date(h.ts).toLocaleString("es-AR")}</span>
+                      <span>{fmtArDateTime(h.ts)}</span>
                     </div>
                     <div className="text-xs font-mono text-text line-clamp-2">{h.sql.slice(0, 120)}</div>
                   </button>

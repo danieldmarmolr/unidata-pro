@@ -7,6 +7,7 @@ import { Topbar } from "@/components/topbar";
 import { Segmented } from "@/components/segmented";
 import { api, getToken, getUser } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { fmtArDateTime } from "@/lib/dates";
 import { UploadCloud, Trash2, RefreshCcw, AlertCircle, ChevronDown, ChevronRight, Filter } from "lucide-react";
 
 type Lote = {
@@ -101,7 +102,7 @@ export default function CostosPage() {
             {rate && (
               <div
                 className="flex items-center gap-2 text-xs text-text-muted bg-surface border border-border rounded-lg px-3 py-2"
-                title={`Fuente: ${rate.source} · ${new Date(rate.fetched_at).toLocaleString("es-AR")}${rate.stale ? " (stale)" : ""}`}
+                title={`Fuente: ${rate.source} · ${fmtArDateTime(rate.fetched_at)}${rate.stale ? " (stale)" : ""}`}
               >
                 <span className="font-semibold text-text">USD venta:</span>
                 <span className="font-bold text-primary">$ {rate.venta.toFixed(2)}</span>
@@ -485,7 +486,7 @@ function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => v
                     <td className="px-4 py-2 text-right tabular-nums">{formatNumber(l.skus)}</td>
                     <td className="px-4 py-2 text-xs text-text-muted">
                       <div>{l.imported_by}</div>
-                      <div className="text-[10px]">{new Date(l.imported_at).toLocaleString("es-AR")}</div>
+                      <div className="text-[10px]">{fmtArDateTime(l.imported_at)}</div>
                     </td>
                     <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}>
                       {isAdmin && (

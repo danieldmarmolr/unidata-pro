@@ -22,6 +22,7 @@ import logging
 import threading
 
 from app.db.local_persistence import get_conn
+from app.utils.tz import today_ar
 
 log = logging.getLogger("unidata.areas")
 
@@ -205,7 +206,7 @@ def stories_for_month(month: int | None = None) -> dict:
     """Devuelve cumples + aniversarios del mes indicado (default: mes actual).
     Para 'cumples hoy' filtramos del set."""
     init()
-    today = dt.date.today()
+    today = today_ar()
     target_month = int(month) if month else today.month
 
     with get_conn() as c, c.cursor() as cur:

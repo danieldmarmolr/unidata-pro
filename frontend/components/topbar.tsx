@@ -10,6 +10,7 @@ import { useGlobalFilters, type Period } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { SkuSearchBox } from "@/components/sku-search-box";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { todayArIso } from "@/lib/dates";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "HOY" },
@@ -21,7 +22,7 @@ const PERIOD_OPTIONS: { value: Period; label: string }[] = [
 ];
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayArIso();
 }
 
 function CustomRangePicker() {
