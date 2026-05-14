@@ -1497,16 +1497,27 @@ def dropshipper_unified_orders(
             _wo_cols = list_columns(eng, "mercado_libre_dev", "WebhookOrder")
             log.info("WebhookOrder cols=%s", sorted(_wo_cols)[:20])
             _wo_order_col = next((c for c in ["orderId", "mlOrderId", "order_id", "id"] if c in _wo_cols), None)
-            _wo_buyer_col = next((c for c in ["buyerNickname", "buyerName", "buyer_name", "buyer", "buyerId"] if c in _wo_cols), None)
-            _wo_number_col = next((c for c in ["number", "orderNumber", "order_number"] if c in _wo_cols), None)
+            _wo_buyer_col = next((c for c in ["buyerNickname", "buyerName", "buyer_name", "buyer"] if c in _wo_cols), None)
             _wo_status_col = next((c for c in ["status", "orderStatus"] if c in _wo_cols), None)
-            if _wo_order_col and _wo_buyer_col:
-                _wo_num_sel = f'COALESCE("{_wo_number_col}"::text, \'\')' if _wo_number_col else "''"
-                _wo_st_sel = f'COALESCE("{_wo_status_col}"::text, \'\')' if _wo_status_col else "''"
+            # Buyer info: columna directa o extraida del payload JSON
+            # WebhookOrder.payload = {"buyer": {"first_name": "...", "last_name": "...", "nickname": "..."}}
+            if _wo_buyer_col:
+                _wo_buyer_expr = f'COALESCE("{_wo_buyer_col}"::text, \'\')'
+            elif "payload" in _wo_cols:
+                _wo_buyer_expr = (
+                    "COALESCE(TRIM("
+                    "  COALESCE(payload->'buyer'->>'first_name','') || ' ' ||"
+                    "  COALESCE(payload->'buyer'->>'last_name','')"
+                    "), payload->'buyer'->>'nickname', '')"
+                )
+            else:
+                _wo_buyer_expr = None
+            _wo_st_sel = f'COALESCE("{_wo_status_col}"::text, \'\')' if _wo_status_col else "''"
+            if _wo_order_col and _wo_buyer_expr:
                 _wo_rows = q(eng, f"""
                     SELECT "{_wo_order_col}"::text,
-                           COALESCE("{_wo_buyer_col}"::text, '') AS buyer,
-                           {_wo_num_sel} AS num,
+                           COALESCE({_wo_buyer_expr}, '') AS buyer,
+                           '' AS num,
                            {_wo_st_sel} AS status
                     FROM mercado_libre_dev."WebhookOrder"
                     WHERE "{_wo_order_col}"::text = ANY({_wo_lit})
