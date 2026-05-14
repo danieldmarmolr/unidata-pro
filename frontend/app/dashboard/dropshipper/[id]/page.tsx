@@ -22,6 +22,10 @@ import {
   XCircle,
   Clock,
   X,
+  ChevronRight,
+  ChevronDown,
+  Truck,
+  RotateCcw,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
@@ -143,6 +147,9 @@ type DropshipperDetail = {
   generated_at: string;
 };
 
+type OrderItem = { sku: string; name: string; qty: number; price: number };
+type Shipment = { carrier: string; status: string; entregado: string | null; costo: number } | null;
+
 type UnifiedOrder = {
   origen: "ml" | "tn";
   internal_id: number | null;
@@ -162,6 +169,9 @@ type UnifiedOrder = {
   shipping_type: string;
   intent_id: number | null;
   enriched?: boolean;
+  items?: OrderItem[];
+  shipment?: Shipment;
+  returns_count?: number;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -197,6 +207,9 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   // unified_orders que vienen en data (top 50 sin filtro).
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const toggleExpand = (key: string) =>
+    setExpandedOrders((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
     queryKey: ["dropshipper-unified", id, selectedIntent],
     queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders?intent_id=${selectedIntent}&limit=200`),
@@ -869,6 +882,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               <table className="w-full text-xs">
                 <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                   <tr>
+                    <th className="w-7 px-1 py-2"></th>
                     <th className="text-left px-2 py-2"><SortHeader col="origen" label="Origen" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2"><SortHeader col="number" label="Number · DROP" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2"><SortHeader col="buyer_name" label="Cliente final" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
@@ -888,69 +902,130 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       </td>
                     </tr>
                   ) : (
-                    unifiedOrders.map((o, idx) => (
-                      <tr key={`${o.origen}-${o.internal_id ?? o.external_id}-${idx}`} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-2 py-1.5">
-                          <span
-                            className={
-                              "inline-block px-1.5 py-0.5 rounded text-[9px] uppercase font-bold border " +
-                              (o.origen === "ml"
-                                ? "bg-yellow-50 text-yellow-800 border-yellow-300"
-                                : "bg-emerald-50 text-emerald-800 border-emerald-300")
-                            }
-                          >
-                            {o.origen === "ml" ? "ML" : "TN"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 font-mono">
-                          {o.number ? (
-                            <a
-                              href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
-                              title="Abrir en panel Unidrop"
-                            >
-                              {o.number}
-                              <ExternalLink size={9} />
-                            </a>
-                          ) : (
-                            <span className="text-text-muted italic text-[10px]">sin number</span>
-                          )}
-                          {o.external_id && (
-                            <div className="text-[9px] text-text-muted font-mono">
-                              {o.origen === "ml" ? "ML " : "TN "}{o.external_id}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 max-w-[160px]">
-                          <div className="truncate" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted">—</span>}</div>
-                          {(o.billing_city || o.billing_province) && (
-                            <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                          {o.merch_cost > 0 ? formatCurrency(o.merch_cost) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                          {o.shipping_cost > 0 ? formatCurrency(o.shipping_cost) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
-                        <td className="px-2 py-1.5 text-center">
-                          {o.shipping_status ? (
-                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.shipping_status)}`}>
-                              {o.shipping_status}
+                    unifiedOrders.map((o, idx) => {
+                      const rowKey = `${o.origen}-${o.internal_id ?? o.external_id}-${idx}`;
+                      const hasItems = (o.items?.length ?? 0) > 0;
+                      const hasShip = !!o.shipment;
+                      const hasReturns = (o.returns_count ?? 0) > 0;
+                      const isExpandable = hasItems || hasShip || hasReturns;
+                      const isExpanded = expandedOrders.has(rowKey);
+                      return (
+                        <>
+                        <tr key={rowKey} className={`border-t border-border ${isExpandable ? "cursor-pointer" : ""} ${isExpanded ? "bg-soft/60" : "hover:bg-soft/40"}`}
+                            onClick={() => isExpandable && toggleExpand(rowKey)}>
+                          <td className="px-1 py-1.5 text-center text-text-muted">
+                            {isExpandable
+                              ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
+                              : <span className="w-3 inline-block" />}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={"inline-block px-1.5 py-0.5 rounded text-[9px] uppercase font-bold border " + (o.origen === "ml" ? "bg-yellow-50 text-yellow-800 border-yellow-300" : "bg-emerald-50 text-emerald-800 border-emerald-300")}>
+                              {o.origen === "ml" ? "ML" : "TN"}
                             </span>
-                          ) : <span className="text-text-muted text-[10px]">—</span>}
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.payment_status || o.status)}`}>
-                            {o.payment_status || o.status || "—"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                            {hasReturns && <span className="ml-1 inline-flex items-center gap-0.5 text-[9px] text-rose-600 font-bold"><RotateCcw size={8} />{o.returns_count}</span>}
+                          </td>
+                          <td className="px-2 py-1.5 font-mono">
+                            {o.number ? (
+                              <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
+                                 target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
+                                 className="inline-flex items-center gap-1 text-primary hover:underline font-semibold" title="Abrir en panel Unidrop">
+                                {o.number}<ExternalLink size={9} />
+                              </a>
+                            ) : <span className="text-text-muted italic text-[10px]">sin number</span>}
+                            {o.external_id && <div className="text-[9px] text-text-muted font-mono">{o.origen === "ml" ? "ML " : "TN "}{o.external_id}</div>}
+                          </td>
+                          <td className="px-2 py-1.5 max-w-[160px]">
+                            <div className="truncate" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted">—</span>}</div>
+                            {(o.billing_city || o.billing_province) && (
+                              <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{o.merch_cost > 0 ? formatCurrency(o.merch_cost) : "—"}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{o.shipping_cost > 0 ? formatCurrency(o.shipping_cost) : "—"}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
+                          <td className="px-2 py-1.5 text-center">
+                            {o.shipping_status ? (
+                              <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.shipping_status)}`}>{o.shipping_status}</span>
+                            ) : <span className="text-text-muted text-[10px]">—</span>}
+                            {hasShip && !o.shipping_status && (
+                              <span className="text-[9px] text-text-muted block">{o.shipment!.carrier}</span>
+                            )}
+                          </td>
+                          <td className="px-2 py-1.5 text-center">
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.payment_status || o.status)}`}>
+                              {o.payment_status || o.status || "—"}
+                            </span>
+                          </td>
+                        </tr>
+                        {/* Fila expandible — items + envío */}
+                        {isExpanded && (
+                          <tr key={`${rowKey}-detail`} className="border-t border-border/50 bg-soft/30">
+                            <td colSpan={10} className="px-4 py-2">
+                              <div className="flex flex-wrap gap-4">
+                                {/* Items / productos */}
+                                {hasItems && (
+                                  <div className="flex-1 min-w-[200px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                      <Package size={10} /> Productos ({o.items!.length})
+                                    </div>
+                                    <table className="w-full text-[11px]">
+                                      <thead>
+                                        <tr className="text-text-muted text-[9px]">
+                                          <th className="text-left font-medium pb-1">SKU</th>
+                                          <th className="text-left font-medium pb-1 pl-2">Nombre</th>
+                                          <th className="text-center font-medium pb-1 px-2">Cant</th>
+                                          <th className="text-right font-medium pb-1">P. Unit</th>
+                                          <th className="text-right font-medium pb-1 pl-2">Subtotal</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {o.items!.map((item, ii) => (
+                                          <tr key={ii} className="border-t border-border/40">
+                                            <td className="font-mono text-text-muted py-0.5">{item.sku || "—"}</td>
+                                            <td className="pl-2 py-0.5 max-w-[180px] truncate" title={item.name}>{item.name || "—"}</td>
+                                            <td className="text-center px-2 py-0.5 tabular-nums">{item.qty}</td>
+                                            <td className="text-right tabular-nums py-0.5">{item.price > 0 ? formatCurrency(item.price) : "—"}</td>
+                                            <td className="text-right tabular-nums font-semibold py-0.5 pl-2">{item.price > 0 ? formatCurrency(item.price * item.qty) : "—"}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                                {/* Envío / logística */}
+                                {hasShip && (
+                                  <div className="min-w-[180px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                      <Truck size={10} /> Logística · {o.shipment!.carrier}
+                                    </div>
+                                    <div className="text-[11px] space-y-0.5">
+                                      <div><span className="text-text-muted">Estado:</span> <span className="font-semibold">{o.shipment!.status || "—"}</span></div>
+                                      {o.shipment!.entregado && (
+                                        <div><span className="text-text-muted">Entregado:</span> <span className="text-emerald-700 font-semibold">{o.shipment!.entregado.slice(0, 10)}</span></div>
+                                      )}
+                                      {o.shipment!.costo > 0 && (
+                                        <div><span className="text-text-muted">Costo envío:</span> <span className="tabular-nums">{formatCurrency(o.shipment!.costo)}</span></div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Devoluciones ML */}
+                                {hasReturns && (
+                                  <div className="min-w-[120px]">
+                                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                      <RotateCcw size={10} /> Devoluciones
+                                    </div>
+                                    <div className="text-[11px] text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""} registrada{o.returns_count !== 1 ? "s" : ""}</div>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

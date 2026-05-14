@@ -1227,6 +1227,8 @@ def dropshipper_unified_orders(
                 "shipping_type": er[13] or "",
                 "intent_id": key_intent,
                 "enriched": True,
+                "items": [],
+                "shipment": None,
             })
 
         # Fallback: para ML ids que NO matchearon en ningun schema, generamos
@@ -1254,6 +1256,8 @@ def dropshipper_unified_orders(
                 "shipping_type": "",
                 "intent_id": intent_id_for,
                 "enriched": False,
+                "items": [],
+                "shipment": None,
             })
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
@@ -1332,6 +1336,8 @@ def dropshipper_unified_orders(
                 "shipping_type": "",
                 "intent_id": key_intent,
                 "enriched": True,
+                "items": [],
+                "shipment": None,
             })
     except Exception as e:
         log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
@@ -1392,6 +1398,114 @@ def dropshipper_unified_orders(
                             r["shipping_cost"] = round(ship_map[iid], 2)
                     log.info("unified_orders TN shipping_cost OK col=%s rows=%d", col_name, len(ship_rows))
                     break
+
+    # 4a) Items + envío TN — carga bulk por internal_id
+    if tn_rows:
+        tn_internal = [str(r["internal_id"]) for r in tn_rows if r.get("internal_id")]
+        if tn_internal:
+            tn_ids_bulk = ",".join("'" + i + "'" for i in tn_internal)
+            # tienda_nube_order_items
+            tni_rows = q(eng, f"""
+                SELECT order_id::text, sku, name, quantity::int, price::float
+                FROM public.tienda_nube_order_items
+                WHERE order_id::text IN ({tn_ids_bulk})
+                ORDER BY order_id
+            """) or []
+            items_by_tn: dict[str, list] = {}
+            for ir in tni_rows:
+                k = ir[0] or ""
+                items_by_tn.setdefault(k, []).append({
+                    "sku": ir[1] or "", "name": ir[2] or "",
+                    "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                })
+            log.info("unified_orders TN items uid=%s orders=%d items=%d",
+                     user_id, len(tn_internal), len(tni_rows))
+            # oca_shipments (status, fecha_entrega, costo_envio)
+            oca_ship: dict[str, dict] = {}
+            oca_rows = q(eng, f"""
+                SELECT order_tienda_nube_id::text,
+                       COALESCE(ultimo_estado_oca, status::text, '') AS estado,
+                       fecha_entrega::text,
+                       COALESCE(costo_envio, 0)::float
+                FROM public.oca_shipments
+                WHERE order_tienda_nube_id::text IN ({tn_ids_bulk})
+            """) or []
+            for sr in oca_rows:
+                k = sr[0] or ""
+                oca_ship[k] = {"carrier": "OCA", "status": sr[1] or "", "entregado": sr[2], "costo": float(sr[3] or 0)}
+            # lightdata_shipments
+            ld_ship: dict[str, dict] = {}
+            ld_rows = q(eng, f"""
+                SELECT orden_tn_id::text, COALESCE(estado, '') AS estado,
+                       COALESCE(costo_envio_ars, 0)::float
+                FROM public.lightdata_shipments
+                WHERE orden_tn_id::text IN ({tn_ids_bulk})
+            """) or []
+            for sr in ld_rows:
+                k = sr[0] or ""
+                ld_ship[k] = {"carrier": "Lightdata", "status": sr[1] or "", "entregado": None, "costo": float(sr[2] or 0)}
+            # Apply to rows
+            for r in tn_rows:
+                iid = str(r.get("internal_id") or "")
+                r["items"] = items_by_tn.get(iid, [])
+                ship = oca_ship.get(iid) or ld_ship.get(iid)
+                r["shipment"] = ship
+                if ship and ship.get("status"):
+                    r["shipping_status"] = ship["status"]
+
+    # 4b) Items ML — carga bulk por internal_id (usando list_columns para nombres defensivos)
+    if ml_rows:
+        ml_internal_enriched = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
+        if ml_internal_enriched:
+            oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
+            sku_col = next((c for c in ["sellerCustomField", "seller_custom_field", "sku", "seller_sku"] if c in oi_cols), None)
+            oid_col = next((c for c in ["orderId", "order_id"] if c in oi_cols), None)
+            price_col = next((c for c in ["unitPrice", "unit_price"] if c in oi_cols), None)
+            qty_col = "quantity" if "quantity" in oi_cols else None
+            title_col = "title" if "title" in oi_cols else None
+            if sku_col and oid_col and qty_col:
+                ml_ids_bulk = ",".join(ml_internal_enriched)
+                oi_price = f'COALESCE(oi."{price_col}", 0)::float' if price_col else "0::float"
+                oi_title = f'COALESCE(oi."{title_col}"::text, \'\')' if title_col else "''"
+                ml_item_rows = q(eng, f"""
+                    SELECT oi."{oid_col}"::text,
+                           COALESCE(oi."{sku_col}"::text, '') AS sku,
+                           {oi_title} AS title,
+                           COALESCE(oi."{qty_col}", 0)::int AS qty,
+                           {oi_price} AS price
+                    FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                    WHERE oi."{oid_col}"::text IN ({ml_ids_bulk})
+                """) or []
+                items_by_ml: dict[str, list] = {}
+                for ir in ml_item_rows:
+                    k = ir[0] or ""
+                    items_by_ml.setdefault(k, []).append({
+                        "sku": ir[1] or "", "name": ir[2] or "",
+                        "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                    })
+                log.info("unified_orders ML items uid=%s orders=%d items=%d",
+                         user_id, len(ml_internal_enriched), len(ml_item_rows))
+                for r in ml_rows:
+                    iid = str(r.get("internal_id") or "")
+                    r["items"] = items_by_ml.get(iid, [])
+        # MercadoLibreReturn — flags por orden (devoluciones)
+        ml_with_id = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
+        if ml_with_id:
+            ret_cols = list_columns(eng, "mercado_libre_dev", "MercadoLibreReturn")
+            ret_order_col = next((c for c in ["orderId", "order_id"] if c in ret_cols), None)
+            if ret_order_col:
+                ret_ids_bulk = ",".join(ml_with_id)
+                ret_rows = q(eng, f"""
+                    SELECT "{ret_order_col}"::text, COUNT(*)::int AS cant
+                    FROM mercado_libre_dev."MercadoLibreReturn"
+                    WHERE "{ret_order_col}"::text IN ({ret_ids_bulk})
+                    GROUP BY 1
+                """) or []
+                returns_by_order = {r[0]: int(r[1] or 0) for r in ret_rows if r[0]}
+                for r in ml_rows:
+                    iid = str(r.get("internal_id") or "")
+                    if iid in returns_by_order:
+                        r["returns_count"] = returns_by_order[iid]
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
