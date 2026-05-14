@@ -101,7 +101,7 @@ type DropshipperDetail = {
     items: { id: number; talo_transaction_id: string; amount: number; currency: string; fecha: string | null; plan: string }[];
   };
   publicaciones: { totales: number; activas: number; ultima: string | null };
-  monthly: { mes: string; ordenes: number; gmv: number; profit: number }[];
+  monthly: { mes: string; ordenes: number; gmv: number; profit: number; ordenes_tn?: number; gmv_tn?: number }[];
   ultimas_ventas: {
     id: number;
     ml_order_id: string;
@@ -138,6 +138,8 @@ type DropshipperDetail = {
   tiendas_tn_detail?: Record<string, string | null>[];
   talo_accounts?: { id: number | null; creado_en: string | null; cbu?: string | null; cbu_alias?: string | null; alias?: string | null; bank_name?: string | null }[];
   referidos_list?: { user_id: number | null; nombre: string; email: string; creado_en: string | null; plan: string; sub_status: string; dias_al_vencimiento: number | null }[];
+  subscription_intents?: { id: number | null; status: string; fecha: string | null; pagado: number; esperado: number; plan: string }[];
+  sub_ltv?: { total_pagado: number; cant_procesadas: number; ultimo_pago: string | null; cant_pendientes: number; monto_pendiente: number };
   generated_at: string;
 };
 
@@ -256,8 +258,6 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const tokenDays = recencyDays(u.token_expira);
   const subActiva = u.sub_status?.toLowerCase() === "active" || (u.dias_al_vencimiento ?? -1) > 0;
 
-  const maxMonthly = Math.max(1, ...data.monthly.map((m) => m.gmv));
-
   return (
     <>
       <Topbar
@@ -317,12 +317,28 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 {formatCurrency(u.plan_precio)}/mes · {u.plan_pub_max} pub max
               </div>
               {subActiva ? (
-                <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
+                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
                   <CheckCircle2 size={12} /> Activa · vence en {u.dias_al_vencimiento}d
                 </div>
               ) : (
-                <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-rose-700">
+                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-rose-700">
                   <XCircle size={12} /> Vencida o inactiva
+                </div>
+              )}
+              {data.sub_ltv && (
+                <div className="mt-2 pt-2 border-t border-border space-y-0.5">
+                  <div className="text-[11px] font-bold text-text">
+                    LTV suscripción: {formatCurrency(data.sub_ltv.total_pagado)}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {data.sub_ltv.cant_procesadas} pagos procesados
+                    {data.sub_ltv.ultimo_pago && ` · último ${data.sub_ltv.ultimo_pago.slice(0, 10)}`}
+                  </div>
+                  {data.sub_ltv.cant_pendientes > 0 && (
+                    <div className="text-[10px] text-amber-700 font-semibold">
+                      {data.sub_ltv.cant_pendientes} pendiente{data.sub_ltv.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv.monto_pendiente)}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -388,9 +404,20 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
         </div>
 
         {/* KPIs principales */}
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
-          <KpiBox icon={DollarSign} label="GMV MELI" value={formatCurrency(v.gmv)} accent="emerald"
-                  hint={`${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`} />
+        {(() => {
+          const gmvTnKpi = data.ventas_tn?.gmv ?? 0;
+          const hasTnKpi = gmvTnKpi > 0;
+          const gmvTotalKpi = v.gmv + gmvTnKpi;
+          return <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+          <KpiBox
+            icon={DollarSign}
+            label={hasTnKpi ? "GMV Total (MELI+TN)" : "GMV MELI"}
+            value={formatCurrency(hasTnKpi ? gmvTotalKpi : v.gmv)}
+            accent="emerald"
+            hint={hasTnKpi
+              ? `ML ${formatCurrency(v.gmv)} · TN ${formatCurrency(gmvTnKpi)}`
+              : `${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`}
+          />
           <KpiBox icon={Wallet} label="Profit Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
                   hint="Comisión Unidrop por las ventas MELI (suscripcion)" />
           <KpiBox icon={TrendingUp} label="Ticket promedio" value={formatCurrency(v.ticket_promedio)} accent="amber"
@@ -398,9 +425,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           <KpiBox
             icon={ShoppingBag}
             label="Órdenes pagadas"
-            value={formatNumber(v.ventas_pagadas)}
+            value={formatNumber(v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0))}
             accent="primary"
-            hint={v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : "Sin cancelaciones"}
+            hint={hasTnKpi
+              ? `ML ${formatNumber(v.ventas_pagadas)} · TN ${formatNumber(data.ventas_tn!.ventas_pagadas)}`
+              : v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : "Sin cancelaciones"}
           />
           <KpiBox
             icon={Calendar}
@@ -428,7 +457,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   hint="Suma costos de mercadería en órdenes pagadas" />
           <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
                   hint="Suma costos de envío MELI" />
-        </div>
+        </div>;
+        })()}
 
         {/* Ventas pagadas a Unidrop (PaymentIntent) - desglose TN/ML + suscripciones */}
         {(pg.pagado_total_period !== undefined && (pg.pagado_total_period > 0 || (data.suscripciones?.total_pagado ?? 0) > 0)) && (
@@ -600,6 +630,65 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
+        {/* Historial de suscripcion (PaymentIntentSubscription all-time) */}
+        {data.subscription_intents && data.subscription_intents.length > 0 && (
+          <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Historial de suscripción</h3>
+                <p className="text-[11px] text-text-muted">
+                  PaymentIntentSubscription · {data.subscription_intents.length} registros ·
+                  LTV {formatCurrency(data.sub_ltv?.total_pagado ?? 0)}
+                </p>
+              </div>
+              {(data.sub_ltv?.cant_pendientes ?? 0) > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold">
+                  <Clock size={11} /> {data.sub_ltv!.cant_pendientes} pendiente{data.sub_ltv!.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv!.monto_pendiente)}
+                </span>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">ID</th>
+                    <th className="text-left px-2 py-2">Estado</th>
+                    <th className="text-left px-2 py-2">Fecha</th>
+                    <th className="text-left px-2 py-2">Plan</th>
+                    <th className="text-right px-2 py-2">Pagado</th>
+                    <th className="text-right px-2 py-2">Esperado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.subscription_intents.map((si) => {
+                    const st = si.status.toUpperCase();
+                    return (
+                      <tr key={si.id} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-3 py-1.5 font-mono text-text-muted">{si.id}</td>
+                        <td className="px-2 py-1.5">
+                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${
+                            st === "PROCESSED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : st === "PENDING" ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-zinc-50 text-zinc-600 border-zinc-200"
+                          }`}>{si.status}</span>
+                        </td>
+                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(si.fecha)}</td>
+                        <td className="px-2 py-1.5 text-text-muted">{si.plan || "—"}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">
+                          {si.pagado > 0 ? formatCurrency(si.pagado) : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                          {si.esperado > 0 ? formatCurrency(si.esperado) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Top clientes FINALES (compradores TN del dropshipper) - drill al End Consumer 360 */}
         {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
           <div className="mb-5">
@@ -617,39 +706,57 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        {/* Mensual GMV */}
-        {data.monthly.length > 0 && (
-          <div className="bg-surface border border-border rounded-xl p-4 sm:p-5 mb-5">
-            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-              <div>
-                <h3 className="text-sm font-bold text-text">Evolución mensual · últimos 12 meses</h3>
-                <p className="text-[11px] text-text-muted">GMV MELI y profit Unidrop por mes</p>
-              </div>
-              <div className="text-xs text-text-muted">
-                Total: {formatCurrency(data.monthly.reduce((s, m) => s + m.gmv, 0))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              {data.monthly.map((m) => (
-                <div key={m.mes} className="flex items-center gap-3">
-                  <div className="w-16 text-xs text-text-muted font-mono">{m.mes}</div>
-                  <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-primary to-accent"
-                      style={{ width: `${(m.gmv / maxMonthly) * 100}%` }}
-                    />
-                  </div>
-                  <div className="text-right tabular-nums">
-                    <div className="text-xs font-bold text-text">{formatCurrency(m.gmv)}</div>
-                    <div className="text-[10px] text-text-muted">
-                      {m.ordenes} órdenes · profit {formatCurrency(m.profit)}
-                    </div>
-                  </div>
+        {/* Mensual GMV MELI + TN */}
+        {data.monthly.length > 0 && (() => {
+          const hasTn = data.monthly.some((m) => (m.gmv_tn ?? 0) > 0);
+          const maxCombined = Math.max(1, ...data.monthly.map((m) => m.gmv + (m.gmv_tn ?? 0)));
+          const totalMeli = data.monthly.reduce((s, m) => s + m.gmv, 0);
+          const totalTn = data.monthly.reduce((s, m) => s + (m.gmv_tn ?? 0), 0);
+          return (
+            <div className="bg-surface border border-border rounded-xl p-4 sm:p-5 mb-5">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-text">Evolución mensual · últimos 12 meses</h3>
+                  <p className="text-[11px] text-text-muted">GMV {hasTn ? "MELI + TN" : "MELI"} y profit Unidrop por mes</p>
                 </div>
-              ))}
+                <div className="flex items-center gap-3 text-xs text-text-muted">
+                  {hasTn && (
+                    <>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" /> ML {formatCurrency(totalMeli)}</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-cyan-400 inline-block" /> TN {formatCurrency(totalTn)}</span>
+                    </>
+                  )}
+                  <span className="font-semibold text-text">Total: {formatCurrency(totalMeli + totalTn)}</span>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {data.monthly.map((m) => {
+                  const gmvTn = m.gmv_tn ?? 0;
+                  const total = m.gmv + gmvTn;
+                  const pctMeli = maxCombined > 0 ? (m.gmv / maxCombined) * 100 : 0;
+                  const pctTn = maxCombined > 0 ? (gmvTn / maxCombined) * 100 : 0;
+                  return (
+                    <div key={m.mes} className="flex items-center gap-3">
+                      <div className="w-16 text-xs text-text-muted font-mono">{m.mes}</div>
+                      <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden flex">
+                        <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pctMeli}%` }} />
+                        {hasTn && <div className="h-full bg-cyan-400/80" style={{ width: `${pctTn}%` }} />}
+                      </div>
+                      <div className="text-right tabular-nums w-36">
+                        <div className="text-xs font-bold text-text">{formatCurrency(total)}</div>
+                        <div className="text-[10px] text-text-muted">
+                          {hasTn
+                            ? `ML ${formatCurrency(m.gmv)} · TN ${formatCurrency(gmvTn)}`
+                            : `${m.ordenes} órd · profit ${formatCurrency(m.profit)}`}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Referidos por este dropshipper */}
         {data.referidos_list && data.referidos_list.length > 0 && (

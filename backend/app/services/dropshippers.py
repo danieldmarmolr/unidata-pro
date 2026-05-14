@@ -772,9 +772,46 @@ def dropshipper_detail(
         "pagos_ml_period_count": int(pg[10] or 0),
     }
 
-    # Suscripciones pagadas en el periodo (PaymentTransactionSubscription).
-    # El plan al momento del pago no se persiste, asi que tageamos con el
-    # plan actual del dropshipper como referencia.
+    # PaymentIntentSubscription — historial COMPLETO (no filtrado por periodo).
+    # Esta tabla tiene userId directo y es el ground truth de pagos de suscripcion.
+    # Distinta de PaymentTransactionSubscription (que es el cobro via Talo).
+    pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
+    pis_amount_col = '"paidAmount"' if "paidAmount" in pis_cols else ('"amount"' if "amount" in pis_cols else "0")
+    pis_expected_col = '"expectedAmount"' if "expectedAmount" in pis_cols else "0"
+    sub_intent_rows = q(eng, f"""
+        SELECT pis.id::int,
+               pis.status::text,
+               pis."createdAt"::text,
+               COALESCE({pis_amount_col}, 0)::float AS paid,
+               COALESCE({pis_expected_col}, 0)::float AS expected,
+               sm.name AS plan_nombre
+        FROM public."PaymentIntentSubscription" pis
+        LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm
+              ON sm.id = pis."subscriptionMeliId"
+        WHERE pis."userId" = :uid
+        ORDER BY pis."createdAt" DESC NULLS LAST
+        LIMIT 36
+    """, {"uid": int(user_id)}) or []
+    subscription_intents = [{
+        "id": int(r[0]) if r[0] else None,
+        "status": r[1] or "",
+        "fecha": r[2],
+        "pagado": round(float(r[3] or 0), 2),
+        "esperado": round(float(r[4] or 0), 2),
+        "plan": r[5] or user.get("plan") or "",
+    } for r in sub_intent_rows]
+    sub_procesadas = [s for s in subscription_intents if s["status"].upper() == "PROCESSED"]
+    sub_pendientes = [s for s in subscription_intents if s["status"].upper() == "PENDING"]
+    sub_ltv = {
+        "total_pagado": round(sum(s["pagado"] for s in sub_procesadas), 2),
+        "cant_procesadas": len(sub_procesadas),
+        "ultimo_pago": sub_procesadas[0]["fecha"] if sub_procesadas else None,
+        "cant_pendientes": len(sub_pendientes),
+        "monto_pendiente": round(sum(s["esperado"] for s in sub_pendientes), 2),
+    }
+
+    # Suscripciones pagadas en el periodo (PaymentTransactionSubscription) — para
+    # el breakdown por periodo en el bloque "Ventas pagadas a Unidrop".
     subs_rows = q(eng, """
         SELECT pts.id,
                pts."taloTransactionId",
@@ -838,7 +875,35 @@ def dropshipper_detail(
         "ordenes": int(r[1] or 0),
         "gmv": round(float(r[2] or 0), 2),
         "profit": round(float(r[3] or 0), 2),
+        "ordenes_tn": 0,
+        "gmv_tn": 0.0,
     } for r in monthly]
+
+    # Serie mensual TN (12m) — linkage por user_id o number prefix
+    monthly_tn = q(eng, """
+        SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS mes,
+               COUNT(*) FILTER (WHERE payment_status::text='paid')::int AS ordenes,
+               COALESCE(SUM(total) FILTER (WHERE payment_status::text='paid'), 0)::float AS gmv
+        FROM public.tienda_nube_orders
+        WHERE (user_id = :uid OR (:dni IS NOT NULL AND "number" LIKE :num_prefix))
+          AND created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY 1 ORDER BY 1
+    """, {"uid": int(user_id), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or []
+    tn_monthly_map: dict[str, dict] = {r[0]: {"ordenes_tn": int(r[1] or 0), "gmv_tn": float(r[2] or 0)} for r in monthly_tn}
+    # Merge TN into MELI series
+    meli_meses = {m["mes"] for m in monthly_series}
+    for m in monthly_series:
+        tn_data = tn_monthly_map.get(m["mes"], {})
+        m["ordenes_tn"] = tn_data.get("ordenes_tn", 0)
+        m["gmv_tn"] = round(tn_data.get("gmv_tn", 0.0), 2)
+    # Add TN-only months (no MELI activity that month)
+    for mes, tn_data in tn_monthly_map.items():
+        if mes not in meli_meses:
+            monthly_series.append({
+                "mes": mes, "ordenes": 0, "gmv": 0.0, "profit": 0.0,
+                "ordenes_tn": tn_data["ordenes_tn"], "gmv_tn": round(tn_data["gmv_tn"], 2),
+            })
+    monthly_series.sort(key=lambda x: x["mes"])
 
     # Ultimas ventas MELI: ground truth = mlOrderIds desnormalizados de PaymentIntents
     # PROCESSED del dropshipper. Para cada ML order ID, buscamos enriquecimiento en
@@ -1013,9 +1078,11 @@ def dropshipper_detail(
             "items": suscripciones_pagadas,
         },
         # Datos adicionales de unidrop_api
-        "tiendas_tn_detail": tiendas_tn_detail,   # campos de TiendaNubeCredential
-        "talo_accounts": talo_accounts,            # CustomerPaymentAccount (CBU, alias)
-        "referidos_list": referidos_list,          # usuarios referidos por este dropshipper
+        "tiendas_tn_detail": tiendas_tn_detail,       # campos de TiendaNubeCredential
+        "talo_accounts": talo_accounts,               # CustomerPaymentAccount (CBU, alias)
+        "referidos_list": referidos_list,             # usuarios referidos por este dropshipper
+        "subscription_intents": subscription_intents, # PaymentIntentSubscription all-time (historial suscripcion)
+        "sub_ltv": sub_ltv,                           # resumen LTV suscripcion
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
