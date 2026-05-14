@@ -1660,6 +1660,123 @@ def dropshipper_unified_orders(
                     if iid in returns_by_order:
                         r["returns_count"] = returns_by_order[iid]
 
+    # 4c) Stub ML enrichment desde tablas extra de mercado_libre_dev
+    # Para órdenes que no matchearon en OML: descubrimos schema y enriquecemos
+    # con Shipment, Buyer, y cualquier tabla que tenga mlOrderId directo.
+    _stub_ml = [r for r in ml_rows if not r.get("internal_id")]
+    if _stub_ml:
+        _stub_ext_ids = [r["external_id"] for r in _stub_ml if r.get("external_id")]
+        if _stub_ext_ids:
+            try:
+                _ml_tbls = q(eng, """
+                    SELECT t.table_name,
+                           string_agg(c.column_name, ',' ORDER BY c.ordinal_position) AS cols
+                    FROM information_schema.tables t
+                    JOIN information_schema.columns c
+                         ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+                    WHERE t.table_schema = 'mercado_libre_dev'
+                    GROUP BY t.table_name
+                    ORDER BY t.table_name
+                """) or []
+                _avail: dict[str, list[str]] = {r[0]: (r[1] or "").split(",") for r in _ml_tbls}
+                log.info("ML schema discovery uid=%s tables=%s", user_id, list(_avail.keys()))
+
+                _stub_lit = "ARRAY[" + ",".join("'" + i + "'" for i in _stub_ext_ids) + "]::text[]"
+
+                # Intenta Shipment por mlOrderId (tracking / estado envío)
+                for _sname in ["ShipmentMercadoLibre", "MercadoLibreShipment", "MercadoLibreShipping"]:
+                    if _sname not in _avail:
+                        continue
+                    _sc = _avail[_sname]
+                    _so = next((c for c in ["mlOrderId", "orderId", "order_id"] if c in _sc), None)
+                    if not _so:
+                        continue
+                    _ss = next((c for c in ["status", "shippingStatus", "shipping_status"] if c in _sc), None)
+                    _sk = next((c for c in ["carrier", "logisticType", "logistic_type", "shippingType"] if c in _sc), None)
+                    try:
+                        _shp_sel = f'"{_so}"::text'
+                        _shp_sel += f', COALESCE("{_ss}"::text, \'\')' if _ss else ", ''"
+                        _shp_sel += f', COALESCE("{_sk}"::text, \'\')' if _sk else ", ''"
+                        _shp_r = q(eng, f"""
+                            SELECT {_shp_sel}
+                            FROM mercado_libre_dev."{_sname}"
+                            WHERE "{_so}"::text = ANY({_stub_lit})
+                        """) or []
+                        if _shp_r:
+                            _shp_map = {sr[0]: {"carrier": sr[2] or "MELI", "status": sr[1] or "", "entregado": None, "costo": 0.0} for sr in _shp_r if sr[0]}
+                            for r in _stub_ml:
+                                if r.get("external_id") in _shp_map:
+                                    r["shipment"] = _shp_map[r["external_id"]]
+                                    if _shp_map[r["external_id"]].get("status"):
+                                        r["shipping_status"] = _shp_map[r["external_id"]]["status"]
+                            log.info("ML stub shipment enrich table=%s rows=%d", _sname, len(_shp_r))
+                        break
+                    except Exception as _se:
+                        log.warning("ML stub shipment %s fail: %s", _sname, str(_se)[:80])
+
+                # Intenta tablas de buyer para nombre del comprador
+                for _bname, _bcols in _avail.items():
+                    if "buyer" not in _bname.lower():
+                        continue
+                    _bo = next((c for c in ["mlOrderId", "orderId", "order_id"] if c in _bcols), None)
+                    _bn = next((c for c in ["nickname", "name", "buyer_name", "full_name", "username"] if c in _bcols), None)
+                    if not _bo or not _bn:
+                        continue
+                    try:
+                        _br = q(eng, f"""
+                            SELECT "{_bo}"::text, COALESCE("{_bn}"::text, '')
+                            FROM mercado_libre_dev."{_bname}"
+                            WHERE "{_bo}"::text = ANY({_stub_lit})
+                        """) or []
+                        if _br:
+                            _bmap = {b[0]: b[1] for b in _br if b[0] and b[1]}
+                            for r in _stub_ml:
+                                if r.get("external_id") in _bmap and not r.get("buyer_name"):
+                                    r["buyer_name"] = _bmap[r["external_id"]]
+                            log.info("ML stub buyer enrich table=%s rows=%d", _bname, len(_br))
+                    except Exception as _be:
+                        log.warning("ML stub buyer %s fail: %s", _bname, str(_be)[:80])
+
+                # Intenta items por mlOrderId directo (OrderItemMercadoLibre
+                # normalmente usa orderId interno, pero algunas integraciones
+                # tienen mlOrderId como columna extra)
+                if "OrderItemMercadoLibre" in _avail:
+                    _ic = _avail["OrderItemMercadoLibre"]
+                    _ml_col = next((c for c in ["mlOrderId", "ml_order_id"] if c in _ic), None)
+                    if _ml_col:
+                        _sku_c = next((c for c in ["sellerCustomField", "seller_custom_field", "sku"] if c in _ic), None)
+                        _qty_c = "quantity" if "quantity" in _ic else None
+                        _ttl_c = "title" if "title" in _ic else None
+                        _prc_c = next((c for c in ["unitPrice", "unit_price"] if c in _ic), None)
+                        if _sku_c and _qty_c:
+                            try:
+                                _ii_sel = f'"{_ml_col}"::text'
+                                _ii_sel += f', COALESCE(oi."{_sku_c}"::text, \'\')'
+                                _ii_sel += f', COALESCE(oi."{_ttl_c}"::text, \'\')' if _ttl_c else ", ''"
+                                _ii_sel += f', COALESCE(oi."{_qty_c}", 0)::int'
+                                _ii_sel += f', COALESCE(oi."{_prc_c}", 0)::float' if _prc_c else ", 0::float"
+                                _ii_rows = q(eng, f"""
+                                    SELECT {_ii_sel}
+                                    FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                                    WHERE "{_ml_col}"::text = ANY({_stub_lit})
+                                """) or []
+                                if _ii_rows:
+                                    _imap: dict[str, list] = {}
+                                    for ir in _ii_rows:
+                                        _imap.setdefault(ir[0], []).append({
+                                            "sku": ir[1] or "", "name": ir[2] or "",
+                                            "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                                        })
+                                    for r in _stub_ml:
+                                        if r.get("external_id") in _imap:
+                                            r["items"] = _imap[r["external_id"]]
+                                    log.info("ML stub items via mlOrderId rows=%d", len(_ii_rows))
+                            except Exception as _ie:
+                                log.warning("ML stub items mlOrderId fail: %s", str(_ie)[:80])
+
+            except Exception as _disc_err:
+                log.warning("ML stub enrichment fail uid=%s: %s", user_id, str(_disc_err)[:150])
+
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
     unified.sort(key=lambda x: x.get("fecha") or "", reverse=True)
