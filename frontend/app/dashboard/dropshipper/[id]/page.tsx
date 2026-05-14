@@ -871,7 +871,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <ChannelBadge origen={modalOrder.origen} />
-                    <span className="text-lg font-bold text-text font-mono">{modalOrder.number || `ID ${modalOrder.internal_id}`}</span>
+                    <span className="text-lg font-bold text-text font-mono">{modalOrder.number || modalOrder.external_id || `ID ${modalOrder.internal_id ?? '?'}`}</span>
                     <OrderStatusBadge status={modalOrder.payment_status || modalOrder.status} />
                     {modalOrder.shipping_status && <OrderStatusBadge status={modalOrder.shipping_status} />}
                   </div>
@@ -883,6 +883,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                        target="_blank" rel="noopener noreferrer"
                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5">
                       <ExternalLink size={11} /> Abrir en Unidrop
+                    </a>
+                  )}
+                  {modalOrder.origen === "ml" && modalOrder.external_id && (
+                    <a href={`https://www.mercadolibre.com.ar/ventas/${modalOrder.external_id}/detalle`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#FFE600]/60 bg-[#FFE600]/10 text-[#333] text-xs font-semibold hover:bg-[#FFE600]/20">
+                      <ExternalLink size={11} /> Ver en ML
                     </a>
                   )}
                   <button onClick={() => setModalOrder(null)}

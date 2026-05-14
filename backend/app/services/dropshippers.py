@@ -779,6 +779,17 @@ def dropshipper_detail(
         if ml_orders_paid > 0 else 0.0
     )
 
+    # Fallback ultima_venta: OML no tiene el order → usar fecha del PaymentIntent.
+    if not ventas_kpi.get("ultima_venta") and ml_orders_paid > 0:
+        _pi_last = q(eng, """
+            SELECT MAX(pi."createdAt")::text
+            FROM public."PaymentIntent" pi
+            INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+            WHERE cpa."userId" = :uid AND pi."status" = 'PROCESSED'
+              AND COALESCE(array_length(pi."mlOrderIds",1),0) > 0
+        """, {"uid": int(user_id)}) or [(None,)]
+        ventas_kpi["ultima_venta"] = _pi_last[0][0]
+
     # PaymentIntentSubscription — historial COMPLETO (no filtrado por periodo).
     # Esta tabla tiene userId directo y es el ground truth de pagos de suscripcion.
     # Distinta de PaymentTransactionSubscription (que es el cobro via Talo).
@@ -1209,6 +1220,7 @@ def dropshipper_unified_orders(
                     ) p ON p."orderId" = o.id
                     WHERE o."mlOrderId"::text = ANY({ids_lit})
                        OR o.id::text          = ANY({ids_lit})
+                       OR regexp_replace(o."mlOrderId"::text, '^ML[-_]?', '') = ANY({ids_lit})
                 """) or []
                 if erows:
                     log.info("unified_orders ML enrich uid=%s OK schema=%s rows=%d",
