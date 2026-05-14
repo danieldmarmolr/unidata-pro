@@ -1200,6 +1200,8 @@ def dropshipper_unified_orders(
     import re as _re
     safe_ml = [s for s in all_ml_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
     safe_tn = [s for s in all_tn_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
+    log.info("unified_orders ids uid=%s ml_count=%d sample=%s",
+             user_id, len(safe_ml), safe_ml[:3])
 
     ml_rows: list[dict] = []
     tn_rows: list[dict] = []
@@ -1209,6 +1211,11 @@ def dropshipper_unified_orders(
     # quedan filas "stub" (fallback) para que la UI siempre muestre algo.
     if safe_ml:
         ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_ml) + "]::text[]"
+        # ids_lit_stripped: para OML que guarda mlOrderId con prefijo MLA/ML-
+        ids_lit_stripped = "ARRAY[" + ",".join(
+            "'" + _re.sub(r'^ML[A-Z]?[-_]?', '', i) + "'"
+            for i in safe_ml
+        ) + "]::text[]"
         SCHEMA_CANDIDATES = ['mercado_libre_dev', 'public', 'mercado_libre', 'meli']
         erows: list = []
         last_err = ""
@@ -1237,7 +1244,8 @@ def dropshipper_unified_orders(
                     ) p ON p."orderId" = o.id
                     WHERE o."mlOrderId"::text = ANY({ids_lit})
                        OR o.id::text          = ANY({ids_lit})
-                       OR regexp_replace(o."mlOrderId"::text, '^ML[-_]?', '') = ANY({ids_lit})
+                       OR regexp_replace(o."mlOrderId"::text, '^ML[A-Z]?[-_]?', '') = ANY({ids_lit})
+                       OR regexp_replace(o."mlOrderId"::text, '^ML[A-Z]?[-_]?', '') = ANY({ids_lit_stripped})
                 """) or []
                 if erows:
                     log.info("unified_orders ML enrich uid=%s OK schema=%s rows=%d",
