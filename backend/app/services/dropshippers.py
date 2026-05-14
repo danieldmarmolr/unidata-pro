@@ -946,8 +946,8 @@ def dropshipper_detail(
         try:
             pi_monthly = q(eng, """
                 SELECT to_char(date_trunc('month', pi."createdAt"), 'YYYY-MM') AS mes,
-                       COUNT(DISTINCT pi.id)::int AS ordenes,
-                       COALESCE(SUM(pi."amount"), 0)::float AS gmv
+                       COALESCE(SUM(array_length(pi."mlOrderIds", 1)), 0)::int AS ordenes,
+                       COALESCE(SUM(COALESCE(pi."paidAmount", pi."expectedAmount", 0)), 0)::float AS gmv
                 FROM public."PaymentIntent" pi
                 INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
                 WHERE cpa."userId" = :uid
@@ -968,6 +968,7 @@ def dropshipper_detail(
                         "profit": 0.0, "ordenes_tn": 0, "gmv_tn": 0.0,
                     })
             monthly_series.sort(key=lambda x: x["mes"])
+            log.info("monthly PI fallback uid=%s pi_meses=%d", user_id, len(pi_mes_map))
         except Exception as _pi_mon_err:
             log.warning("monthly PI fallback fail uid=%s: %s", user_id, str(_pi_mon_err)[:100])
 
