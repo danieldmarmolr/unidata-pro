@@ -17,7 +17,7 @@ import datetime as dt
 import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar, resolve_window
+from app.services._utils import q, scalar, resolve_window, list_columns
 
 log = logging.getLogger("unidata.dropshippers")
 
@@ -454,7 +454,8 @@ def dropshipper_detail(
             EXTRACT(DAY FROM (u.end_date_subscription - NOW()))::int AS dias_al_vencimiento,
             mla.id AS cuenta_meli_id, mla.nickname AS nickname_meli,
             mla."requiresReauth", mla."expiresAt"::text,
-            (SELECT COUNT(*) FROM public."User" u2 WHERE u2."referrerId" = u.id)::int AS cant_referidos
+            (SELECT COUNT(*) FROM public."User" u2 WHERE u2."referrerId" = u.id)::int AS cant_referidos,
+            u.store_id::text AS store_id
         FROM public."User" u
         LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
@@ -490,6 +491,7 @@ def dropshipper_detail(
         "requiere_reauth": bool(h[21]) if h[21] is not None else False,
         "token_expira": h[22],
         "cant_referidos": int(h[23] or 0),
+        "store_id": h[24] or None,
     }
 
     # KPIs de ventas MELI - PaymentIntent es ground truth (lo que el dropshipper
@@ -614,6 +616,93 @@ def dropshipper_detail(
         WHERE u.id = :uid AND u.store_id IS NOT NULL
     """, {"uid": int(user_id)}) or [(0,)]
     tn_kpi["tiendas_conectadas"] = int(tn_stores[0][0] or 0)
+
+    # TiendaNubeCredential — detalles de la tienda (store_id, status, URL si existe)
+    tiendas_tn_detail: list[dict] = []
+    store_id = user.get("store_id")
+    if store_id:
+        tnc_cols = list_columns(eng, "public", "TiendaNubeCredential")
+        tnc_select = ["store_id::text"]
+        tnc_extra: list[str] = []
+        for col, cast in [
+            ("status", "::text"),
+            ("created_at", "::text"),
+            ("user_id", "::text"),
+            ("store_name", ""),
+            ("store_url", ""),
+            ("app_id", "::text"),
+            ("updated_at", "::text"),
+        ]:
+            if col in tnc_cols:
+                tnc_select.append(f"COALESCE({col}{cast}, '') AS {col}")
+                tnc_extra.append(col)
+        tnc_rows = q(eng, f"""
+            SELECT {", ".join(tnc_select)}
+            FROM public."TiendaNubeCredential"
+            WHERE store_id = :sid
+            LIMIT 10
+        """, {"sid": store_id}) or []
+        for r in tnc_rows:
+            d: dict = {"store_id": r[0]}
+            for i, col in enumerate(tnc_extra, 1):
+                d[col] = r[i] if r[i] else None
+            tiendas_tn_detail.append(d)
+
+    # CustomerPaymentAccount (Talo) — cuenta(s) registrada(s) para este dropshipper
+    cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
+    cpa_select = ['id::text', '"createdAt"::text']
+    cpa_extra: list[str] = []
+    for col, cast in [
+        ("cbu", ""),
+        ("cbu_alias", ""),
+        ("alias", ""),
+        ("bank_name", ""),
+        ("account_owner", ""),
+        ("status", "::text"),
+    ]:
+        if col in cpa_cols:
+            cpa_select.append(f"COALESCE({col}{cast}, '') AS {col}")
+            cpa_extra.append(col)
+    talo_accounts_rows = q(eng, f"""
+        SELECT {", ".join(cpa_select)}
+        FROM public."CustomerPaymentAccount"
+        WHERE "userId" = :uid
+        ORDER BY id
+        LIMIT 5
+    """, {"uid": int(user_id)}) or []
+    talo_accounts: list[dict] = []
+    for r in talo_accounts_rows:
+        acc: dict = {"id": int(r[0]) if r[0] else None, "creado_en": r[1]}
+        for i, col in enumerate(cpa_extra, 2):
+            acc[col] = r[i] if r[i] else None
+        talo_accounts.append(acc)
+
+    # Referidos: usuarios que este dropshipper refirio (con link a sus perfiles)
+    referidos_list: list[dict] = []
+    if int(user.get("cant_referidos") or 0) > 0:
+        ref_rows = q(eng, """
+            SELECT u2.id::int,
+                   COALESCE(NULLIF(u2.fantasy_name,''), u2.name, u2.email, '') AS nombre,
+                   u2.email,
+                   u2."createdAt"::text,
+                   sm2.name AS plan,
+                   u2.subscription_status::text,
+                   EXTRACT(DAY FROM (u2.end_date_subscription - NOW()))::int AS dias_vence
+            FROM public."User" u2
+            LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm2 ON sm2.id = u2."subscriptionId"
+            WHERE u2."referrerId" = :uid
+            ORDER BY u2."createdAt" DESC
+            LIMIT 50
+        """, {"uid": int(user_id)}) or []
+        referidos_list = [{
+            "user_id": int(r[0]) if r[0] else None,
+            "nombre": r[1] or "",
+            "email": r[2] or "",
+            "creado_en": r[3],
+            "plan": r[4] or "",
+            "sub_status": r[5] or "",
+            "dias_al_vencimiento": int(r[6]) if r[6] is not None else None,
+        } for r in ref_rows]
 
     # Derivar canal del dropshipper
     has_meli = bool(user.get("cuenta_meli_id")) or ventas_kpi["ventas_pagadas"] > 0
@@ -914,17 +1003,19 @@ def dropshipper_detail(
         "publicaciones": pubs,
         "monthly": monthly_series,
         "ultimas_ventas": orders,
-        "ultimas_ventas_tn": tn_orders_list,  # tabla TN con `number` para link a Unidrop
+        "ultimas_ventas_tn": tn_orders_list,
         "ultimos_pagos": pagos_list,
-        "unified_orders": unified_orders,  # filas ML+TN combinadas por fecha
-        # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
+        "unified_orders": unified_orders,
         "top_clientes_finales": top_clientes_finales,
-        # Suscripciones pagadas (PaymentTransactionSubscription) en periodo
         "suscripciones": {
             "total_pagado": suscripciones_total,
             "cantidad": len(suscripciones_pagadas),
             "items": suscripciones_pagadas,
         },
+        # Datos adicionales de unidrop_api
+        "tiendas_tn_detail": tiendas_tn_detail,   # campos de TiendaNubeCredential
+        "talo_accounts": talo_accounts,            # CustomerPaymentAccount (CBU, alias)
+        "referidos_list": referidos_list,          # usuarios referidos por este dropshipper
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
@@ -1168,7 +1259,9 @@ def dropshipper_unified_orders(
                 "merch_cost": 0.0,
                 "shipping_cost": 0.0,
                 "profit_unidrop": 0.0,
-                "buyer_name": "",  # se enriquece abajo si la col existe
+                "buyer_name": "",
+                "billing_province": "",
+                "billing_city": "",
                 "shipping_type": "",
                 "intent_id": key_intent,
                 "enriched": True,
@@ -1176,46 +1269,63 @@ def dropshipper_unified_orders(
     except Exception as e:
         log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
 
-    # Enriquecer buyer_name + shipping_cost con queries defensivas
+    # Enriquecer buyer_name + shipping_cost + billing location con queries defensivas
     # (si una col no existe, q() devuelve None y seguimos sin esa data)
     if tn_rows:
         ids_for_enrich = ",".join("'" + str(r["internal_id"]) + "'" for r in tn_rows if r.get("internal_id"))
         if ids_for_enrich:
-            # Buyer name (con fallback a contact_identification = DNI)
-            try:
-                buyer_rows = q(eng, f"""
-                    SELECT tienda_nube_id::text,
-                           COALESCE(NULLIF(contact_name, ''), contact_identification, '')
-                    FROM public.tienda_nube_orders
-                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
-                """) or []
-                buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
+            # Buyer name + billing location en una sola query
+            # billing_province y billing_city existen en tienda_nube_orders (confirmado via end_consumers_unidrop)
+            loc_rows = q(eng, f"""
+                SELECT tienda_nube_id::text,
+                       COALESCE(NULLIF(contact_name, ''), contact_identification, '') AS buyer_name,
+                       COALESCE(billing_province, '') AS billing_province,
+                       COALESCE(billing_city, '') AS billing_city
+                FROM public.tienda_nube_orders
+                WHERE tienda_nube_id::text IN ({ids_for_enrich})
+            """) or []
+            if loc_rows:
+                loc_map = {lr[0]: {"buyer_name": lr[1] or "", "billing_province": lr[2] or "", "billing_city": lr[3] or ""} for lr in loc_rows if lr[0]}
                 for r in tn_rows:
                     iid = str(r.get("internal_id") or "")
-                    if iid in buyer_map and buyer_map[iid]:
-                        r["buyer_name"] = buyer_map[iid]
-            except Exception:
-                pass
-            # Shipping cost — probar variantes de nombre de columna
-            for col_name in ["shipping_cost", "shippingCost", "shipping_amount", "shipping_total"]:
+                    if iid in loc_map:
+                        loc = loc_map[iid]
+                        if loc["buyer_name"]:
+                            r["buyer_name"] = loc["buyer_name"]
+                        r["billing_province"] = loc["billing_province"]
+                        r["billing_city"] = loc["billing_city"]
+            # Fallback: si loc_rows fallo por schema, intentar solo buyer_name
+            elif loc_rows is None:
                 try:
-                    ship_rows = q(eng, f"""
-                        SELECT tienda_nube_id::text, COALESCE({col_name}, 0)::float
+                    buyer_rows = q(eng, f"""
+                        SELECT tienda_nube_id::text,
+                               COALESCE(NULLIF(contact_name, ''), contact_identification, '')
                         FROM public.tienda_nube_orders
                         WHERE tienda_nube_id::text IN ({ids_for_enrich})
-                          AND {col_name} IS NOT NULL
                     """) or []
-                    if ship_rows:
-                        ship_map = {sr[0]: float(sr[1] or 0) for sr in ship_rows if sr[0]}
-                        for r in tn_rows:
-                            iid = str(r.get("internal_id") or "")
-                            if iid in ship_map:
-                                r["shipping_cost"] = round(ship_map[iid], 2)
-                        log.info("unified_orders TN shipping_cost OK col=%s rows=%d",
-                                 col_name, len(ship_rows))
-                        break  # primera col que funciona gana
+                    buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
+                    for r in tn_rows:
+                        iid = str(r.get("internal_id") or "")
+                        if iid in buyer_map and buyer_map[iid]:
+                            r["buyer_name"] = buyer_map[iid]
                 except Exception:
-                    continue
+                    pass
+            # Shipping cost — probar variantes de nombre de columna
+            for col_name in ["shipping_cost", "shippingCost", "shipping_amount", "shipping_total"]:
+                ship_rows = q(eng, f"""
+                    SELECT tienda_nube_id::text, COALESCE({col_name}, 0)::float
+                    FROM public.tienda_nube_orders
+                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
+                      AND {col_name} IS NOT NULL
+                """) or []
+                if ship_rows:
+                    ship_map = {sr[0]: float(sr[1] or 0) for sr in ship_rows if sr[0]}
+                    for r in tn_rows:
+                        iid = str(r.get("internal_id") or "")
+                        if iid in ship_map:
+                            r["shipping_cost"] = round(ship_map[iid], 2)
+                    log.info("unified_orders TN shipping_cost OK col=%s rows=%d", col_name, len(ship_rows))
+                    break
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows

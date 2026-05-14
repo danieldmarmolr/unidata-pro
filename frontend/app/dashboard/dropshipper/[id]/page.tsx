@@ -57,6 +57,7 @@ type DropshipperDetail = {
     requiere_reauth: boolean;
     token_expira: string | null;
     cant_referidos: number;
+    store_id?: string | null;
     canal?: "meli" | "tn" | "ambos" | "sin_canal";
   };
   ventas_tn?: {
@@ -134,6 +135,9 @@ type DropshipperDetail = {
     value: number;
     extra?: { dni?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
   }[];
+  tiendas_tn_detail?: Record<string, string | null>[];
+  talo_accounts?: { id: number | null; creado_en: string | null; cbu?: string | null; cbu_alias?: string | null; alias?: string | null; bank_name?: string | null }[];
+  referidos_list?: { user_id: number | null; nombre: string; email: string; creado_en: string | null; plan: string; sub_status: string; dias_al_vencimiento: number | null }[];
   generated_at: string;
 };
 
@@ -151,6 +155,8 @@ type UnifiedOrder = {
   shipping_cost: number;
   profit_unidrop: number;
   buyer_name: string;
+  billing_city?: string;
+  billing_province?: string;
   shipping_type: string;
   intent_id: number | null;
   enriched?: boolean;
@@ -358,6 +364,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 {data.ventas_tn.tiendas_conectadas} {data.ventas_tn.tiendas_conectadas === 1 ? "tienda TN conectada" : "tiendas TN conectadas"}
               </span>
             )}
+            {u.store_id && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-800 text-xs font-semibold font-mono">
+                Store ID: {u.store_id}
+              </span>
+            )}
             {u.requiere_reauth && (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
                 <AlertTriangle size={12} /> Token MELI requiere re-auth
@@ -549,6 +560,46 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
+        {/* TiendaNube credential detail */}
+        {data.tiendas_tn_detail && data.tiendas_tn_detail.some(t => t.store_url || t.store_name || t.status) && (
+          <div className="bg-cyan-50/40 border border-cyan-200 rounded-xl p-4 mb-5">
+            <h3 className="text-xs font-bold text-cyan-900 uppercase tracking-wider mb-3">Credenciales Tienda Nube</h3>
+            <div className="space-y-2">
+              {data.tiendas_tn_detail!.map((t, i) => (
+                <div key={i} className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                  {t.store_id && <span className="text-text-muted">Store ID: <span className="font-mono font-bold text-text">{t.store_id}</span></span>}
+                  {t.store_name && <span className="text-text-muted">Nombre: <span className="font-bold text-text">{t.store_name}</span></span>}
+                  {t.store_url && (
+                    <a href={String(t.store_url)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline font-medium">
+                      <ExternalLink size={10} /> {t.store_url}
+                    </a>
+                  )}
+                  {t.status && <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${t.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-zinc-50 text-zinc-600 border-zinc-200"}`}>{t.status}</span>}
+                  {t.created_at && <span className="text-text-muted">Conectada: {String(t.created_at).slice(0, 10)}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Talo accounts (CustomerPaymentAccount) */}
+        {data.talo_accounts && data.talo_accounts.length > 0 && data.talo_accounts.some(a => a.cbu || a.cbu_alias || a.alias) && (
+          <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 mb-5">
+            <h3 className="text-xs font-bold text-violet-900 uppercase tracking-wider mb-3">Cuentas Talo Pay</h3>
+            <div className="space-y-2">
+              {data.talo_accounts!.map((acc) => (
+                <div key={acc.id} className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                  <span className="text-text-muted">ID: <span className="font-mono font-bold text-text">{acc.id}</span></span>
+                  {(acc.cbu || acc.cbu_alias) && <span className="text-text-muted">CBU: <span className="font-mono font-bold text-text">{acc.cbu || acc.cbu_alias}</span></span>}
+                  {acc.alias && <span className="text-text-muted">Alias: <span className="font-bold text-text">{acc.alias}</span></span>}
+                  {acc.bank_name && <span className="text-text-muted">Banco: <span className="font-bold text-text">{acc.bank_name}</span></span>}
+                  {acc.creado_en && <span className="text-text-muted">Desde: {acc.creado_en?.slice(0, 10)}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Top clientes FINALES (compradores TN del dropshipper) - drill al End Consumer 360 */}
         {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
           <div className="mb-5">
@@ -596,6 +647,57 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Referidos por este dropshipper */}
+        {data.referidos_list && data.referidos_list.length > 0 && (
+          <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+            <div className="px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-bold text-text">Usuarios referidos ({data.referidos_list.length})</h3>
+              <p className="text-[11px] text-text-muted">Dropshippers que se registraron usando el código de este usuario</p>
+            </div>
+            <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">Nombre</th>
+                    <th className="text-left px-2 py-2">Email</th>
+                    <th className="text-left px-2 py-2">Plan</th>
+                    <th className="text-left px-2 py-2">Estado sub</th>
+                    <th className="text-left px-2 py-2">Alta</th>
+                    <th className="text-right px-2 py-2">Ver</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.referidos_list.map((r) => {
+                    const subOk = r.sub_status?.toLowerCase() === "active" || (r.dias_al_vencimiento ?? -1) > 0;
+                    return (
+                      <tr key={r.user_id} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-3 py-1.5 font-semibold">{r.nombre || "—"}</td>
+                        <td className="px-2 py-1.5 text-text-muted">{r.email || "—"}</td>
+                        <td className="px-2 py-1.5">{r.plan || <span className="text-text-muted italic">sin plan</span>}</td>
+                        <td className="px-2 py-1.5">
+                          {r.sub_status ? (
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${subOk ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-700 border-rose-200"}`}>
+                              {subOk ? `activa${r.dias_al_vencimiento !== null ? ` · ${r.dias_al_vencimiento}d` : ""}` : r.sub_status}
+                            </span>
+                          ) : <span className="text-text-muted">—</span>}
+                        </td>
+                        <td className="px-2 py-1.5 text-text-muted">{r.creado_en?.slice(0, 10)}</td>
+                        <td className="px-2 py-1.5 text-right">
+                          {r.user_id && (
+                            <Link href={`/dashboard/dropshipper/${r.user_id}`} className="inline-flex items-center gap-1 text-primary hover:underline text-[10px] font-semibold">
+                              360 <ExternalLink size={9} />
+                            </Link>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -714,8 +816,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                             </div>
                           )}
                         </td>
-                        <td className="px-2 py-1.5 max-w-[160px] truncate" title={o.buyer_name}>
-                          {o.buyer_name || <span className="text-text-muted">—</span>}
+                        <td className="px-2 py-1.5 max-w-[160px]">
+                          <div className="truncate" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted">—</span>}</div>
+                          {(o.billing_city || o.billing_province) && (
+                            <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
+                          )}
                         </td>
                         <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
                         <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
