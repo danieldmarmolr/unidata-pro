@@ -772,6 +772,13 @@ def dropshipper_detail(
         "pagos_ml_period_count": int(pg[10] or 0),
     }
 
+    # Ticket promedio que el dropshipper paga a Unidrop (ground truth PaymentIntent).
+    # Distinto del ticket_promedio de OML que es el precio al cliente final.
+    ventas_kpi["ticket_promedio_intent"] = (
+        round(pagos_kpi["pagado_ml_period"] / ml_orders_paid, 2)
+        if ml_orders_paid > 0 else 0.0
+    )
+
     # PaymentIntentSubscription — historial COMPLETO (no filtrado por periodo).
     # Esta tabla tiene userId directo y es el ground truth de pagos de suscripcion.
     # Distinta de PaymentTransactionSubscription (que es el cobro via Talo).
@@ -1055,7 +1062,7 @@ def dropshipper_detail(
 
     # Vista unificada estilo Unidrop panel (filas ML + TN combinadas por fecha)
     try:
-        unified_orders = dropshipper_unified_orders(int(user_id), limit=50)
+        unified_orders = dropshipper_unified_orders(int(user_id), limit=50, dni=drop_dni or None)
     except Exception as e:
         log.warning("dropshipper unified_orders fail uid=%s: %s", user_id, e)
         unified_orders = []
@@ -1092,6 +1099,7 @@ def dropshipper_unified_orders(
     *,
     limit: int = 50,
     intent_id: int | None = None,
+    dni: str | None = None,
 ) -> list[dict]:
     """Vista unificada estilo Unidrop panel: filas ML + TN combinadas por fecha.
 
@@ -1109,6 +1117,12 @@ def dropshipper_unified_orders(
     internos como externos segun la integration: matcheamos por ambos.
     """
     eng = get_engine("unidrop")
+
+    # Auto-resolve DNI si no se paso (para la ruta /unified-orders que no lo tiene)
+    if not dni:
+        _dni_rows = q(eng, 'SELECT u.dni FROM public."User" u WHERE u.id = :uid LIMIT 1', {"uid": int(user_id)}) or []
+        if _dni_rows and _dni_rows[0][0]:
+            dni = str(_dni_rows[0][0]).strip() or None
 
     # 1) Bajamos los intents PROCESSED del user + sus arrays de IDs
     intent_filter = "AND pi.id = :intent_id" if intent_id else ""
@@ -1259,6 +1273,102 @@ def dropshipper_unified_orders(
                 "items": [],
                 "shipment": None,
             })
+
+    # 2b) Supplemental: fetch OML por numero DROP-{dni}-* para recuperar "sin number".
+    # El PaymentIntent.mlOrderIds[] a veces guarda IDs que no matchean el mlOrderId en
+    # OML, generando stub rows sin numero. Consultando OML por prefix de numero podemos
+    # actualizar esos stubs Y agregar ordenes que no estaban en ningun PaymentIntent.
+    if dni and not intent_id:
+        _num_pfx = f"DROP-{dni}-%"
+        try:
+            sup_erows = q(eng, """
+                SELECT o."mlOrderId"::text AS ext_id,
+                       o.id::text         AS internal_id,
+                       o.id               AS id_num,
+                       o."number",
+                       o."dateCreated"::text AS fecha,
+                       o."status",
+                       o."paymentStatus",
+                       o."shippingStatus",
+                       COALESCE(p.gmv,0)::float AS total,
+                       COALESCE(o."merchandise_cost",0)::float AS merch_cost,
+                       COALESCE(o."shipping_cost",0)::float AS shipping_cost,
+                       COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+                       o."buyer_name",
+                       o."shipping_type"
+                FROM mercado_libre_dev."OrderMercadoLibre" o
+                LEFT JOIN (
+                    SELECT "orderId", SUM("totalAmount")::float AS gmv
+                    FROM mercado_libre_dev."PaymentMercadoLibre"
+                    GROUP BY 1
+                ) p ON p."orderId" = o.id
+                WHERE o."number" LIKE :num_pfx
+                ORDER BY o."dateCreated" DESC NULLS LAST
+                LIMIT 200
+            """, {"num_pfx": _num_pfx}) or []
+
+            if sup_erows:
+                existing_by_ext = {r["external_id"]: i for i, r in enumerate(ml_rows) if r.get("external_id")}
+                existing_by_int = {str(r["internal_id"]): i for i, r in enumerate(ml_rows) if r.get("internal_id")}
+                existing_numbers: set[str] = {r["number"] for r in ml_rows if r.get("number")}
+
+                for er in sup_erows:
+                    num   = er[3] or ""
+                    ext_id = er[0] or ""
+                    int_id = er[1] or ""
+
+                    # Buscar si ya tenemos esta orden (stub o enriched)
+                    idx = existing_by_ext.get(ext_id) if ext_id else None
+                    if idx is None and int_id:
+                        idx = existing_by_int.get(int_id)
+
+                    if idx is not None:
+                        # Actualizar stub con datos reales
+                        r = ml_rows[idx]
+                        if not r.get("number") and num:
+                            r["number"] = num
+                        if not r.get("internal_id") and int_id:
+                            r["internal_id"] = int(er[2]) if er[2] else None
+                        r["status"] = er[5] or r["status"]
+                        r["payment_status"] = er[6] or r["payment_status"]
+                        r["shipping_status"] = er[7] or r["shipping_status"]
+                        if float(er[8] or 0) > 0 and r.get("total", 0) == 0:
+                            r["total"] = round(float(er[8]), 2)
+                        r["merch_cost"] = round(float(er[9] or 0), 2)
+                        r["shipping_cost"] = round(float(er[10] or 0), 2)
+                        r["profit_unidrop"] = round(float(er[11] or 0), 2)
+                        if er[12] and not r.get("buyer_name"):
+                            r["buyer_name"] = er[12]
+                        r["enriched"] = True
+                    elif num and num not in existing_numbers:
+                        # Orden no encontrada via PaymentIntent — agregar directamente
+                        ml_rows.append({
+                            "origen": "ml",
+                            "internal_id": int(er[2]) if er[2] else None,
+                            "external_id": ext_id,
+                            "number": num,
+                            "fecha": er[4],
+                            "status": er[5] or "",
+                            "payment_status": er[6] or "",
+                            "shipping_status": er[7] or "",
+                            "total": round(float(er[8] or 0), 2),
+                            "merch_cost": round(float(er[9] or 0), 2),
+                            "shipping_cost": round(float(er[10] or 0), 2),
+                            "profit_unidrop": round(float(er[11] or 0), 2),
+                            "buyer_name": er[12] or "",
+                            "shipping_type": er[13] or "",
+                            "intent_id": None,
+                            "enriched": True,
+                            "items": [],
+                            "shipment": None,
+                        })
+                        existing_numbers.add(num)
+                log.info(
+                    "unified_orders sup ML uid=%s sup_rows=%d ml_total=%d",
+                    user_id, len(sup_erows), len(ml_rows),
+                )
+        except Exception as _sup_err:
+            log.warning("unified_orders supplemental ML fail uid=%s: %s", user_id, str(_sup_err)[:200])
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()

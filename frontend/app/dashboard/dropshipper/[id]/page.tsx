@@ -84,6 +84,8 @@ type DropshipperDetail = {
     costo_envio: number;
     profit_unidrop: number;
     ticket_promedio: number;
+    ticket_promedio_intent?: number;
+    ventas_pagadas_intent?: number;
     tasa_cancelacion_pct: number;
   };
   pagos: {
@@ -431,10 +433,19 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               ? `ML ${formatCurrency(v.gmv)} · TN ${formatCurrency(gmvTnKpi)}`
               : `${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`}
           />
-          <KpiBox icon={Wallet} label="Profit Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="Comisión Unidrop por las ventas MELI (suscripcion)" />
-          <KpiBox icon={TrendingUp} label="Ticket promedio" value={formatCurrency(v.ticket_promedio)} accent="amber"
-                  hint="GMV / ventas pagadas" />
+          <KpiBox icon={Wallet} label="Margen Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
+                  hint="profit_for_subscription: ganancia de Unidrop como distribuidor por cada orden ML" />
+          <KpiBox
+            icon={TrendingUp}
+            label="Ticket a Unidrop"
+            value={formatCurrency(v.ticket_promedio_intent ?? v.ticket_promedio)}
+            accent="amber"
+            hint={
+              v.ticket_promedio_intent !== undefined && v.ticket_promedio_intent > 0
+                ? `Promedio pagado a Unidrop por orden ML (PaymentIntent / ${formatNumber(v.ventas_pagadas_intent ?? v.ventas_pagadas)} órd)`
+                : "Promedio GMV por venta MELI pagada"
+            }
+          />
           <KpiBox
             icon={ShoppingBag}
             label="Órdenes pagadas"
