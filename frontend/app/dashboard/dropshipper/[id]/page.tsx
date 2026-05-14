@@ -168,6 +168,14 @@ type UnifiedOrder = {
   buyer_name: string;
   billing_city?: string;
   billing_province?: string;
+  billing_address?: string;
+  billing_zipcode?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  contact_dni?: string;
+  shipping_address?: string;
+  shipping_city?: string;
+  shipping_zipcode?: string;
   shipping_type: string;
   intent_id: number | null;
   enriched?: boolean;
@@ -210,6 +218,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
   const toggleExpand = (key: string) =>
     setExpandedOrders((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
@@ -853,6 +862,208 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
+        {/* Modal de detalle de orden */}
+        {modalOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModalOrder(null)}>
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="px-6 py-4 border-b border-border flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <ChannelBadge origen={modalOrder.origen} />
+                    <span className="text-lg font-bold text-text font-mono">{modalOrder.number || `ID ${modalOrder.internal_id}`}</span>
+                    <OrderStatusBadge status={modalOrder.payment_status || modalOrder.status} />
+                    {modalOrder.shipping_status && <OrderStatusBadge status={modalOrder.shipping_status} />}
+                  </div>
+                  <div className="text-xs text-text-muted mt-1">{fmtArDateTime(modalOrder.fecha)}</div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {modalOrder.number && (
+                    <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(modalOrder.number)}`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5">
+                      <ExternalLink size={11} /> Abrir en Unidrop
+                    </a>
+                  )}
+                  <button onClick={() => setModalOrder(null)}
+                    className="w-8 h-8 flex items-center justify-center rounded-lg border border-border hover:bg-soft text-text-muted hover:text-text">
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* LEFT: productos + logística + pago */}
+                <div className="space-y-5">
+                  {/* Productos */}
+                  {(modalOrder.items?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Package size={12} /> Detalle de la venta · {modalOrder.items!.length} {modalOrder.items!.length === 1 ? "producto" : "productos"}
+                      </div>
+                      <div className="space-y-2">
+                        {modalOrder.items!.map((item, ii) => {
+                          const subtotal = item.price * item.qty;
+                          return (
+                            <div key={ii} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
+                              <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                <Package size={14} className="text-text-muted" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-semibold text-text truncate">{item.name || "—"}</div>
+                                <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
+                                <div className="text-[10px] text-text-muted">{item.qty}× {formatCurrency(item.price)}</div>
+                              </div>
+                              <div className="text-xs font-bold tabular-nums text-text flex-shrink-0">{formatCurrency(subtotal)}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-2 flex justify-between text-xs pt-2 border-t border-border">
+                        <span className="text-text-muted">Subtotal productos</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pago */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <DollarSign size={12} /> Pago
+                    </div>
+                    <div className="bg-soft rounded-lg p-3 space-y-1.5">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-text-muted">Total orden</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.total)}</span>
+                      </div>
+                      {modalOrder.merch_cost > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-muted">Costo mercadería (Unidrop)</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.merch_cost)}</span>
+                        </div>
+                      )}
+                      {modalOrder.shipping_cost > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-muted">Costo envío</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.shipping_cost)}</span>
+                        </div>
+                      )}
+                      {modalOrder.profit_unidrop > 0 && (
+                        <div className="flex justify-between text-xs border-t border-border pt-1.5 mt-1.5">
+                          <span className="text-text-muted">Margen Unidrop</span>
+                          <span className="tabular-nums font-semibold text-primary">{formatCurrency(modalOrder.profit_unidrop)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Logística */}
+                  {modalOrder.shipment && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Truck size={12} /> Logística · {carrierLabel(modalOrder.shipment.carrier)}
+                      </div>
+                      <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Estado</span>
+                          <span className="font-semibold">{modalOrder.shipment.status || "—"}</span>
+                        </div>
+                        {modalOrder.shipment.entregado && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Entregado</span>
+                            <span className="text-emerald-700 font-semibold">{modalOrder.shipment.entregado.slice(0, 10)}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipment.costo > 0 || modalOrder.shipping_cost > 0) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Costo envío</span>
+                            <span className="tabular-nums">{formatCurrency(modalOrder.shipment.costo || modalOrder.shipping_cost)}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipping_address || modalOrder.billing_address) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Dirección</span>
+                            <span className="text-right">{modalOrder.shipping_address || modalOrder.billing_address}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipping_city || modalOrder.billing_city) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Ciudad · CP</span>
+                            <span>{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {!modalOrder.shipment && (modalOrder.billing_address || modalOrder.shipping_address) && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Dirección de entrega</div>
+                      <div className="bg-soft rounded-lg p-3 text-xs space-y-0.5">
+                        <div>{modalOrder.shipping_address || modalOrder.billing_address}</div>
+                        <div className="text-text-muted">{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.billing_province, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* RIGHT: cliente + pipeline */}
+                <div className="space-y-5">
+                  {/* Datos del cliente */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Datos del cliente</div>
+                    <div className="bg-soft rounded-lg p-3 space-y-2">
+                      {modalOrder.buyer_name ? (
+                        <div className="text-sm font-bold text-text">{modalOrder.buyer_name}</div>
+                      ) : <div className="text-xs text-text-muted italic">Sin nombre registrado</div>}
+                      {modalOrder.contact_email && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <Mail size={11} /> <span>{modalOrder.contact_email}</span>
+                        </div>
+                      )}
+                      {modalOrder.contact_phone && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <Phone size={11} /> <span>{modalOrder.contact_phone}</span>
+                        </div>
+                      )}
+                      {modalOrder.contact_dni && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <IdCard size={11} /> <span>DNI/CUIT: {modalOrder.contact_dni}</span>
+                        </div>
+                      )}
+                      {(modalOrder.billing_city || modalOrder.billing_province) && (
+                        <div className="text-xs text-text-muted">
+                          {[modalOrder.billing_address, modalOrder.billing_city, modalOrder.billing_province, modalOrder.billing_zipcode].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Pipeline de estado */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Estado del pedido</div>
+                    <OrderPipelineDetail o={modalOrder} />
+                  </div>
+
+                  {/* ID técnicos */}
+                  <div className="bg-soft/50 border border-border rounded-lg p-3 text-[10px] text-text-muted space-y-0.5">
+                    {modalOrder.number && <div>Número DROP: <span className="font-mono font-bold">{modalOrder.number}</span></div>}
+                    {modalOrder.external_id && <div>ID externo: <span className="font-mono">{modalOrder.external_id}</span></div>}
+                    {modalOrder.internal_id && <div>ID interno: <span className="font-mono">{modalOrder.internal_id}</span></div>}
+                    {modalOrder.intent_id && <div>PaymentIntent: <span className="font-mono">#{modalOrder.intent_id}</span></div>}
+                    {modalOrder.returns_count && modalOrder.returns_count > 0 && (
+                      <div className="text-rose-600 font-semibold flex items-center gap-1"><RotateCcw size={9} /> {modalOrder.returns_count} devolución{modalOrder.returns_count !== 1 ? "es" : ""}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 py-3 border-t border-border text-[10px] text-text-muted">
+                Click fuera del modal o en ✕ para cerrar
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
           {/* Vista unificada estilo Unidrop panel */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -868,47 +1079,39 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   <span className="text-[10px] text-text-muted italic">actualizando...</span>
                 )}
                 <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                  <button
-                    onClick={() => setChannelFilter("all")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}
-                  >
+                  <button onClick={() => setChannelFilter("all")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
                     Todas ({countMl + countTn})
                   </button>
-                  <button
-                    onClick={() => setChannelFilter("ml")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}
-                  >
-                    MELI ({countMl})
+                  <button onClick={() => setChannelFilter("ml")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><MeliBadgeInline /> ({countMl})</span>
                   </button>
-                  <button
-                    onClick={() => setChannelFilter("tn")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-emerald-100 text-emerald-900 shadow" : "text-text-muted hover:text-text")}
-                  >
-                    TN ({countTn})
+                  <button onClick={() => setChannelFilter("tn")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-[#23A0DF]/10 text-[#1580B8] shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
                   </button>
                 </div>
               </div>
             </div>
-            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
               <table className="w-full text-xs">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                   <tr>
-                    <th className="w-7 px-1 py-2"></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="origen" label="Origen" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="number" label="Number · DROP" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="buyer_name" label="Cliente final" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="merch_cost" label="Mercadería" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="shipping_cost" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-center px-2 py-2"><SortHeader col="shipping_status" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-center px-2 py-2"><SortHeader col="payment_status" label="Pago" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="w-7 px-1 py-2.5"></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="number" label="# Orden" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5">Estado</th>
+                    <th className="text-left px-2 py-2.5">Envío</th>
+                    <th className="text-right px-2 py-2.5"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="w-8 px-1 py-2.5"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {unifiedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center text-text-muted py-6">
+                      <td colSpan={8} className="text-center text-text-muted py-8">
                         {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
                       </td>
                     </tr>
@@ -920,116 +1123,123 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       const hasReturns = (o.returns_count ?? 0) > 0;
                       const isExpandable = hasItems || hasShip || hasReturns;
                       const isExpanded = expandedOrders.has(rowKey);
+                      const carrier = o.shipment ? carrierLabel(o.shipment.carrier) : null;
                       return (
                         <>
-                        <tr key={rowKey} className={`border-t border-border ${isExpandable ? "cursor-pointer" : ""} ${isExpanded ? "bg-soft/60" : "hover:bg-soft/40"}`}
-                            onClick={() => isExpandable && toggleExpand(rowKey)}>
-                          <td className="px-1 py-1.5 text-center text-text-muted">
+                        <tr key={rowKey}
+                            className={`border-t border-border cursor-pointer ${isExpanded ? "bg-primary/5" : "hover:bg-soft/40"}`}
+                            onClick={() => toggleExpand(rowKey)}>
+                          {/* Expand chevron */}
+                          <td className="px-1 py-2 text-center text-text-muted">
                             {isExpandable
                               ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
                               : <span className="w-3 inline-block" />}
                           </td>
-                          <td className="px-2 py-1.5">
-                            <span className={"inline-block px-1.5 py-0.5 rounded text-[9px] uppercase font-bold border " + (o.origen === "ml" ? "bg-yellow-50 text-yellow-800 border-yellow-300" : "bg-emerald-50 text-emerald-800 border-emerald-300")}>
-                              {o.origen === "ml" ? "ML" : "TN"}
-                            </span>
-                            {hasReturns && <span className="ml-1 inline-flex items-center gap-0.5 text-[9px] text-rose-600 font-bold"><RotateCcw size={8} />{o.returns_count}</span>}
+                          {/* Número + canal badge */}
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <ChannelBadge origen={o.origen} />
+                              {o.number ? (
+                                <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                  className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
+                                  {o.number}
+                                </button>
+                              ) : (
+                                <span className="text-text-muted italic text-[10px]">sin number</span>
+                              )}
+                            </div>
+                            {o.external_id && (
+                              <div className="text-[9px] text-text-muted font-mono mt-0.5 pl-0.5">{o.external_id}</div>
+                            )}
                           </td>
-                          <td className="px-2 py-1.5 font-mono">
-                            {o.number ? (
-                              <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
-                                 target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
-                                 className="inline-flex items-center gap-1 text-primary hover:underline font-semibold" title="Abrir en panel Unidrop">
-                                {o.number}<ExternalLink size={9} />
-                              </a>
-                            ) : <span className="text-text-muted italic text-[10px]">sin number</span>}
-                            {o.external_id && <div className="text-[9px] text-text-muted font-mono">{o.origen === "ml" ? "ML " : "TN "}{o.external_id}</div>}
-                          </td>
-                          <td className="px-2 py-1.5 max-w-[160px]">
-                            <div className="truncate" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted">—</span>}</div>
+                          {/* Cliente */}
+                          <td className="px-2 py-2 max-w-[150px]">
+                            <div className="truncate font-medium" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted text-[10px]">—</span>}</div>
                             {(o.billing_city || o.billing_province) && (
                               <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
                             )}
                           </td>
-                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{o.merch_cost > 0 ? formatCurrency(o.merch_cost) : "—"}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">{o.shipping_cost > 0 ? formatCurrency(o.shipping_cost) : "—"}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
-                          <td className="px-2 py-1.5 text-center">
-                            {o.shipping_status ? (
-                              <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.shipping_status)}`}>{o.shipping_status}</span>
-                            ) : <span className="text-text-muted text-[10px]">—</span>}
-                            {hasShip && !o.shipping_status && (
-                              <span className="text-[9px] text-text-muted block">{o.shipment!.carrier}</span>
-                            )}
+                          {/* Fecha */}
+                          <td className="px-2 py-2 text-text-muted whitespace-nowrap">{fmtArDateTime(o.fecha)}</td>
+                          {/* Pipeline de estado */}
+                          <td className="px-2 py-2">
+                            <OrderPipeline o={o} />
                           </td>
-                          <td className="px-2 py-1.5 text-center">
-                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.payment_status || o.status)}`}>
-                              {o.payment_status || o.status || "—"}
-                            </span>
+                          {/* Carrier */}
+                          <td className="px-2 py-2">
+                            {carrier ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold bg-blue-50 text-blue-700 border-blue-200">
+                                <Truck size={8} />{carrier}
+                              </span>
+                            ) : <span className="text-text-muted text-[10px]">—</span>}
+                          </td>
+                          {/* Total */}
+                          <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
+                          {/* Abrir modal */}
+                          <td className="px-1 py-2 text-center">
+                            <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                              className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-primary hover:bg-soft"
+                              title="Ver detalle completo">
+                              <ExternalLink size={11} />
+                            </button>
                           </td>
                         </tr>
-                        {/* Fila expandible — items + envío */}
+                        {/* Fila expandible — items inline */}
                         {isExpanded && (
-                          <tr key={`${rowKey}-detail`} className="border-t border-border/50 bg-soft/30">
-                            <td colSpan={10} className="px-4 py-2">
-                              <div className="flex flex-wrap gap-4">
-                                {/* Items / productos */}
+                          <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
+                            <td colSpan={8} className="px-4 py-3">
+                              <div className="flex flex-wrap gap-5">
                                 {hasItems && (
-                                  <div className="flex-1 min-w-[200px]">
-                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                                      <Package size={10} /> Productos ({o.items!.length})
+                                  <div className="flex-1 min-w-[220px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
+                                      <Package size={10} /> Productos · {o.items!.length} líneas
                                     </div>
-                                    <table className="w-full text-[11px]">
-                                      <thead>
-                                        <tr className="text-text-muted text-[9px]">
-                                          <th className="text-left font-medium pb-1">SKU</th>
-                                          <th className="text-left font-medium pb-1 pl-2">Nombre</th>
-                                          <th className="text-center font-medium pb-1 px-2">Cant</th>
-                                          <th className="text-right font-medium pb-1">P. Unit</th>
-                                          <th className="text-right font-medium pb-1 pl-2">Subtotal</th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {o.items!.map((item, ii) => (
-                                          <tr key={ii} className="border-t border-border/40">
-                                            <td className="font-mono text-text-muted py-0.5">{item.sku || "—"}</td>
-                                            <td className="pl-2 py-0.5 max-w-[180px] truncate" title={item.name}>{item.name || "—"}</td>
-                                            <td className="text-center px-2 py-0.5 tabular-nums">{item.qty}</td>
-                                            <td className="text-right tabular-nums py-0.5">{item.price > 0 ? formatCurrency(item.price) : "—"}</td>
-                                            <td className="text-right tabular-nums font-semibold py-0.5 pl-2">{item.price > 0 ? formatCurrency(item.price * item.qty) : "—"}</td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
+                                    <div className="space-y-1">
+                                      {o.items!.map((item, ii) => (
+                                        <div key={ii} className="flex items-baseline justify-between text-[11px] border-b border-border/30 pb-0.5 last:border-0">
+                                          <div className="flex-1 min-w-0">
+                                            <span className="font-mono text-[9px] text-text-muted mr-1.5">{item.sku || "—"}</span>
+                                            <span className="truncate">{item.name || "—"}</span>
+                                            <span className="text-text-muted ml-1.5">{item.qty}×{item.price > 0 ? ` ${formatCurrency(item.price)}` : ""}</span>
+                                          </div>
+                                          <span className="font-semibold tabular-nums ml-2 flex-shrink-0">{item.price > 0 ? formatCurrency(item.price * item.qty) : "—"}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="mt-1.5 flex justify-between text-xs border-t border-border/50 pt-1 font-semibold">
+                                      <span className="text-text-muted">Subtotal</span>
+                                      <span>{formatCurrency(o.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
+                                    </div>
                                   </div>
                                 )}
-                                {/* Envío / logística */}
                                 {hasShip && (
-                                  <div className="min-w-[180px]">
-                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                                      <Truck size={10} /> Logística · {o.shipment!.carrier}
+                                  <div className="min-w-[160px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
+                                      <Truck size={10} /> {carrierLabel(o.shipment!.carrier)}
                                     </div>
                                     <div className="text-[11px] space-y-0.5">
-                                      <div><span className="text-text-muted">Estado:</span> <span className="font-semibold">{o.shipment!.status || "—"}</span></div>
+                                      <div><span className="text-text-muted">Estado:</span> <span className="font-semibold ml-1">{o.shipment!.status || "—"}</span></div>
                                       {o.shipment!.entregado && (
-                                        <div><span className="text-text-muted">Entregado:</span> <span className="text-emerald-700 font-semibold">{o.shipment!.entregado.slice(0, 10)}</span></div>
+                                        <div><span className="text-text-muted">Entregado:</span> <span className="text-emerald-700 font-semibold ml-1">{o.shipment!.entregado.slice(0, 10)}</span></div>
                                       )}
-                                      {o.shipment!.costo > 0 && (
-                                        <div><span className="text-text-muted">Costo envío:</span> <span className="tabular-nums">{formatCurrency(o.shipment!.costo)}</span></div>
+                                      {(o.shipment!.costo > 0 || o.shipping_cost > 0) && (
+                                        <div><span className="text-text-muted">Costo:</span> <span className="tabular-nums ml-1">{formatCurrency(o.shipment!.costo || o.shipping_cost)}</span></div>
                                       )}
                                     </div>
                                   </div>
                                 )}
-                                {/* Devoluciones ML */}
                                 {hasReturns && (
                                   <div className="min-w-[120px]">
-                                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-2 flex items-center gap-1">
                                       <RotateCcw size={10} /> Devoluciones
                                     </div>
-                                    <div className="text-[11px] text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""} registrada{o.returns_count !== 1 ? "s" : ""}</div>
+                                    <div className="text-[11px] text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</div>
                                   </div>
                                 )}
+                                <button onClick={() => setModalOrder(o)}
+                                  className="self-start mt-4 text-[10px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                  <ExternalLink size={9} /> Ver detalle completo
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -1119,6 +1329,130 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
     </>
   );
 }
+
+// ── Canal labels ──────────────────────────────────────────────────────────────
+
+function carrierLabel(raw: string): string {
+  const s = (raw || "").toLowerCase();
+  if (s.includes("lightdata") || s.includes("flexi")) return "Unifast";
+  if (s.includes("oca")) return "OCA";
+  return raw;
+}
+
+function MeliBadgeInline() {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide bg-[#FFE600] text-[#333] border border-[#E8C800]">
+      ML
+    </span>
+  );
+}
+
+function TnBadgeInline() {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide bg-[#23A0DF] text-white border border-[#1580B8]">
+      TN
+    </span>
+  );
+}
+
+function ChannelBadge({ origen }: { origen: "ml" | "tn" }) {
+  if (origen === "ml") return <MeliBadgeInline />;
+  return <TnBadgeInline />;
+}
+
+// ── Status badge ───────────────────────────────────────────────────────────────
+
+function OrderStatusBadge({ status }: { status: string }) {
+  const s = (status || "").toLowerCase();
+  const cls =
+    s === "paid" || s === "processed" || s === "delivered" || s === "entregado"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : s === "pending" || s === "open" || s === "shipped" || s === "en_camino"
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : s === "cancelled" || s === "failed"
+      ? "bg-rose-50 text-rose-700 border-rose-200"
+      : "bg-zinc-50 text-zinc-600 border-zinc-200";
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
+// ── Estado pipeline (fila tabla) ───────────────────────────────────────────────
+
+function pipelineStep(
+  done: boolean,
+  partial: boolean,
+  icon: string,
+): React.ReactNode {
+  const cls = done
+    ? "bg-emerald-500 text-white border-emerald-500"
+    : partial
+    ? "bg-amber-400 text-white border-amber-400"
+    : "bg-zinc-100 text-zinc-400 border-zinc-300";
+  return (
+    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold border ${cls}`}>
+      {icon}
+    </div>
+  );
+}
+
+function OrderPipeline({ o }: { o: UnifiedOrder }) {
+  const ps = (o.payment_status || o.status || "").toLowerCase();
+  const ss = (o.shipping_status || "").toLowerCase();
+  const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
+  const isShipped = ["shipped", "transit", "en_camino", "en camino"].some((v) => ss.includes(v)) || !!o.shipment;
+  const isDelivered =
+    ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const connector = (on: boolean) => (
+    <div className={`h-px w-3 flex-shrink-0 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
+  );
+  return (
+    <div className="flex items-center gap-0.5">
+      {pipelineStep(isPaid, !isPaid && ps !== "", "$")}
+      {connector(isShipped)}
+      {pipelineStep(isShipped, false, "▸")}
+      {connector(isDelivered)}
+      {pipelineStep(isDelivered, false, "✓")}
+    </div>
+  );
+}
+
+// ── Estado pipeline (modal detalle) ───────────────────────────────────────────
+
+function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
+  const ps = (o.payment_status || o.status || "").toLowerCase();
+  const ss = (o.shipping_status || "").toLowerCase();
+  const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
+  const isShipped = ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || !!o.shipment;
+  const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+
+  const step = (done: boolean, label: string, icon: string) => (
+    <div className="flex flex-col items-center gap-1">
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 ${
+        done ? "bg-emerald-500 text-white border-emerald-500" : "bg-zinc-100 text-zinc-400 border-zinc-200"
+      }`}>{icon}</div>
+      <span className={`text-[10px] leading-none text-center ${done ? "text-emerald-700 font-semibold" : "text-zinc-400"}`}>{label}</span>
+    </div>
+  );
+  const line = (on: boolean) => (
+    <div className={`flex-1 h-0.5 mb-4 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
+  );
+  return (
+    <div className="flex items-center gap-2">
+      {step(true, "Creada", "📋")}
+      {line(isPaid)}
+      {step(isPaid, "Pagada", "💲")}
+      {line(isShipped)}
+      {step(isShipped, "En camino", "🚚")}
+      {line(isDelivered)}
+      {step(isDelivered, "Entregada", "✅")}
+    </div>
+  );
+}
+
+// ── KpiBox ─────────────────────────────────────────────────────────────────────
 
 function KpiBox({
   icon: Icon,

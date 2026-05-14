@@ -1443,6 +1443,14 @@ def dropshipper_unified_orders(
                 "buyer_name": "",
                 "billing_province": "",
                 "billing_city": "",
+                "billing_address": "",
+                "billing_zipcode": "",
+                "contact_email": "",
+                "contact_phone": "",
+                "contact_dni": "",
+                "shipping_address": "",
+                "shipping_city": "",
+                "shipping_zipcode": "",
                 "shipping_type": "",
                 "intent_id": key_intent,
                 "enriched": True,
@@ -1457,41 +1465,61 @@ def dropshipper_unified_orders(
     if tn_rows:
         ids_for_enrich = ",".join("'" + str(r["internal_id"]) + "'" for r in tn_rows if r.get("internal_id"))
         if ids_for_enrich:
-            # Buyer name + billing location en una sola query
-            # billing_province y billing_city existen en tienda_nube_orders (confirmado via end_consumers_unidrop)
+            # Buyer name + contact + billing/shipping address. Defensive: usamos
+            # list_columns para saber que columnas existen y construir SELECT dinamicamente.
+            tno_all_cols = list_columns(eng, "public", "tienda_nube_orders")
+            # Columna de nombre: probamos varios candidatos
+            _name_candidates = ["contact_name", "buyer_name", "customer_name", "client_name"]
+            _name_col = next((c for c in _name_candidates if c in tno_all_cols), None)
+            _id_col   = next((c for c in ["contact_identification", "buyer_dni", "customer_dni"] if c in tno_all_cols), None)
+            _name_expr = (
+                f'COALESCE(NULLIF("{_name_col}"::text, \'\'), {f\'"{_id_col}"::text\' if _id_col else "NULL"}, \'\')'
+                if _name_col else f'COALESCE("{_id_col}"::text, \'\')' if _id_col else "''"
+            )
+            # Columnas opcionales (contact + address)
+            _opt_cols: list[tuple[str, str]] = [
+                ("billing_province",  "billing_province"),
+                ("billing_city",      "billing_city"),
+                ("billing_address",   "billing_address"),
+                ("billing_zipcode",   "billing_zipcode"),
+                ("contact_email",     "contact_email"),
+                ("contact_phone",     "contact_phone"),
+                ("contact_identification", "contact_dni"),
+                ("shipping_address",  "shipping_address"),
+                ("shipping_city",     "shipping_city"),
+                ("shipping_zipcode",  "shipping_zipcode"),
+            ]
+            _opt_select: list[str] = []
+            _opt_keys:   list[str] = []
+            for col, alias in _opt_cols:
+                if col in tno_all_cols:
+                    _opt_select.append(f"COALESCE(\"{col}\"::text, '') AS {alias}")
+                    _opt_keys.append(alias)
+            _extra_sql = (", " + ", ".join(_opt_select)) if _opt_select else ""
             loc_rows = q(eng, f"""
                 SELECT tienda_nube_id::text,
-                       COALESCE(NULLIF(contact_name, ''), contact_identification, '') AS buyer_name,
-                       COALESCE(billing_province, '') AS billing_province,
-                       COALESCE(billing_city, '') AS billing_city
+                       {_name_expr} AS buyer_name
+                       {_extra_sql}
                 FROM public.tienda_nube_orders
                 WHERE tienda_nube_id::text IN ({ids_for_enrich})
             """) or []
             if loc_rows:
-                loc_map = {lr[0]: {"buyer_name": lr[1] or "", "billing_province": lr[2] or "", "billing_city": lr[3] or ""} for lr in loc_rows if lr[0]}
+                loc_map: dict[str, dict] = {}
+                for lr in loc_rows:
+                    if not lr[0]: continue
+                    entry: dict = {"buyer_name": lr[1] or ""}
+                    for i, key in enumerate(_opt_keys, 2):
+                        entry[key] = lr[i] or ""
+                    loc_map[lr[0]] = entry
                 for r in tn_rows:
                     iid = str(r.get("internal_id") or "")
-                    if iid in loc_map:
-                        loc = loc_map[iid]
-                        if loc["buyer_name"]:
-                            r["buyer_name"] = loc["buyer_name"]
-                        r["billing_province"] = loc["billing_province"]
-                        r["billing_city"] = loc["billing_city"]
-            elif loc_rows is None:
-                try:
-                    buyer_rows = q(eng, f"""
-                        SELECT tienda_nube_id::text,
-                               COALESCE(NULLIF(contact_name, ''), contact_identification, '')
-                        FROM public.tienda_nube_orders
-                        WHERE tienda_nube_id::text IN ({ids_for_enrich})
-                    """) or []
-                    buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
-                    for r in tn_rows:
-                        iid = str(r.get("internal_id") or "")
-                        if iid in buyer_map and buyer_map[iid]:
-                            r["buyer_name"] = buyer_map[iid]
-                except Exception:
-                    pass
+                    if iid not in loc_map: continue
+                    loc = loc_map[iid]
+                    if loc["buyer_name"]:
+                        r["buyer_name"] = loc["buyer_name"]
+                    for key in _opt_keys:
+                        if key in loc and not r.get(key):
+                            r[key] = loc[key]
             # Shipping cost — probar variantes de nombre de columna
             for col_name in ["shipping_cost", "shippingCost", "shipping_amount", "shipping_total"]:
                 ship_rows = q(eng, f"""
