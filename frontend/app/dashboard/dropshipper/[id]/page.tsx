@@ -1139,18 +1139,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                           <td className="px-2 py-2">
                             <div className="flex items-center gap-1.5">
                               <ChannelBadge origen={o.origen} />
-                              {o.number ? (
-                                <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
-                                  className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
-                                  {o.number}
-                                </button>
-                              ) : (
-                                <span className="text-text-muted italic text-[10px]">sin number</span>
-                              )}
+                              <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
+                                {o.number || o.external_id || "—"}
+                              </button>
                             </div>
-                            {o.external_id && (
-                              <div className="text-[9px] text-text-muted font-mono mt-0.5 pl-0.5">{o.external_id}</div>
-                            )}
                           </td>
                           {/* Cliente */}
                           <td className="px-2 py-2 max-w-[150px]">
