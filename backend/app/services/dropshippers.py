@@ -1414,7 +1414,7 @@ def dropshipper_unified_orders(
     if _all_intent_ids:
         _ji_lit = ",".join(str(i) for i in _all_intent_ids)
         try:
-            _jt_cols = list_columns(eng, "public", "_OrderMercadoLibreToPaymentIntent")
+            _jt_cols = list_columns(eng, "mercado_libre_dev", "_OrderMercadoLibreToPaymentIntent")
             _jt_a = next((c for c in ["A", "a", "order_id", "oml_id"] if c in _jt_cols), None)
             _jt_b = next((c for c in ["B", "b", "intent_id", "payment_intent_id"] if c in _jt_cols), None)
             log.info("ML join-table cols=%s A=%s B=%s", _jt_cols, _jt_a, _jt_b)
@@ -1434,7 +1434,7 @@ def dropshipper_unified_orders(
                            COALESCE(o."profit_for_subscription",0)::float AS profit,
                            COALESCE(p.gmv,0)::float AS total,
                            o."shipping_type"
-                    FROM public."_OrderMercadoLibreToPaymentIntent" jt
+                    FROM mercado_libre_dev."_OrderMercadoLibreToPaymentIntent" jt
                     JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = jt."{_jt_a}"
                     LEFT JOIN (
                         SELECT "orderId", SUM("totalAmount")::float AS gmv
@@ -1495,7 +1495,7 @@ def dropshipper_unified_orders(
         _wo_lit = "ARRAY[" + ",".join("'" + i + "'" for i in _wo_ext_ids) + "]::text[]"
         try:
             _wo_cols = list_columns(eng, "mercado_libre_dev", "WebhookOrder")
-            log.info("WebhookOrder cols=%s", _wo_cols[:20])
+            log.info("WebhookOrder cols=%s", sorted(_wo_cols)[:20])
             _wo_order_col = next((c for c in ["orderId", "mlOrderId", "order_id", "id"] if c in _wo_cols), None)
             _wo_buyer_col = next((c for c in ["buyerNickname", "buyerName", "buyer_name", "buyer", "buyerId"] if c in _wo_cols), None)
             _wo_number_col = next((c for c in ["number", "orderNumber", "order_number"] if c in _wo_cols), None)
@@ -1758,13 +1758,13 @@ def dropshipper_unified_orders(
             oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
             log.info("ML items oi_cols=%s", oi_cols)
             # sellerSKU / seller_sku = nuestro SKU (SBUNIB4, PARA005, etc.)
-            sku_col = next((c for c in ["sellerSKU", "seller_sku", "sellerCustomField", "seller_custom_field", "sku"] if c in oi_cols), None)
+            sku_col = next((c for c in ["sellerSku", "sellerSKU", "seller_sku", "sellerCustomField", "seller_custom_field", "sku"] if c in oi_cols), None)
             oid_col = next((c for c in ["orderId", "order_id"] if c in oi_cols), None)
             price_col = next((c for c in ["unitPrice", "unit_price"] if c in oi_cols), None)
             qty_col = "quantity" if "quantity" in oi_cols else None
             title_col = "title" if "title" in oi_cols else None
-            type_col = "type" if "type" in oi_cols else None  # "COMBO" | "item"
-            cost_col = next((c for c in ["cost", "merchandiseCost", "merchandise_cost"] if c in oi_cols), None)
+            type_col = next((c for c in ["type", "orderType", "order_type"] if c in oi_cols), None)
+            cost_col = next((c for c in ["unitCost", "cost", "merchandiseCost", "merchandise_cost"] if c in oi_cols), None)
             if sku_col and oid_col and qty_col:
                 ml_ext_bulk = ",".join("'" + i + "'" for i in ml_ext_for_items)
                 oi_price = f'COALESCE(oi."{price_col}", 0)::float' if price_col else "0::float"
