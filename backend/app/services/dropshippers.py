@@ -940,6 +940,37 @@ def dropshipper_detail(
             })
     monthly_series.sort(key=lambda x: x["mes"])
 
+    # Fallback mensual ML: si OML no tiene datos para este dropshipper, usar
+    # PaymentIntent (ground truth de GMV Unidrop) para la serie mensual MELI.
+    if not monthly_series or all(m["gmv"] == 0.0 for m in monthly_series):
+        try:
+            pi_monthly = q(eng, """
+                SELECT to_char(date_trunc('month', pi."createdAt"), 'YYYY-MM') AS mes,
+                       COUNT(DISTINCT pi.id)::int AS ordenes,
+                       COALESCE(SUM(pi."amount"), 0)::float AS gmv
+                FROM public."PaymentIntent" pi
+                INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                WHERE cpa."userId" = :uid
+                  AND pi."status" = 'PROCESSED'
+                  AND COALESCE(array_length(pi."mlOrderIds", 1), 0) > 0
+                  AND pi."createdAt" >= NOW() - INTERVAL '12 months'
+                GROUP BY 1 ORDER BY 1
+            """, {"uid": int(user_id)}) or []
+            pi_mes_map = {r[0]: {"ordenes": int(r[1] or 0), "gmv": round(float(r[2] or 0), 2)} for r in pi_monthly}
+            for m in monthly_series:
+                if m["mes"] in pi_mes_map and m["gmv"] == 0.0:
+                    m["ordenes"] = pi_mes_map[m["mes"]]["ordenes"]
+                    m["gmv"] = pi_mes_map[m["mes"]]["gmv"]
+            for mes, pd in pi_mes_map.items():
+                if not any(m["mes"] == mes for m in monthly_series):
+                    monthly_series.append({
+                        "mes": mes, "ordenes": pd["ordenes"], "gmv": pd["gmv"],
+                        "profit": 0.0, "ordenes_tn": 0, "gmv_tn": 0.0,
+                    })
+            monthly_series.sort(key=lambda x: x["mes"])
+        except Exception as _pi_mon_err:
+            log.warning("monthly PI fallback fail uid=%s: %s", user_id, str(_pi_mon_err)[:100])
+
     # Ultimas ventas MELI: ground truth = mlOrderIds desnormalizados de PaymentIntents
     # PROCESSED del dropshipper. Para cada ML order ID, buscamos enriquecimiento en
     # OrderMercadoLibre por su mlOrderId. Si no existe, devolvemos al menos el ID +
@@ -1946,6 +1977,39 @@ def dropshipper_unified_orders(
 
             except Exception as _disc_err:
                 log.warning("ML stub enrichment fail uid=%s: %s", user_id, str(_disc_err)[:150])
+
+    # 4.5) Enrich items con image_url via SKU → Variant → Image (catálogo Unidrop)
+    all_item_skus = list({
+        item["sku"]
+        for rows_list in [ml_rows, tn_rows]
+        for r in rows_list
+        for item in (r.get("items") or [])
+        if item.get("sku")
+    })
+    if all_item_skus:
+        try:
+            sku_lit_img = ",".join("'" + s.replace("'", "''") + "'" for s in all_item_skus)
+            img_rows = q(eng, f"""
+                WITH fi AS (
+                    SELECT DISTINCT ON (i.product_id)
+                        i.product_id, i.src AS img_url
+                    FROM public."Image" i
+                    ORDER BY i.product_id, i.position ASC NULLS LAST, i.id ASC
+                )
+                SELECT v.sku, fi.img_url
+                FROM public."Variant" v
+                LEFT JOIN fi ON fi.product_id = v.product_id
+                WHERE v.sku IN ({sku_lit_img})
+            """) or []
+            sku_img_map = {r[0]: r[1] for r in img_rows if r[0] and r[1]}
+            if sku_img_map:
+                for r in ml_rows + tn_rows:
+                    for item in (r.get("items") or []):
+                        if item.get("sku") in sku_img_map:
+                            item["image_url"] = sku_img_map[item["sku"]]
+                log.info("SKU images uid=%s skus=%d imgs=%d", user_id, len(all_item_skus), len(sku_img_map))
+        except Exception as _img_err:
+            log.warning("SKU image enrichment fail uid=%s: %s", user_id, str(_img_err)[:100])
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows

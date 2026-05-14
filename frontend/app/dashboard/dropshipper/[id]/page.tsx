@@ -150,7 +150,7 @@ type DropshipperDetail = {
   generated_at: string;
 };
 
-type OrderItem = { sku: string; name: string; qty: number; price: number; item_type?: string; cost?: number };
+type OrderItem = { sku: string; name: string; qty: number; price: number; item_type?: string; cost?: number; image_url?: string };
 type Shipment = { carrier: string; status: string; entregado: string | null; costo: number } | null;
 
 type UnifiedOrder = {
@@ -755,11 +755,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   <p className="text-[11px] text-text-muted">GMV {hasTn ? "MELI + TN" : "MELI"} y profit Unidrop por mes</p>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-text-muted">
+                  {totalMeli > 0 && (
+                    <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" /> ML {formatCurrency(totalMeli)}</span>
+                  )}
                   {hasTn && (
-                    <>
-                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" /> ML {formatCurrency(totalMeli)}</span>
-                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-cyan-400 inline-block" /> TN {formatCurrency(totalTn)}</span>
-                    </>
+                    <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-cyan-400 inline-block" /> TN {formatCurrency(totalTn)}</span>
                   )}
                   <span className="font-semibold text-text">Total: {formatCurrency(totalMeli + totalTn)}</span>
                 </div>
@@ -880,8 +880,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   <div className="text-xs text-text-muted mt-1">{fmtArDateTime(modalOrder.fecha)}</div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
-                  {modalOrder.number && (
-                    <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(modalOrder.number)}`}
+                  {(modalOrder.number || modalOrder.external_id) && (
+                    <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(modalOrder.number || modalOrder.external_id || '')}`}
                        target="_blank" rel="noopener noreferrer"
                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5">
                       <ExternalLink size={11} /> Abrir en Unidrop
@@ -917,9 +917,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                           const subtotal = item.price * item.qty;
                           return (
                             <div key={ii} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
-                              <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
-                                <Package size={14} className="text-text-muted" />
-                              </div>
+                              {item.image_url ? (
+                                <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
+                              ) : (
+                                <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                  <Package size={14} className="text-text-muted" />
+                                </div>
+                              )}
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1.5 flex-wrap">
                                   <span className="text-xs font-semibold text-text truncate">{item.name || "—"}</span>
@@ -1409,9 +1413,8 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
   const ps = (o.payment_status || o.status || "").toLowerCase();
   const ss = (o.shipping_status || "").toLowerCase();
   const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
-  const isShipped = ["shipped", "transit", "en_camino", "en camino"].some((v) => ss.includes(v)) || !!o.shipment;
-  const isDelivered =
-    ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const isShipped = ["shipped", "transit", "en_camino", "en camino"].some((v) => ss.includes(v)) || !!o.shipment || isDelivered;
   const connector = (on: boolean) => (
     <div className={`h-px w-3 flex-shrink-0 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
   );
@@ -1432,8 +1435,8 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
   const ps = (o.payment_status || o.status || "").toLowerCase();
   const ss = (o.shipping_status || "").toLowerCase();
   const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
-  const isShipped = ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || !!o.shipment;
   const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const isShipped = ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || !!o.shipment || isDelivered;
 
   const step = (done: boolean, label: string, icon: string) => (
     <div className="flex flex-col items-center gap-1">
