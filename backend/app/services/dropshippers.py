@@ -17,7 +17,7 @@ import datetime as dt
 import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar, resolve_window
+from app.services._utils import q, scalar, resolve_window, list_columns
 
 log = logging.getLogger("unidata.dropshippers")
 
@@ -454,7 +454,8 @@ def dropshipper_detail(
             EXTRACT(DAY FROM (u.end_date_subscription - NOW()))::int AS dias_al_vencimiento,
             mla.id AS cuenta_meli_id, mla.nickname AS nickname_meli,
             mla."requiresReauth", mla."expiresAt"::text,
-            (SELECT COUNT(*) FROM public."User" u2 WHERE u2."referrerId" = u.id)::int AS cant_referidos
+            (SELECT COUNT(*) FROM public."User" u2 WHERE u2."referrerId" = u.id)::int AS cant_referidos,
+            u.store_id::text AS store_id
         FROM public."User" u
         LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla.id = u."mercadoLibreAccountId"
@@ -490,6 +491,7 @@ def dropshipper_detail(
         "requiere_reauth": bool(h[21]) if h[21] is not None else False,
         "token_expira": h[22],
         "cant_referidos": int(h[23] or 0),
+        "store_id": h[24] or None,
     }
 
     # KPIs de ventas MELI - PaymentIntent es ground truth (lo que el dropshipper
@@ -615,6 +617,93 @@ def dropshipper_detail(
     """, {"uid": int(user_id)}) or [(0,)]
     tn_kpi["tiendas_conectadas"] = int(tn_stores[0][0] or 0)
 
+    # TiendaNubeCredential — detalles de la tienda (store_id, status, URL si existe)
+    tiendas_tn_detail: list[dict] = []
+    store_id = user.get("store_id")
+    if store_id:
+        tnc_cols = list_columns(eng, "public", "TiendaNubeCredential")
+        tnc_select = ["store_id::text"]
+        tnc_extra: list[str] = []
+        for col, cast in [
+            ("status", "::text"),
+            ("created_at", "::text"),
+            ("user_id", "::text"),
+            ("store_name", ""),
+            ("store_url", ""),
+            ("app_id", "::text"),
+            ("updated_at", "::text"),
+        ]:
+            if col in tnc_cols:
+                tnc_select.append(f"COALESCE({col}{cast}, '') AS {col}")
+                tnc_extra.append(col)
+        tnc_rows = q(eng, f"""
+            SELECT {", ".join(tnc_select)}
+            FROM public."TiendaNubeCredential"
+            WHERE store_id = :sid
+            LIMIT 10
+        """, {"sid": store_id}) or []
+        for r in tnc_rows:
+            d: dict = {"store_id": r[0]}
+            for i, col in enumerate(tnc_extra, 1):
+                d[col] = r[i] if r[i] else None
+            tiendas_tn_detail.append(d)
+
+    # CustomerPaymentAccount (Talo) — cuenta(s) registrada(s) para este dropshipper
+    cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
+    cpa_select = ['id::text', '"createdAt"::text']
+    cpa_extra: list[str] = []
+    for col, cast in [
+        ("cbu", ""),
+        ("cbu_alias", ""),
+        ("alias", ""),
+        ("bank_name", ""),
+        ("account_owner", ""),
+        ("status", "::text"),
+    ]:
+        if col in cpa_cols:
+            cpa_select.append(f"COALESCE({col}{cast}, '') AS {col}")
+            cpa_extra.append(col)
+    talo_accounts_rows = q(eng, f"""
+        SELECT {", ".join(cpa_select)}
+        FROM public."CustomerPaymentAccount"
+        WHERE "userId" = :uid
+        ORDER BY id
+        LIMIT 5
+    """, {"uid": int(user_id)}) or []
+    talo_accounts: list[dict] = []
+    for r in talo_accounts_rows:
+        acc: dict = {"id": int(r[0]) if r[0] else None, "creado_en": r[1]}
+        for i, col in enumerate(cpa_extra, 2):
+            acc[col] = r[i] if r[i] else None
+        talo_accounts.append(acc)
+
+    # Referidos: usuarios que este dropshipper refirio (con link a sus perfiles)
+    referidos_list: list[dict] = []
+    if int(user.get("cant_referidos") or 0) > 0:
+        ref_rows = q(eng, """
+            SELECT u2.id::int,
+                   COALESCE(NULLIF(u2.fantasy_name,''), u2.name, u2.email, '') AS nombre,
+                   u2.email,
+                   u2."createdAt"::text,
+                   sm2.name AS plan,
+                   u2.subscription_status::text,
+                   EXTRACT(DAY FROM (u2.end_date_subscription - NOW()))::int AS dias_vence
+            FROM public."User" u2
+            LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm2 ON sm2.id = u2."subscriptionId"
+            WHERE u2."referrerId" = :uid
+            ORDER BY u2."createdAt" DESC
+            LIMIT 50
+        """, {"uid": int(user_id)}) or []
+        referidos_list = [{
+            "user_id": int(r[0]) if r[0] else None,
+            "nombre": r[1] or "",
+            "email": r[2] or "",
+            "creado_en": r[3],
+            "plan": r[4] or "",
+            "sub_status": r[5] or "",
+            "dias_al_vencimiento": int(r[6]) if r[6] is not None else None,
+        } for r in ref_rows]
+
     # Derivar canal del dropshipper
     has_meli = bool(user.get("cuenta_meli_id")) or ventas_kpi["ventas_pagadas"] > 0
     has_tn = tn_kpi["tiendas_conectadas"] > 0 or tn_kpi["ventas_pagadas"] > 0
@@ -683,9 +772,53 @@ def dropshipper_detail(
         "pagos_ml_period_count": int(pg[10] or 0),
     }
 
-    # Suscripciones pagadas en el periodo (PaymentTransactionSubscription).
-    # El plan al momento del pago no se persiste, asi que tageamos con el
-    # plan actual del dropshipper como referencia.
+    # Ticket promedio que el dropshipper paga a Unidrop (ground truth PaymentIntent).
+    # Distinto del ticket_promedio de OML que es el precio al cliente final.
+    ventas_kpi["ticket_promedio_intent"] = (
+        round(pagos_kpi["pagado_ml_period"] / ml_orders_paid, 2)
+        if ml_orders_paid > 0 else 0.0
+    )
+
+    # PaymentIntentSubscription — historial COMPLETO (no filtrado por periodo).
+    # Esta tabla tiene userId directo y es el ground truth de pagos de suscripcion.
+    # Distinta de PaymentTransactionSubscription (que es el cobro via Talo).
+    pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
+    pis_amount_col = '"paidAmount"' if "paidAmount" in pis_cols else ('"amount"' if "amount" in pis_cols else "0")
+    pis_expected_col = '"expectedAmount"' if "expectedAmount" in pis_cols else "0"
+    sub_intent_rows = q(eng, f"""
+        SELECT pis.id::int,
+               pis.status::text,
+               pis."createdAt"::text,
+               COALESCE({pis_amount_col}, 0)::float AS paid,
+               COALESCE({pis_expected_col}, 0)::float AS expected,
+               sm.name AS plan_nombre
+        FROM public."PaymentIntentSubscription" pis
+        LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm
+              ON sm.id = pis."subscriptionMeliId"
+        WHERE pis."userId" = :uid
+        ORDER BY pis."createdAt" DESC NULLS LAST
+        LIMIT 36
+    """, {"uid": int(user_id)}) or []
+    subscription_intents = [{
+        "id": int(r[0]) if r[0] else None,
+        "status": r[1] or "",
+        "fecha": r[2],
+        "pagado": round(float(r[3] or 0), 2),
+        "esperado": round(float(r[4] or 0), 2),
+        "plan": r[5] or user.get("plan") or "",
+    } for r in sub_intent_rows]
+    sub_procesadas = [s for s in subscription_intents if s["status"].upper() == "PROCESSED"]
+    sub_pendientes = [s for s in subscription_intents if s["status"].upper() == "PENDING"]
+    sub_ltv = {
+        "total_pagado": round(sum(s["pagado"] for s in sub_procesadas), 2),
+        "cant_procesadas": len(sub_procesadas),
+        "ultimo_pago": sub_procesadas[0]["fecha"] if sub_procesadas else None,
+        "cant_pendientes": len(sub_pendientes),
+        "monto_pendiente": round(sum(s["esperado"] for s in sub_pendientes), 2),
+    }
+
+    # Suscripciones pagadas en el periodo (PaymentTransactionSubscription) — para
+    # el breakdown por periodo en el bloque "Ventas pagadas a Unidrop".
     subs_rows = q(eng, """
         SELECT pts.id,
                pts."taloTransactionId",
@@ -749,7 +882,35 @@ def dropshipper_detail(
         "ordenes": int(r[1] or 0),
         "gmv": round(float(r[2] or 0), 2),
         "profit": round(float(r[3] or 0), 2),
+        "ordenes_tn": 0,
+        "gmv_tn": 0.0,
     } for r in monthly]
+
+    # Serie mensual TN (12m) — linkage por user_id o number prefix
+    monthly_tn = q(eng, """
+        SELECT to_char(date_trunc('month', created_at), 'YYYY-MM') AS mes,
+               COUNT(*) FILTER (WHERE payment_status::text='paid')::int AS ordenes,
+               COALESCE(SUM(total) FILTER (WHERE payment_status::text='paid'), 0)::float AS gmv
+        FROM public.tienda_nube_orders
+        WHERE (user_id = :uid OR (:dni IS NOT NULL AND "number" LIKE :num_prefix))
+          AND created_at >= NOW() - INTERVAL '12 months'
+        GROUP BY 1 ORDER BY 1
+    """, {"uid": int(user_id), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or []
+    tn_monthly_map: dict[str, dict] = {r[0]: {"ordenes_tn": int(r[1] or 0), "gmv_tn": float(r[2] or 0)} for r in monthly_tn}
+    # Merge TN into MELI series
+    meli_meses = {m["mes"] for m in monthly_series}
+    for m in monthly_series:
+        tn_data = tn_monthly_map.get(m["mes"], {})
+        m["ordenes_tn"] = tn_data.get("ordenes_tn", 0)
+        m["gmv_tn"] = round(tn_data.get("gmv_tn", 0.0), 2)
+    # Add TN-only months (no MELI activity that month)
+    for mes, tn_data in tn_monthly_map.items():
+        if mes not in meli_meses:
+            monthly_series.append({
+                "mes": mes, "ordenes": 0, "gmv": 0.0, "profit": 0.0,
+                "ordenes_tn": tn_data["ordenes_tn"], "gmv_tn": round(tn_data["gmv_tn"], 2),
+            })
+    monthly_series.sort(key=lambda x: x["mes"])
 
     # Ultimas ventas MELI: ground truth = mlOrderIds desnormalizados de PaymentIntents
     # PROCESSED del dropshipper. Para cada ML order ID, buscamos enriquecimiento en
@@ -901,7 +1062,7 @@ def dropshipper_detail(
 
     # Vista unificada estilo Unidrop panel (filas ML + TN combinadas por fecha)
     try:
-        unified_orders = dropshipper_unified_orders(int(user_id), limit=50)
+        unified_orders = dropshipper_unified_orders(int(user_id), limit=50, dni=drop_dni or None)
     except Exception as e:
         log.warning("dropshipper unified_orders fail uid=%s: %s", user_id, e)
         unified_orders = []
@@ -914,17 +1075,21 @@ def dropshipper_detail(
         "publicaciones": pubs,
         "monthly": monthly_series,
         "ultimas_ventas": orders,
-        "ultimas_ventas_tn": tn_orders_list,  # tabla TN con `number` para link a Unidrop
+        "ultimas_ventas_tn": tn_orders_list,
         "ultimos_pagos": pagos_list,
-        "unified_orders": unified_orders,  # filas ML+TN combinadas por fecha
-        # Clientes FINALES del dropshipper (no son dropshippers, son compradores)
+        "unified_orders": unified_orders,
         "top_clientes_finales": top_clientes_finales,
-        # Suscripciones pagadas (PaymentTransactionSubscription) en periodo
         "suscripciones": {
             "total_pagado": suscripciones_total,
             "cantidad": len(suscripciones_pagadas),
             "items": suscripciones_pagadas,
         },
+        # Datos adicionales de unidrop_api
+        "tiendas_tn_detail": tiendas_tn_detail,       # campos de TiendaNubeCredential
+        "talo_accounts": talo_accounts,               # CustomerPaymentAccount (CBU, alias)
+        "referidos_list": referidos_list,             # usuarios referidos por este dropshipper
+        "subscription_intents": subscription_intents, # PaymentIntentSubscription all-time (historial suscripcion)
+        "sub_ltv": sub_ltv,                           # resumen LTV suscripcion
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
@@ -934,6 +1099,7 @@ def dropshipper_unified_orders(
     *,
     limit: int = 50,
     intent_id: int | None = None,
+    dni: str | None = None,
 ) -> list[dict]:
     """Vista unificada estilo Unidrop panel: filas ML + TN combinadas por fecha.
 
@@ -951,6 +1117,12 @@ def dropshipper_unified_orders(
     internos como externos segun la integration: matcheamos por ambos.
     """
     eng = get_engine("unidrop")
+
+    # Auto-resolve DNI si no se paso (para la ruta /unified-orders que no lo tiene)
+    if not dni:
+        _dni_rows = q(eng, 'SELECT u.dni FROM public."User" u WHERE u.id = :uid LIMIT 1', {"uid": int(user_id)}) or []
+        if _dni_rows and _dni_rows[0][0]:
+            dni = str(_dni_rows[0][0]).strip() or None
 
     # 1) Bajamos los intents PROCESSED del user + sus arrays de IDs
     intent_filter = "AND pi.id = :intent_id" if intent_id else ""
@@ -1069,6 +1241,8 @@ def dropshipper_unified_orders(
                 "shipping_type": er[13] or "",
                 "intent_id": key_intent,
                 "enriched": True,
+                "items": [],
+                "shipment": None,
             })
 
         # Fallback: para ML ids que NO matchearon en ningun schema, generamos
@@ -1096,7 +1270,105 @@ def dropshipper_unified_orders(
                 "shipping_type": "",
                 "intent_id": intent_id_for,
                 "enriched": False,
+                "items": [],
+                "shipment": None,
             })
+
+    # 2b) Supplemental: fetch OML por numero DROP-{dni}-* para recuperar "sin number".
+    # El PaymentIntent.mlOrderIds[] a veces guarda IDs que no matchean el mlOrderId en
+    # OML, generando stub rows sin numero. Consultando OML por prefix de numero podemos
+    # actualizar esos stubs Y agregar ordenes que no estaban en ningun PaymentIntent.
+    if dni and not intent_id:
+        _num_pfx = f"DROP-{dni}-%"
+        try:
+            sup_erows = q(eng, """
+                SELECT o."mlOrderId"::text AS ext_id,
+                       o.id::text         AS internal_id,
+                       o.id               AS id_num,
+                       o."number",
+                       o."dateCreated"::text AS fecha,
+                       o."status",
+                       o."paymentStatus",
+                       o."shippingStatus",
+                       COALESCE(p.gmv,0)::float AS total,
+                       COALESCE(o."merchandise_cost",0)::float AS merch_cost,
+                       COALESCE(o."shipping_cost",0)::float AS shipping_cost,
+                       COALESCE(o."profit_for_subscription",0)::float AS profit_unidrop,
+                       o."buyer_name",
+                       o."shipping_type"
+                FROM mercado_libre_dev."OrderMercadoLibre" o
+                LEFT JOIN (
+                    SELECT "orderId", SUM("totalAmount")::float AS gmv
+                    FROM mercado_libre_dev."PaymentMercadoLibre"
+                    GROUP BY 1
+                ) p ON p."orderId" = o.id
+                WHERE o."number" LIKE :num_pfx
+                ORDER BY o."dateCreated" DESC NULLS LAST
+                LIMIT 200
+            """, {"num_pfx": _num_pfx}) or []
+
+            if sup_erows:
+                existing_by_ext = {r["external_id"]: i for i, r in enumerate(ml_rows) if r.get("external_id")}
+                existing_by_int = {str(r["internal_id"]): i for i, r in enumerate(ml_rows) if r.get("internal_id")}
+                existing_numbers: set[str] = {r["number"] for r in ml_rows if r.get("number")}
+
+                for er in sup_erows:
+                    num   = er[3] or ""
+                    ext_id = er[0] or ""
+                    int_id = er[1] or ""
+
+                    # Buscar si ya tenemos esta orden (stub o enriched)
+                    idx = existing_by_ext.get(ext_id) if ext_id else None
+                    if idx is None and int_id:
+                        idx = existing_by_int.get(int_id)
+
+                    if idx is not None:
+                        # Actualizar stub con datos reales
+                        r = ml_rows[idx]
+                        if not r.get("number") and num:
+                            r["number"] = num
+                        if not r.get("internal_id") and int_id:
+                            r["internal_id"] = int(er[2]) if er[2] else None
+                        r["status"] = er[5] or r["status"]
+                        r["payment_status"] = er[6] or r["payment_status"]
+                        r["shipping_status"] = er[7] or r["shipping_status"]
+                        if float(er[8] or 0) > 0 and r.get("total", 0) == 0:
+                            r["total"] = round(float(er[8]), 2)
+                        r["merch_cost"] = round(float(er[9] or 0), 2)
+                        r["shipping_cost"] = round(float(er[10] or 0), 2)
+                        r["profit_unidrop"] = round(float(er[11] or 0), 2)
+                        if er[12] and not r.get("buyer_name"):
+                            r["buyer_name"] = er[12]
+                        r["enriched"] = True
+                    elif num and num not in existing_numbers:
+                        # Orden no encontrada via PaymentIntent — agregar directamente
+                        ml_rows.append({
+                            "origen": "ml",
+                            "internal_id": int(er[2]) if er[2] else None,
+                            "external_id": ext_id,
+                            "number": num,
+                            "fecha": er[4],
+                            "status": er[5] or "",
+                            "payment_status": er[6] or "",
+                            "shipping_status": er[7] or "",
+                            "total": round(float(er[8] or 0), 2),
+                            "merch_cost": round(float(er[9] or 0), 2),
+                            "shipping_cost": round(float(er[10] or 0), 2),
+                            "profit_unidrop": round(float(er[11] or 0), 2),
+                            "buyer_name": er[12] or "",
+                            "shipping_type": er[13] or "",
+                            "intent_id": None,
+                            "enriched": True,
+                            "items": [],
+                            "shipment": None,
+                        })
+                        existing_numbers.add(num)
+                log.info(
+                    "unified_orders sup ML uid=%s sup_rows=%d ml_total=%d",
+                    user_id, len(sup_erows), len(ml_rows),
+                )
+        except Exception as _sup_err:
+            log.warning("unified_orders supplemental ML fail uid=%s: %s", user_id, str(_sup_err)[:200])
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()
@@ -1168,54 +1440,213 @@ def dropshipper_unified_orders(
                 "merch_cost": 0.0,
                 "shipping_cost": 0.0,
                 "profit_unidrop": 0.0,
-                "buyer_name": "",  # se enriquece abajo si la col existe
+                "buyer_name": "",
+                "billing_province": "",
+                "billing_city": "",
+                "billing_address": "",
+                "billing_zipcode": "",
+                "contact_email": "",
+                "contact_phone": "",
+                "contact_dni": "",
+                "shipping_address": "",
+                "shipping_city": "",
+                "shipping_zipcode": "",
                 "shipping_type": "",
                 "intent_id": key_intent,
                 "enriched": True,
+                "items": [],
+                "shipment": None,
             })
     except Exception as e:
         log.warning("unified_orders TN enrich fail uid=%s: %s", user_id, e)
 
-    # Enriquecer buyer_name + shipping_cost con queries defensivas
+    # Enriquecer buyer_name + shipping_cost + billing location con queries defensivas
     # (si una col no existe, q() devuelve None y seguimos sin esa data)
     if tn_rows:
         ids_for_enrich = ",".join("'" + str(r["internal_id"]) + "'" for r in tn_rows if r.get("internal_id"))
         if ids_for_enrich:
-            # Buyer name (con fallback a contact_identification = DNI)
-            try:
-                buyer_rows = q(eng, f"""
-                    SELECT tienda_nube_id::text,
-                           COALESCE(NULLIF(contact_name, ''), contact_identification, '')
-                    FROM public.tienda_nube_orders
-                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
-                """) or []
-                buyer_map = {br[0]: br[1] for br in buyer_rows if br[0]}
+            # Buyer name + contact + billing/shipping address. Defensive: usamos
+            # list_columns para saber que columnas existen y construir SELECT dinamicamente.
+            tno_all_cols = list_columns(eng, "public", "tienda_nube_orders")
+            # Columna de nombre: probamos varios candidatos
+            _name_candidates = ["contact_name", "buyer_name", "customer_name", "client_name"]
+            _name_col = next((c for c in _name_candidates if c in tno_all_cols), None)
+            _id_col   = next((c for c in ["contact_identification", "buyer_dni", "customer_dni"] if c in tno_all_cols), None)
+            _id_col_sql = f'"{_id_col}"::text' if _id_col else "NULL"
+            if _name_col:
+                _name_expr = f"COALESCE(NULLIF(\"{_name_col}\"::text, ''), {_id_col_sql}, '')"
+            elif _id_col:
+                _name_expr = f"COALESCE(\"{_id_col}\"::text, '')"
+            else:
+                _name_expr = "''"
+            # Columnas opcionales (contact + address)
+            _opt_cols: list[tuple[str, str]] = [
+                ("billing_province",  "billing_province"),
+                ("billing_city",      "billing_city"),
+                ("billing_address",   "billing_address"),
+                ("billing_zipcode",   "billing_zipcode"),
+                ("contact_email",     "contact_email"),
+                ("contact_phone",     "contact_phone"),
+                ("contact_identification", "contact_dni"),
+                ("shipping_address",  "shipping_address"),
+                ("shipping_city",     "shipping_city"),
+                ("shipping_zipcode",  "shipping_zipcode"),
+            ]
+            _opt_select: list[str] = []
+            _opt_keys:   list[str] = []
+            for col, alias in _opt_cols:
+                if col in tno_all_cols:
+                    _opt_select.append(f"COALESCE(\"{col}\"::text, '') AS {alias}")
+                    _opt_keys.append(alias)
+            _extra_sql = (", " + ", ".join(_opt_select)) if _opt_select else ""
+            loc_rows = q(eng, f"""
+                SELECT tienda_nube_id::text,
+                       {_name_expr} AS buyer_name
+                       {_extra_sql}
+                FROM public.tienda_nube_orders
+                WHERE tienda_nube_id::text IN ({ids_for_enrich})
+            """) or []
+            if loc_rows:
+                loc_map: dict[str, dict] = {}
+                for lr in loc_rows:
+                    if not lr[0]: continue
+                    entry: dict = {"buyer_name": lr[1] or ""}
+                    for i, key in enumerate(_opt_keys, 2):
+                        entry[key] = lr[i] or ""
+                    loc_map[lr[0]] = entry
                 for r in tn_rows:
                     iid = str(r.get("internal_id") or "")
-                    if iid in buyer_map and buyer_map[iid]:
-                        r["buyer_name"] = buyer_map[iid]
-            except Exception:
-                pass
+                    if iid not in loc_map: continue
+                    loc = loc_map[iid]
+                    if loc["buyer_name"]:
+                        r["buyer_name"] = loc["buyer_name"]
+                    for key in _opt_keys:
+                        if key in loc and not r.get(key):
+                            r[key] = loc[key]
             # Shipping cost — probar variantes de nombre de columna
             for col_name in ["shipping_cost", "shippingCost", "shipping_amount", "shipping_total"]:
-                try:
-                    ship_rows = q(eng, f"""
-                        SELECT tienda_nube_id::text, COALESCE({col_name}, 0)::float
-                        FROM public.tienda_nube_orders
-                        WHERE tienda_nube_id::text IN ({ids_for_enrich})
-                          AND {col_name} IS NOT NULL
-                    """) or []
-                    if ship_rows:
-                        ship_map = {sr[0]: float(sr[1] or 0) for sr in ship_rows if sr[0]}
-                        for r in tn_rows:
-                            iid = str(r.get("internal_id") or "")
-                            if iid in ship_map:
-                                r["shipping_cost"] = round(ship_map[iid], 2)
-                        log.info("unified_orders TN shipping_cost OK col=%s rows=%d",
-                                 col_name, len(ship_rows))
-                        break  # primera col que funciona gana
-                except Exception:
-                    continue
+                ship_rows = q(eng, f"""
+                    SELECT tienda_nube_id::text, COALESCE({col_name}, 0)::float
+                    FROM public.tienda_nube_orders
+                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
+                      AND {col_name} IS NOT NULL
+                """) or []
+                if ship_rows:
+                    ship_map = {sr[0]: float(sr[1] or 0) for sr in ship_rows if sr[0]}
+                    for r in tn_rows:
+                        iid = str(r.get("internal_id") or "")
+                        if iid in ship_map:
+                            r["shipping_cost"] = round(ship_map[iid], 2)
+                    log.info("unified_orders TN shipping_cost OK col=%s rows=%d", col_name, len(ship_rows))
+                    break
+
+    # 4a) Items + envío TN — carga bulk por internal_id
+    if tn_rows:
+        tn_internal = [str(r["internal_id"]) for r in tn_rows if r.get("internal_id")]
+        if tn_internal:
+            tn_ids_bulk = ",".join("'" + i + "'" for i in tn_internal)
+            # tienda_nube_order_items
+            tni_rows = q(eng, f"""
+                SELECT order_id::text, sku, name, quantity::int, price::float
+                FROM public.tienda_nube_order_items
+                WHERE order_id::text IN ({tn_ids_bulk})
+                ORDER BY order_id
+            """) or []
+            items_by_tn: dict[str, list] = {}
+            for ir in tni_rows:
+                k = ir[0] or ""
+                items_by_tn.setdefault(k, []).append({
+                    "sku": ir[1] or "", "name": ir[2] or "",
+                    "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                })
+            log.info("unified_orders TN items uid=%s orders=%d items=%d",
+                     user_id, len(tn_internal), len(tni_rows))
+            # oca_shipments (status, fecha_entrega, costo_envio)
+            oca_ship: dict[str, dict] = {}
+            oca_rows = q(eng, f"""
+                SELECT order_tienda_nube_id::text,
+                       COALESCE(ultimo_estado_oca, status::text, '') AS estado,
+                       fecha_entrega::text,
+                       COALESCE(costo_envio, 0)::float
+                FROM public.oca_shipments
+                WHERE order_tienda_nube_id::text IN ({tn_ids_bulk})
+            """) or []
+            for sr in oca_rows:
+                k = sr[0] or ""
+                oca_ship[k] = {"carrier": "OCA", "status": sr[1] or "", "entregado": sr[2], "costo": float(sr[3] or 0)}
+            # lightdata_shipments
+            ld_ship: dict[str, dict] = {}
+            ld_rows = q(eng, f"""
+                SELECT orden_tn_id::text, COALESCE(estado, '') AS estado,
+                       COALESCE(costo_envio_ars, 0)::float
+                FROM public.lightdata_shipments
+                WHERE orden_tn_id::text IN ({tn_ids_bulk})
+            """) or []
+            for sr in ld_rows:
+                k = sr[0] or ""
+                ld_ship[k] = {"carrier": "Lightdata", "status": sr[1] or "", "entregado": None, "costo": float(sr[2] or 0)}
+            # Apply to rows
+            for r in tn_rows:
+                iid = str(r.get("internal_id") or "")
+                r["items"] = items_by_tn.get(iid, [])
+                ship = oca_ship.get(iid) or ld_ship.get(iid)
+                r["shipment"] = ship
+                if ship and ship.get("status"):
+                    r["shipping_status"] = ship["status"]
+
+    # 4b) Items ML — carga bulk por internal_id (usando list_columns para nombres defensivos)
+    if ml_rows:
+        ml_internal_enriched = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
+        if ml_internal_enriched:
+            oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
+            sku_col = next((c for c in ["sellerCustomField", "seller_custom_field", "sku", "seller_sku"] if c in oi_cols), None)
+            oid_col = next((c for c in ["orderId", "order_id"] if c in oi_cols), None)
+            price_col = next((c for c in ["unitPrice", "unit_price"] if c in oi_cols), None)
+            qty_col = "quantity" if "quantity" in oi_cols else None
+            title_col = "title" if "title" in oi_cols else None
+            if sku_col and oid_col and qty_col:
+                ml_ids_bulk = ",".join(ml_internal_enriched)
+                oi_price = f'COALESCE(oi."{price_col}", 0)::float' if price_col else "0::float"
+                oi_title = f'COALESCE(oi."{title_col}"::text, \'\')' if title_col else "''"
+                ml_item_rows = q(eng, f"""
+                    SELECT oi."{oid_col}"::text,
+                           COALESCE(oi."{sku_col}"::text, '') AS sku,
+                           {oi_title} AS title,
+                           COALESCE(oi."{qty_col}", 0)::int AS qty,
+                           {oi_price} AS price
+                    FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                    WHERE oi."{oid_col}"::text IN ({ml_ids_bulk})
+                """) or []
+                items_by_ml: dict[str, list] = {}
+                for ir in ml_item_rows:
+                    k = ir[0] or ""
+                    items_by_ml.setdefault(k, []).append({
+                        "sku": ir[1] or "", "name": ir[2] or "",
+                        "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                    })
+                log.info("unified_orders ML items uid=%s orders=%d items=%d",
+                         user_id, len(ml_internal_enriched), len(ml_item_rows))
+                for r in ml_rows:
+                    iid = str(r.get("internal_id") or "")
+                    r["items"] = items_by_ml.get(iid, [])
+        # MercadoLibreReturn — flags por orden (devoluciones)
+        ml_with_id = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
+        if ml_with_id:
+            ret_cols = list_columns(eng, "mercado_libre_dev", "MercadoLibreReturn")
+            ret_order_col = next((c for c in ["orderId", "order_id"] if c in ret_cols), None)
+            if ret_order_col:
+                ret_ids_bulk = ",".join(ml_with_id)
+                ret_rows = q(eng, f"""
+                    SELECT "{ret_order_col}"::text, COUNT(*)::int AS cant
+                    FROM mercado_libre_dev."MercadoLibreReturn"
+                    WHERE "{ret_order_col}"::text IN ({ret_ids_bulk})
+                    GROUP BY 1
+                """) or []
+                returns_by_order = {r[0]: int(r[1] or 0) for r in ret_rows if r[0]}
+                for r in ml_rows:
+                    iid = str(r.get("internal_id") or "")
+                    if iid in returns_by_order:
+                        r["returns_count"] = returns_by_order[iid]
 
     # 4) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows

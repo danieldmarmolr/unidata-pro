@@ -22,6 +22,10 @@ import {
   XCircle,
   Clock,
   X,
+  ChevronRight,
+  ChevronDown,
+  Truck,
+  RotateCcw,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
@@ -57,6 +61,7 @@ type DropshipperDetail = {
     requiere_reauth: boolean;
     token_expira: string | null;
     cant_referidos: number;
+    store_id?: string | null;
     canal?: "meli" | "tn" | "ambos" | "sin_canal";
   };
   ventas_tn?: {
@@ -79,6 +84,8 @@ type DropshipperDetail = {
     costo_envio: number;
     profit_unidrop: number;
     ticket_promedio: number;
+    ticket_promedio_intent?: number;
+    ventas_pagadas_intent?: number;
     tasa_cancelacion_pct: number;
   };
   pagos: {
@@ -100,7 +107,7 @@ type DropshipperDetail = {
     items: { id: number; talo_transaction_id: string; amount: number; currency: string; fecha: string | null; plan: string }[];
   };
   publicaciones: { totales: number; activas: number; ultima: string | null };
-  monthly: { mes: string; ordenes: number; gmv: number; profit: number }[];
+  monthly: { mes: string; ordenes: number; gmv: number; profit: number; ordenes_tn?: number; gmv_tn?: number }[];
   ultimas_ventas: {
     id: number;
     ml_order_id: string;
@@ -134,8 +141,16 @@ type DropshipperDetail = {
     value: number;
     extra?: { dni?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
   }[];
+  tiendas_tn_detail?: Record<string, string | null>[];
+  talo_accounts?: { id: number | null; creado_en: string | null; cbu?: string | null; cbu_alias?: string | null; alias?: string | null; bank_name?: string | null }[];
+  referidos_list?: { user_id: number | null; nombre: string; email: string; creado_en: string | null; plan: string; sub_status: string; dias_al_vencimiento: number | null }[];
+  subscription_intents?: { id: number | null; status: string; fecha: string | null; pagado: number; esperado: number; plan: string }[];
+  sub_ltv?: { total_pagado: number; cant_procesadas: number; ultimo_pago: string | null; cant_pendientes: number; monto_pendiente: number };
   generated_at: string;
 };
+
+type OrderItem = { sku: string; name: string; qty: number; price: number };
+type Shipment = { carrier: string; status: string; entregado: string | null; costo: number } | null;
 
 type UnifiedOrder = {
   origen: "ml" | "tn";
@@ -151,9 +166,22 @@ type UnifiedOrder = {
   shipping_cost: number;
   profit_unidrop: number;
   buyer_name: string;
+  billing_city?: string;
+  billing_province?: string;
+  billing_address?: string;
+  billing_zipcode?: string;
+  contact_email?: string;
+  contact_phone?: string;
+  contact_dni?: string;
+  shipping_address?: string;
+  shipping_city?: string;
+  shipping_zipcode?: string;
   shipping_type: string;
   intent_id: number | null;
   enriched?: boolean;
+  items?: OrderItem[];
+  shipment?: Shipment;
+  returns_count?: number;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -189,6 +217,10 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   // unified_orders que vienen en data (top 50 sin filtro).
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
+  const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
+  const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
+  const toggleExpand = (key: string) =>
+    setExpandedOrders((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
     queryKey: ["dropshipper-unified", id, selectedIntent],
     queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders?intent_id=${selectedIntent}&limit=200`),
@@ -250,8 +282,6 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const tokenDays = recencyDays(u.token_expira);
   const subActiva = u.sub_status?.toLowerCase() === "active" || (u.dias_al_vencimiento ?? -1) > 0;
 
-  const maxMonthly = Math.max(1, ...data.monthly.map((m) => m.gmv));
-
   return (
     <>
       <Topbar
@@ -311,12 +341,28 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 {formatCurrency(u.plan_precio)}/mes · {u.plan_pub_max} pub max
               </div>
               {subActiva ? (
-                <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
+                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
                   <CheckCircle2 size={12} /> Activa · vence en {u.dias_al_vencimiento}d
                 </div>
               ) : (
-                <div className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-rose-700">
+                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-rose-700">
                   <XCircle size={12} /> Vencida o inactiva
+                </div>
+              )}
+              {data.sub_ltv && (
+                <div className="mt-2 pt-2 border-t border-border space-y-0.5">
+                  <div className="text-[11px] font-bold text-text">
+                    LTV suscripción: {formatCurrency(data.sub_ltv.total_pagado)}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {data.sub_ltv.cant_procesadas} pagos procesados
+                    {data.sub_ltv.ultimo_pago && ` · último ${data.sub_ltv.ultimo_pago.slice(0, 10)}`}
+                  </div>
+                  {data.sub_ltv.cant_pendientes > 0 && (
+                    <div className="text-[10px] text-amber-700 font-semibold">
+                      {data.sub_ltv.cant_pendientes} pendiente{data.sub_ltv.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv.monto_pendiente)}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -358,6 +404,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 {data.ventas_tn.tiendas_conectadas} {data.ventas_tn.tiendas_conectadas === 1 ? "tienda TN conectada" : "tiendas TN conectadas"}
               </span>
             )}
+            {u.store_id && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-50 border border-cyan-200 text-cyan-800 text-xs font-semibold font-mono">
+                Store ID: {u.store_id}
+              </span>
+            )}
             {u.requiere_reauth && (
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
                 <AlertTriangle size={12} /> Token MELI requiere re-auth
@@ -377,19 +428,41 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
         </div>
 
         {/* KPIs principales */}
-        <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
-          <KpiBox icon={DollarSign} label="GMV MELI" value={formatCurrency(v.gmv)} accent="emerald"
-                  hint={`${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`} />
-          <KpiBox icon={Wallet} label="Profit Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="Comisión Unidrop por las ventas MELI (suscripcion)" />
-          <KpiBox icon={TrendingUp} label="Ticket promedio" value={formatCurrency(v.ticket_promedio)} accent="amber"
-                  hint="GMV / ventas pagadas" />
+        {(() => {
+          const gmvTnKpi = data.ventas_tn?.gmv ?? 0;
+          const hasTnKpi = gmvTnKpi > 0;
+          const gmvTotalKpi = v.gmv + gmvTnKpi;
+          return <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+          <KpiBox
+            icon={DollarSign}
+            label={hasTnKpi ? "GMV Total (MELI+TN)" : "GMV MELI"}
+            value={formatCurrency(hasTnKpi ? gmvTotalKpi : v.gmv)}
+            accent="emerald"
+            hint={hasTnKpi
+              ? `ML ${formatCurrency(v.gmv)} · TN ${formatCurrency(gmvTnKpi)}`
+              : `${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`}
+          />
+          <KpiBox icon={Wallet} label="Margen Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
+                  hint="profit_for_subscription: ganancia de Unidrop como distribuidor por cada orden ML" />
+          <KpiBox
+            icon={TrendingUp}
+            label="Ticket a Unidrop"
+            value={formatCurrency(v.ticket_promedio_intent ?? v.ticket_promedio)}
+            accent="amber"
+            hint={
+              v.ticket_promedio_intent !== undefined && v.ticket_promedio_intent > 0
+                ? `Promedio pagado a Unidrop por orden ML (PaymentIntent / ${formatNumber(v.ventas_pagadas_intent ?? v.ventas_pagadas)} órd)`
+                : "Promedio GMV por venta MELI pagada"
+            }
+          />
           <KpiBox
             icon={ShoppingBag}
             label="Órdenes pagadas"
-            value={formatNumber(v.ventas_pagadas)}
+            value={formatNumber(v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0))}
             accent="primary"
-            hint={v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : "Sin cancelaciones"}
+            hint={hasTnKpi
+              ? `ML ${formatNumber(v.ventas_pagadas)} · TN ${formatNumber(data.ventas_tn!.ventas_pagadas)}`
+              : v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : "Sin cancelaciones"}
           />
           <KpiBox
             icon={Calendar}
@@ -417,7 +490,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   hint="Suma costos de mercadería en órdenes pagadas" />
           <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
                   hint="Suma costos de envío MELI" />
-        </div>
+        </div>;
+        })()}
 
         {/* Ventas pagadas a Unidrop (PaymentIntent) - desglose TN/ML + suscripciones */}
         {(pg.pagado_total_period !== undefined && (pg.pagado_total_period > 0 || (data.suscripciones?.total_pagado ?? 0) > 0)) && (
@@ -549,6 +623,105 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
+        {/* TiendaNube credential detail */}
+        {data.tiendas_tn_detail && data.tiendas_tn_detail.some(t => t.store_url || t.store_name || t.status) && (
+          <div className="bg-cyan-50/40 border border-cyan-200 rounded-xl p-4 mb-5">
+            <h3 className="text-xs font-bold text-cyan-900 uppercase tracking-wider mb-3">Credenciales Tienda Nube</h3>
+            <div className="space-y-2">
+              {data.tiendas_tn_detail!.map((t, i) => (
+                <div key={i} className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                  {t.store_id && <span className="text-text-muted">Store ID: <span className="font-mono font-bold text-text">{t.store_id}</span></span>}
+                  {t.store_name && <span className="text-text-muted">Nombre: <span className="font-bold text-text">{t.store_name}</span></span>}
+                  {t.store_url && (
+                    <a href={String(t.store_url)} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline font-medium">
+                      <ExternalLink size={10} /> {t.store_url}
+                    </a>
+                  )}
+                  {t.status && <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${t.status === "active" ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-zinc-50 text-zinc-600 border-zinc-200"}`}>{t.status}</span>}
+                  {t.created_at && <span className="text-text-muted">Conectada: {String(t.created_at).slice(0, 10)}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Talo accounts (CustomerPaymentAccount) */}
+        {data.talo_accounts && data.talo_accounts.length > 0 && data.talo_accounts.some(a => a.cbu || a.cbu_alias || a.alias) && (
+          <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 mb-5">
+            <h3 className="text-xs font-bold text-violet-900 uppercase tracking-wider mb-3">Cuentas Talo Pay</h3>
+            <div className="space-y-2">
+              {data.talo_accounts!.map((acc) => (
+                <div key={acc.id} className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+                  <span className="text-text-muted">ID: <span className="font-mono font-bold text-text">{acc.id}</span></span>
+                  {(acc.cbu || acc.cbu_alias) && <span className="text-text-muted">CBU: <span className="font-mono font-bold text-text">{acc.cbu || acc.cbu_alias}</span></span>}
+                  {acc.alias && <span className="text-text-muted">Alias: <span className="font-bold text-text">{acc.alias}</span></span>}
+                  {acc.bank_name && <span className="text-text-muted">Banco: <span className="font-bold text-text">{acc.bank_name}</span></span>}
+                  {acc.creado_en && <span className="text-text-muted">Desde: {acc.creado_en?.slice(0, 10)}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Historial de suscripcion (PaymentIntentSubscription all-time) */}
+        {data.subscription_intents && data.subscription_intents.length > 0 && (
+          <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Historial de suscripción</h3>
+                <p className="text-[11px] text-text-muted">
+                  PaymentIntentSubscription · {data.subscription_intents.length} registros ·
+                  LTV {formatCurrency(data.sub_ltv?.total_pagado ?? 0)}
+                </p>
+              </div>
+              {(data.sub_ltv?.cant_pendientes ?? 0) > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold">
+                  <Clock size={11} /> {data.sub_ltv!.cant_pendientes} pendiente{data.sub_ltv!.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv!.monto_pendiente)}
+                </span>
+              )}
+            </div>
+            <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">ID</th>
+                    <th className="text-left px-2 py-2">Estado</th>
+                    <th className="text-left px-2 py-2">Fecha</th>
+                    <th className="text-left px-2 py-2">Plan</th>
+                    <th className="text-right px-2 py-2">Pagado</th>
+                    <th className="text-right px-2 py-2">Esperado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.subscription_intents.map((si) => {
+                    const st = si.status.toUpperCase();
+                    return (
+                      <tr key={si.id} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-3 py-1.5 font-mono text-text-muted">{si.id}</td>
+                        <td className="px-2 py-1.5">
+                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${
+                            st === "PROCESSED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : st === "PENDING" ? "bg-amber-50 text-amber-700 border-amber-200"
+                            : "bg-zinc-50 text-zinc-600 border-zinc-200"
+                          }`}>{si.status}</span>
+                        </td>
+                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(si.fecha)}</td>
+                        <td className="px-2 py-1.5 text-text-muted">{si.plan || "—"}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">
+                          {si.pagado > 0 ? formatCurrency(si.pagado) : "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                          {si.esperado > 0 ? formatCurrency(si.esperado) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Top clientes FINALES (compradores TN del dropshipper) - drill al End Consumer 360 */}
         {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
           <div className="mb-5">
@@ -566,36 +739,105 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        {/* Mensual GMV */}
-        {data.monthly.length > 0 && (
-          <div className="bg-surface border border-border rounded-xl p-4 sm:p-5 mb-5">
-            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-              <div>
-                <h3 className="text-sm font-bold text-text">Evolución mensual · últimos 12 meses</h3>
-                <p className="text-[11px] text-text-muted">GMV MELI y profit Unidrop por mes</p>
+        {/* Mensual GMV MELI + TN */}
+        {data.monthly.length > 0 && (() => {
+          const hasTn = data.monthly.some((m) => (m.gmv_tn ?? 0) > 0);
+          const maxCombined = Math.max(1, ...data.monthly.map((m) => m.gmv + (m.gmv_tn ?? 0)));
+          const totalMeli = data.monthly.reduce((s, m) => s + m.gmv, 0);
+          const totalTn = data.monthly.reduce((s, m) => s + (m.gmv_tn ?? 0), 0);
+          return (
+            <div className="bg-surface border border-border rounded-xl p-4 sm:p-5 mb-5">
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-text">Evolución mensual · últimos 12 meses</h3>
+                  <p className="text-[11px] text-text-muted">GMV {hasTn ? "MELI + TN" : "MELI"} y profit Unidrop por mes</p>
+                </div>
+                <div className="flex items-center gap-3 text-xs text-text-muted">
+                  {hasTn && (
+                    <>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-gradient-to-r from-primary to-accent inline-block" /> ML {formatCurrency(totalMeli)}</span>
+                      <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-cyan-400 inline-block" /> TN {formatCurrency(totalTn)}</span>
+                    </>
+                  )}
+                  <span className="font-semibold text-text">Total: {formatCurrency(totalMeli + totalTn)}</span>
+                </div>
               </div>
-              <div className="text-xs text-text-muted">
-                Total: {formatCurrency(data.monthly.reduce((s, m) => s + m.gmv, 0))}
+              <div className="space-y-2">
+                {data.monthly.map((m) => {
+                  const gmvTn = m.gmv_tn ?? 0;
+                  const total = m.gmv + gmvTn;
+                  const pctMeli = maxCombined > 0 ? (m.gmv / maxCombined) * 100 : 0;
+                  const pctTn = maxCombined > 0 ? (gmvTn / maxCombined) * 100 : 0;
+                  return (
+                    <div key={m.mes} className="flex items-center gap-3">
+                      <div className="w-16 text-xs text-text-muted font-mono">{m.mes}</div>
+                      <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden flex">
+                        <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${pctMeli}%` }} />
+                        {hasTn && <div className="h-full bg-cyan-400/80" style={{ width: `${pctTn}%` }} />}
+                      </div>
+                      <div className="text-right tabular-nums w-36">
+                        <div className="text-xs font-bold text-text">{formatCurrency(total)}</div>
+                        <div className="text-[10px] text-text-muted">
+                          {hasTn
+                            ? `ML ${formatCurrency(m.gmv)} · TN ${formatCurrency(gmvTn)}`
+                            : `${m.ordenes} órd · profit ${formatCurrency(m.profit)}`}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
-            <div className="space-y-2">
-              {data.monthly.map((m) => (
-                <div key={m.mes} className="flex items-center gap-3">
-                  <div className="w-16 text-xs text-text-muted font-mono">{m.mes}</div>
-                  <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-primary to-accent"
-                      style={{ width: `${(m.gmv / maxMonthly) * 100}%` }}
-                    />
-                  </div>
-                  <div className="text-right tabular-nums">
-                    <div className="text-xs font-bold text-text">{formatCurrency(m.gmv)}</div>
-                    <div className="text-[10px] text-text-muted">
-                      {m.ordenes} órdenes · profit {formatCurrency(m.profit)}
-                    </div>
-                  </div>
-                </div>
-              ))}
+          );
+        })()}
+
+        {/* Referidos por este dropshipper */}
+        {data.referidos_list && data.referidos_list.length > 0 && (
+          <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
+            <div className="px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-bold text-text">Usuarios referidos ({data.referidos_list.length})</h3>
+              <p className="text-[11px] text-text-muted">Dropshippers que se registraron usando el código de este usuario</p>
+            </div>
+            <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2">Nombre</th>
+                    <th className="text-left px-2 py-2">Email</th>
+                    <th className="text-left px-2 py-2">Plan</th>
+                    <th className="text-left px-2 py-2">Estado sub</th>
+                    <th className="text-left px-2 py-2">Alta</th>
+                    <th className="text-right px-2 py-2">Ver</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.referidos_list.map((r) => {
+                    const subOk = r.sub_status?.toLowerCase() === "active" || (r.dias_al_vencimiento ?? -1) > 0;
+                    return (
+                      <tr key={r.user_id} className="border-t border-border hover:bg-soft/40">
+                        <td className="px-3 py-1.5 font-semibold">{r.nombre || "—"}</td>
+                        <td className="px-2 py-1.5 text-text-muted">{r.email || "—"}</td>
+                        <td className="px-2 py-1.5">{r.plan || <span className="text-text-muted italic">sin plan</span>}</td>
+                        <td className="px-2 py-1.5">
+                          {r.sub_status ? (
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${subOk ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-700 border-rose-200"}`}>
+                              {subOk ? `activa${r.dias_al_vencimiento !== null ? ` · ${r.dias_al_vencimiento}d` : ""}` : r.sub_status}
+                            </span>
+                          ) : <span className="text-text-muted">—</span>}
+                        </td>
+                        <td className="px-2 py-1.5 text-text-muted">{r.creado_en?.slice(0, 10)}</td>
+                        <td className="px-2 py-1.5 text-right">
+                          {r.user_id && (
+                            <Link href={`/dashboard/dropshipper/${r.user_id}`} className="inline-flex items-center gap-1 text-primary hover:underline text-[10px] font-semibold">
+                              360 <ExternalLink size={9} />
+                            </Link>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
@@ -620,6 +862,208 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
+        {/* Modal de detalle de orden */}
+        {modalOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModalOrder(null)}>
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="px-6 py-4 border-b border-border flex items-start gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <ChannelBadge origen={modalOrder.origen} />
+                    <span className="text-lg font-bold text-text font-mono">{modalOrder.number || `ID ${modalOrder.internal_id}`}</span>
+                    <OrderStatusBadge status={modalOrder.payment_status || modalOrder.status} />
+                    {modalOrder.shipping_status && <OrderStatusBadge status={modalOrder.shipping_status} />}
+                  </div>
+                  <div className="text-xs text-text-muted mt-1">{fmtArDateTime(modalOrder.fecha)}</div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {modalOrder.number && (
+                    <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(modalOrder.number)}`}
+                       target="_blank" rel="noopener noreferrer"
+                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5">
+                      <ExternalLink size={11} /> Abrir en Unidrop
+                    </a>
+                  )}
+                  <button onClick={() => setModalOrder(null)}
+                    className="w-8 h-8 flex items-center justify-center rounded-lg border border-border hover:bg-soft text-text-muted hover:text-text">
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* LEFT: productos + logística + pago */}
+                <div className="space-y-5">
+                  {/* Productos */}
+                  {(modalOrder.items?.length ?? 0) > 0 && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Package size={12} /> Detalle de la venta · {modalOrder.items!.length} {modalOrder.items!.length === 1 ? "producto" : "productos"}
+                      </div>
+                      <div className="space-y-2">
+                        {modalOrder.items!.map((item, ii) => {
+                          const subtotal = item.price * item.qty;
+                          return (
+                            <div key={ii} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
+                              <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                <Package size={14} className="text-text-muted" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-semibold text-text truncate">{item.name || "—"}</div>
+                                <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
+                                <div className="text-[10px] text-text-muted">{item.qty}× {formatCurrency(item.price)}</div>
+                              </div>
+                              <div className="text-xs font-bold tabular-nums text-text flex-shrink-0">{formatCurrency(subtotal)}</div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-2 flex justify-between text-xs pt-2 border-t border-border">
+                        <span className="text-text-muted">Subtotal productos</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Pago */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <DollarSign size={12} /> Pago
+                    </div>
+                    <div className="bg-soft rounded-lg p-3 space-y-1.5">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-text-muted">Total orden</span>
+                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.total)}</span>
+                      </div>
+                      {modalOrder.merch_cost > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-muted">Costo mercadería (Unidrop)</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.merch_cost)}</span>
+                        </div>
+                      )}
+                      {modalOrder.shipping_cost > 0 && (
+                        <div className="flex justify-between text-xs">
+                          <span className="text-text-muted">Costo envío</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.shipping_cost)}</span>
+                        </div>
+                      )}
+                      {modalOrder.profit_unidrop > 0 && (
+                        <div className="flex justify-between text-xs border-t border-border pt-1.5 mt-1.5">
+                          <span className="text-text-muted">Margen Unidrop</span>
+                          <span className="tabular-nums font-semibold text-primary">{formatCurrency(modalOrder.profit_unidrop)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Logística */}
+                  {modalOrder.shipment && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                        <Truck size={12} /> Logística · {carrierLabel(modalOrder.shipment.carrier)}
+                      </div>
+                      <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Estado</span>
+                          <span className="font-semibold">{modalOrder.shipment.status || "—"}</span>
+                        </div>
+                        {modalOrder.shipment.entregado && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Entregado</span>
+                            <span className="text-emerald-700 font-semibold">{modalOrder.shipment.entregado.slice(0, 10)}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipment.costo > 0 || modalOrder.shipping_cost > 0) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Costo envío</span>
+                            <span className="tabular-nums">{formatCurrency(modalOrder.shipment.costo || modalOrder.shipping_cost)}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipping_address || modalOrder.billing_address) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Dirección</span>
+                            <span className="text-right">{modalOrder.shipping_address || modalOrder.billing_address}</span>
+                          </div>
+                        )}
+                        {(modalOrder.shipping_city || modalOrder.billing_city) && (
+                          <div className="flex justify-between">
+                            <span className="text-text-muted">Ciudad · CP</span>
+                            <span>{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {!modalOrder.shipment && (modalOrder.billing_address || modalOrder.shipping_address) && (
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Dirección de entrega</div>
+                      <div className="bg-soft rounded-lg p-3 text-xs space-y-0.5">
+                        <div>{modalOrder.shipping_address || modalOrder.billing_address}</div>
+                        <div className="text-text-muted">{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.billing_province, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* RIGHT: cliente + pipeline */}
+                <div className="space-y-5">
+                  {/* Datos del cliente */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Datos del cliente</div>
+                    <div className="bg-soft rounded-lg p-3 space-y-2">
+                      {modalOrder.buyer_name ? (
+                        <div className="text-sm font-bold text-text">{modalOrder.buyer_name}</div>
+                      ) : <div className="text-xs text-text-muted italic">Sin nombre registrado</div>}
+                      {modalOrder.contact_email && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <Mail size={11} /> <span>{modalOrder.contact_email}</span>
+                        </div>
+                      )}
+                      {modalOrder.contact_phone && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <Phone size={11} /> <span>{modalOrder.contact_phone}</span>
+                        </div>
+                      )}
+                      {modalOrder.contact_dni && (
+                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
+                          <IdCard size={11} /> <span>DNI/CUIT: {modalOrder.contact_dni}</span>
+                        </div>
+                      )}
+                      {(modalOrder.billing_city || modalOrder.billing_province) && (
+                        <div className="text-xs text-text-muted">
+                          {[modalOrder.billing_address, modalOrder.billing_city, modalOrder.billing_province, modalOrder.billing_zipcode].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Pipeline de estado */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Estado del pedido</div>
+                    <OrderPipelineDetail o={modalOrder} />
+                  </div>
+
+                  {/* ID técnicos */}
+                  <div className="bg-soft/50 border border-border rounded-lg p-3 text-[10px] text-text-muted space-y-0.5">
+                    {modalOrder.number && <div>Número DROP: <span className="font-mono font-bold">{modalOrder.number}</span></div>}
+                    {modalOrder.external_id && <div>ID externo: <span className="font-mono">{modalOrder.external_id}</span></div>}
+                    {modalOrder.internal_id && <div>ID interno: <span className="font-mono">{modalOrder.internal_id}</span></div>}
+                    {modalOrder.intent_id && <div>PaymentIntent: <span className="font-mono">#{modalOrder.intent_id}</span></div>}
+                    {modalOrder.returns_count && modalOrder.returns_count > 0 && (
+                      <div className="text-rose-600 font-semibold flex items-center gap-1"><RotateCcw size={9} /> {modalOrder.returns_count} devolución{modalOrder.returns_count !== 1 ? "es" : ""}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="px-6 py-3 border-t border-border text-[10px] text-text-muted">
+                Click fuera del modal o en ✕ para cerrar
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
           {/* Vista unificada estilo Unidrop panel */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -635,110 +1079,174 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   <span className="text-[10px] text-text-muted italic">actualizando...</span>
                 )}
                 <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                  <button
-                    onClick={() => setChannelFilter("all")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}
-                  >
+                  <button onClick={() => setChannelFilter("all")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
                     Todas ({countMl + countTn})
                   </button>
-                  <button
-                    onClick={() => setChannelFilter("ml")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}
-                  >
-                    MELI ({countMl})
+                  <button onClick={() => setChannelFilter("ml")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><MeliBadgeInline /> ({countMl})</span>
                   </button>
-                  <button
-                    onClick={() => setChannelFilter("tn")}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-emerald-100 text-emerald-900 shadow" : "text-text-muted hover:text-text")}
-                  >
-                    TN ({countTn})
+                  <button onClick={() => setChannelFilter("tn")}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-[#23A0DF]/10 text-[#1580B8] shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
                   </button>
                 </div>
               </div>
             </div>
-            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
               <table className="w-full text-xs">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                   <tr>
-                    <th className="text-left px-2 py-2"><SortHeader col="origen" label="Origen" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="number" label="Number · DROP" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="buyer_name" label="Cliente final" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="merch_cost" label="Mercadería" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="shipping_cost" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-center px-2 py-2"><SortHeader col="shipping_status" label="Envío" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-center px-2 py-2"><SortHeader col="payment_status" label="Pago" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="w-7 px-1 py-2.5"></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="number" label="# Orden" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5">Estado</th>
+                    <th className="text-left px-2 py-2.5">Envío</th>
+                    <th className="text-right px-2 py-2.5"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="w-8 px-1 py-2.5"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {unifiedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center text-text-muted py-6">
+                      <td colSpan={8} className="text-center text-text-muted py-8">
                         {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
                       </td>
                     </tr>
                   ) : (
-                    unifiedOrders.map((o, idx) => (
-                      <tr key={`${o.origen}-${o.internal_id ?? o.external_id}-${idx}`} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-2 py-1.5">
-                          <span
-                            className={
-                              "inline-block px-1.5 py-0.5 rounded text-[9px] uppercase font-bold border " +
-                              (o.origen === "ml"
-                                ? "bg-yellow-50 text-yellow-800 border-yellow-300"
-                                : "bg-emerald-50 text-emerald-800 border-emerald-300")
-                            }
-                          >
-                            {o.origen === "ml" ? "ML" : "TN"}
-                          </span>
-                        </td>
-                        <td className="px-2 py-1.5 font-mono">
-                          {o.number ? (
-                            <a
-                              href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(o.number)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-primary hover:underline font-semibold"
-                              title="Abrir en panel Unidrop"
-                            >
-                              {o.number}
-                              <ExternalLink size={9} />
-                            </a>
-                          ) : (
-                            <span className="text-text-muted italic text-[10px]">sin number</span>
-                          )}
-                          {o.external_id && (
-                            <div className="text-[9px] text-text-muted font-mono">
-                              {o.origen === "ml" ? "ML " : "TN "}{o.external_id}
+                    unifiedOrders.map((o, idx) => {
+                      const rowKey = `${o.origen}-${o.internal_id ?? o.external_id}-${idx}`;
+                      const hasItems = (o.items?.length ?? 0) > 0;
+                      const hasShip = !!o.shipment;
+                      const hasReturns = (o.returns_count ?? 0) > 0;
+                      const isExpandable = hasItems || hasShip || hasReturns;
+                      const isExpanded = expandedOrders.has(rowKey);
+                      const carrier = o.shipment ? carrierLabel(o.shipment.carrier) : null;
+                      return (
+                        <>
+                        <tr key={rowKey}
+                            className={`border-t border-border cursor-pointer ${isExpanded ? "bg-primary/5" : "hover:bg-soft/40"}`}
+                            onClick={() => toggleExpand(rowKey)}>
+                          {/* Expand chevron */}
+                          <td className="px-1 py-2 text-center text-text-muted">
+                            {isExpandable
+                              ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
+                              : <span className="w-3 inline-block" />}
+                          </td>
+                          {/* Número + canal badge */}
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <ChannelBadge origen={o.origen} />
+                              {o.number ? (
+                                <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                  className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
+                                  {o.number}
+                                </button>
+                              ) : (
+                                <span className="text-text-muted italic text-[10px]">sin number</span>
+                              )}
                             </div>
-                          )}
-                        </td>
-                        <td className="px-2 py-1.5 max-w-[160px] truncate" title={o.buyer_name}>
-                          {o.buyer_name || <span className="text-text-muted">—</span>}
-                        </td>
-                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(o.fecha)}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                          {o.merch_cost > 0 ? formatCurrency(o.merch_cost) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                          {o.shipping_cost > 0 ? formatCurrency(o.shipping_cost) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold">{formatCurrency(o.total)}</td>
-                        <td className="px-2 py-1.5 text-center">
-                          {o.shipping_status ? (
-                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.shipping_status)}`}>
-                              {o.shipping_status}
-                            </span>
-                          ) : <span className="text-text-muted text-[10px]">—</span>}
-                        </td>
-                        <td className="px-2 py-1.5 text-center">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(o.payment_status || o.status)}`}>
-                            {o.payment_status || o.status || "—"}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
+                            {o.external_id && (
+                              <div className="text-[9px] text-text-muted font-mono mt-0.5 pl-0.5">{o.external_id}</div>
+                            )}
+                          </td>
+                          {/* Cliente */}
+                          <td className="px-2 py-2 max-w-[150px]">
+                            <div className="truncate font-medium" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted text-[10px]">—</span>}</div>
+                            {(o.billing_city || o.billing_province) && (
+                              <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
+                            )}
+                          </td>
+                          {/* Fecha */}
+                          <td className="px-2 py-2 text-text-muted whitespace-nowrap">{fmtArDateTime(o.fecha)}</td>
+                          {/* Pipeline de estado */}
+                          <td className="px-2 py-2">
+                            <OrderPipeline o={o} />
+                          </td>
+                          {/* Carrier */}
+                          <td className="px-2 py-2">
+                            {carrier ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold bg-blue-50 text-blue-700 border-blue-200">
+                                <Truck size={8} />{carrier}
+                              </span>
+                            ) : <span className="text-text-muted text-[10px]">—</span>}
+                          </td>
+                          {/* Total */}
+                          <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
+                          {/* Abrir modal */}
+                          <td className="px-1 py-2 text-center">
+                            <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                              className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-primary hover:bg-soft"
+                              title="Ver detalle completo">
+                              <ExternalLink size={11} />
+                            </button>
+                          </td>
+                        </tr>
+                        {/* Fila expandible — items inline */}
+                        {isExpanded && (
+                          <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
+                            <td colSpan={8} className="px-4 py-3">
+                              <div className="flex flex-wrap gap-5">
+                                {hasItems && (
+                                  <div className="flex-1 min-w-[220px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
+                                      <Package size={10} /> Productos · {o.items!.length} líneas
+                                    </div>
+                                    <div className="space-y-1">
+                                      {o.items!.map((item, ii) => (
+                                        <div key={ii} className="flex items-baseline justify-between text-[11px] border-b border-border/30 pb-0.5 last:border-0">
+                                          <div className="flex-1 min-w-0">
+                                            <span className="font-mono text-[9px] text-text-muted mr-1.5">{item.sku || "—"}</span>
+                                            <span className="truncate">{item.name || "—"}</span>
+                                            <span className="text-text-muted ml-1.5">{item.qty}×{item.price > 0 ? ` ${formatCurrency(item.price)}` : ""}</span>
+                                          </div>
+                                          <span className="font-semibold tabular-nums ml-2 flex-shrink-0">{item.price > 0 ? formatCurrency(item.price * item.qty) : "—"}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="mt-1.5 flex justify-between text-xs border-t border-border/50 pt-1 font-semibold">
+                                      <span className="text-text-muted">Subtotal</span>
+                                      <span>{formatCurrency(o.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
+                                    </div>
+                                  </div>
+                                )}
+                                {hasShip && (
+                                  <div className="min-w-[160px]">
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
+                                      <Truck size={10} /> {carrierLabel(o.shipment!.carrier)}
+                                    </div>
+                                    <div className="text-[11px] space-y-0.5">
+                                      <div><span className="text-text-muted">Estado:</span> <span className="font-semibold ml-1">{o.shipment!.status || "—"}</span></div>
+                                      {o.shipment!.entregado && (
+                                        <div><span className="text-text-muted">Entregado:</span> <span className="text-emerald-700 font-semibold ml-1">{o.shipment!.entregado.slice(0, 10)}</span></div>
+                                      )}
+                                      {(o.shipment!.costo > 0 || o.shipping_cost > 0) && (
+                                        <div><span className="text-text-muted">Costo:</span> <span className="tabular-nums ml-1">{formatCurrency(o.shipment!.costo || o.shipping_cost)}</span></div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                {hasReturns && (
+                                  <div className="min-w-[120px]">
+                                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                      <RotateCcw size={10} /> Devoluciones
+                                    </div>
+                                    <div className="text-[11px] text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</div>
+                                  </div>
+                                )}
+                                <button onClick={() => setModalOrder(o)}
+                                  className="self-start mt-4 text-[10px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                  <ExternalLink size={9} /> Ver detalle completo
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -821,6 +1329,130 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
     </>
   );
 }
+
+// ── Canal labels ──────────────────────────────────────────────────────────────
+
+function carrierLabel(raw: string): string {
+  const s = (raw || "").toLowerCase();
+  if (s.includes("lightdata") || s.includes("flexi")) return "Unifast";
+  if (s.includes("oca")) return "OCA";
+  return raw;
+}
+
+function MeliBadgeInline() {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide bg-[#FFE600] text-[#333] border border-[#E8C800]">
+      ML
+    </span>
+  );
+}
+
+function TnBadgeInline() {
+  return (
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase tracking-wide bg-[#23A0DF] text-white border border-[#1580B8]">
+      TN
+    </span>
+  );
+}
+
+function ChannelBadge({ origen }: { origen: "ml" | "tn" }) {
+  if (origen === "ml") return <MeliBadgeInline />;
+  return <TnBadgeInline />;
+}
+
+// ── Status badge ───────────────────────────────────────────────────────────────
+
+function OrderStatusBadge({ status }: { status: string }) {
+  const s = (status || "").toLowerCase();
+  const cls =
+    s === "paid" || s === "processed" || s === "delivered" || s === "entregado"
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : s === "pending" || s === "open" || s === "shipped" || s === "en_camino"
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : s === "cancelled" || s === "failed"
+      ? "bg-rose-50 text-rose-700 border-rose-200"
+      : "bg-zinc-50 text-zinc-600 border-zinc-200";
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
+// ── Estado pipeline (fila tabla) ───────────────────────────────────────────────
+
+function pipelineStep(
+  done: boolean,
+  partial: boolean,
+  icon: string,
+): React.ReactNode {
+  const cls = done
+    ? "bg-emerald-500 text-white border-emerald-500"
+    : partial
+    ? "bg-amber-400 text-white border-amber-400"
+    : "bg-zinc-100 text-zinc-400 border-zinc-300";
+  return (
+    <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold border ${cls}`}>
+      {icon}
+    </div>
+  );
+}
+
+function OrderPipeline({ o }: { o: UnifiedOrder }) {
+  const ps = (o.payment_status || o.status || "").toLowerCase();
+  const ss = (o.shipping_status || "").toLowerCase();
+  const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
+  const isShipped = ["shipped", "transit", "en_camino", "en camino"].some((v) => ss.includes(v)) || !!o.shipment;
+  const isDelivered =
+    ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const connector = (on: boolean) => (
+    <div className={`h-px w-3 flex-shrink-0 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
+  );
+  return (
+    <div className="flex items-center gap-0.5">
+      {pipelineStep(isPaid, !isPaid && ps !== "", "$")}
+      {connector(isShipped)}
+      {pipelineStep(isShipped, false, "▸")}
+      {connector(isDelivered)}
+      {pipelineStep(isDelivered, false, "✓")}
+    </div>
+  );
+}
+
+// ── Estado pipeline (modal detalle) ───────────────────────────────────────────
+
+function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
+  const ps = (o.payment_status || o.status || "").toLowerCase();
+  const ss = (o.shipping_status || "").toLowerCase();
+  const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
+  const isShipped = ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || !!o.shipment;
+  const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+
+  const step = (done: boolean, label: string, icon: string) => (
+    <div className="flex flex-col items-center gap-1">
+      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 ${
+        done ? "bg-emerald-500 text-white border-emerald-500" : "bg-zinc-100 text-zinc-400 border-zinc-200"
+      }`}>{icon}</div>
+      <span className={`text-[10px] leading-none text-center ${done ? "text-emerald-700 font-semibold" : "text-zinc-400"}`}>{label}</span>
+    </div>
+  );
+  const line = (on: boolean) => (
+    <div className={`flex-1 h-0.5 mb-4 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
+  );
+  return (
+    <div className="flex items-center gap-2">
+      {step(true, "Creada", "📋")}
+      {line(isPaid)}
+      {step(isPaid, "Pagada", "💲")}
+      {line(isShipped)}
+      {step(isShipped, "En camino", "🚚")}
+      {line(isDelivered)}
+      {step(isDelivered, "Entregada", "✅")}
+    </div>
+  );
+}
+
+// ── KpiBox ─────────────────────────────────────────────────────────────────────
 
 function KpiBox({
   icon: Icon,
