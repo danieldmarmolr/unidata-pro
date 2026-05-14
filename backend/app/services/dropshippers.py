@@ -557,6 +557,7 @@ def dropshipper_detail(
         "ordenes_totales": max(int(v[1] or 0), ventas_pagadas_intent),
         "canceladas": int(v[2] or 0),
         "ultima_venta": v[3],
+        "ultima_venta_number": None,  # se completa abajo
         "primera_venta": v[4],
         "gmv": float(v[5] or 0),
         "costo_mercaderia": float(v[6] or 0),
@@ -566,6 +567,22 @@ def dropshipper_detail(
         "tasa_cancelacion_pct": round(int(v[2] or 0) / max(int(v[1] or 1), 1) * 100, 1),
         "intents_ml_count": ml_intents,  # cuantos PaymentIntent cubren MELI
     }
+
+    # Número DROP de la última orden pagada (para mostrar en KPI en lugar de "X atrás")
+    _last_num_row = q(eng, """
+        SELECT o."number", o."dateCreated"::text
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
+        WHERE (mla."userId" = :uid OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix))
+          AND o."status" = 'paid'
+          AND o."number" IS NOT NULL AND o."number" != ''
+        ORDER BY o."dateCreated" DESC NULLS LAST
+        LIMIT 1
+    """, {"uid": int(user_id), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or []
+    if _last_num_row and _last_num_row[0][0]:
+        ventas_kpi["ultima_venta_number"] = _last_num_row[0][0]
+        if not ventas_kpi.get("ultima_venta"):
+            ventas_kpi["ultima_venta"] = _last_num_row[0][1]
 
     # KPIs de ventas TN: ground truth = PaymentIntent.orderIds, enrichment con tienda_nube_orders
     intent_tn = q(eng, """
@@ -779,6 +796,17 @@ def dropshipper_detail(
         if ml_orders_paid > 0 else 0.0
     )
 
+    # Fallback ultima_venta: OML no tiene el order → usar fecha del PaymentIntent.
+    if not ventas_kpi.get("ultima_venta") and ml_orders_paid > 0:
+        _pi_last = q(eng, """
+            SELECT MAX(pi."createdAt")::text
+            FROM public."PaymentIntent" pi
+            INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+            WHERE cpa."userId" = :uid AND pi."status" = 'PROCESSED'
+              AND COALESCE(array_length(pi."mlOrderIds",1),0) > 0
+        """, {"uid": int(user_id)}) or [(None,)]
+        ventas_kpi["ultima_venta"] = _pi_last[0][0]
+
     # PaymentIntentSubscription — historial COMPLETO (no filtrado por periodo).
     # Esta tabla tiene userId directo y es el ground truth de pagos de suscripcion.
     # Distinta de PaymentTransactionSubscription (que es el cobro via Talo).
@@ -911,6 +939,38 @@ def dropshipper_detail(
                 "ordenes_tn": tn_data["ordenes_tn"], "gmv_tn": round(tn_data["gmv_tn"], 2),
             })
     monthly_series.sort(key=lambda x: x["mes"])
+
+    # Fallback mensual ML: si OML no tiene datos para este dropshipper, usar
+    # PaymentIntent (ground truth de GMV Unidrop) para la serie mensual MELI.
+    if not monthly_series or all(m["gmv"] == 0.0 for m in monthly_series):
+        try:
+            pi_monthly = q(eng, """
+                SELECT to_char(date_trunc('month', pi."createdAt"), 'YYYY-MM') AS mes,
+                       COALESCE(SUM(array_length(pi."mlOrderIds", 1)), 0)::int AS ordenes,
+                       COALESCE(SUM(COALESCE(pi."paidAmount", pi."expectedAmount", 0)), 0)::float AS gmv
+                FROM public."PaymentIntent" pi
+                INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                WHERE cpa."userId" = :uid
+                  AND pi."status" = 'PROCESSED'
+                  AND COALESCE(array_length(pi."mlOrderIds", 1), 0) > 0
+                  AND pi."createdAt" >= NOW() - INTERVAL '12 months'
+                GROUP BY 1 ORDER BY 1
+            """, {"uid": int(user_id)}) or []
+            pi_mes_map = {r[0]: {"ordenes": int(r[1] or 0), "gmv": round(float(r[2] or 0), 2)} for r in pi_monthly}
+            for m in monthly_series:
+                if m["mes"] in pi_mes_map and m["gmv"] == 0.0:
+                    m["ordenes"] = pi_mes_map[m["mes"]]["ordenes"]
+                    m["gmv"] = pi_mes_map[m["mes"]]["gmv"]
+            for mes, pd in pi_mes_map.items():
+                if not any(m["mes"] == mes for m in monthly_series):
+                    monthly_series.append({
+                        "mes": mes, "ordenes": pd["ordenes"], "gmv": pd["gmv"],
+                        "profit": 0.0, "ordenes_tn": 0, "gmv_tn": 0.0,
+                    })
+            monthly_series.sort(key=lambda x: x["mes"])
+            log.info("monthly PI fallback uid=%s pi_meses=%d", user_id, len(pi_mes_map))
+        except Exception as _pi_mon_err:
+            log.warning("monthly PI fallback fail uid=%s: %s", user_id, str(_pi_mon_err)[:100])
 
     # Ultimas ventas MELI: ground truth = mlOrderIds desnormalizados de PaymentIntents
     # PROCESSED del dropshipper. Para cada ML order ID, buscamos enriquecimiento en
@@ -1172,6 +1232,8 @@ def dropshipper_unified_orders(
     import re as _re
     safe_ml = [s for s in all_ml_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
     safe_tn = [s for s in all_tn_ids if _re.match(r"^[A-Za-z0-9_-]+$", s)]
+    log.info("unified_orders ids uid=%s ml_count=%d sample=%s",
+             user_id, len(safe_ml), safe_ml[:3])
 
     ml_rows: list[dict] = []
     tn_rows: list[dict] = []
@@ -1181,6 +1243,11 @@ def dropshipper_unified_orders(
     # quedan filas "stub" (fallback) para que la UI siempre muestre algo.
     if safe_ml:
         ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in safe_ml) + "]::text[]"
+        # ids_lit_stripped: para OML que guarda mlOrderId con prefijo MLA/ML-
+        ids_lit_stripped = "ARRAY[" + ",".join(
+            "'" + _re.sub(r'^ML[A-Z]?[-_]?', '', i) + "'"
+            for i in safe_ml
+        ) + "]::text[]"
         SCHEMA_CANDIDATES = ['mercado_libre_dev', 'public', 'mercado_libre', 'meli']
         erows: list = []
         last_err = ""
@@ -1209,6 +1276,8 @@ def dropshipper_unified_orders(
                     ) p ON p."orderId" = o.id
                     WHERE o."mlOrderId"::text = ANY({ids_lit})
                        OR o.id::text          = ANY({ids_lit})
+                       OR regexp_replace(o."mlOrderId"::text, '^ML[A-Z]?[-_]?', '') = ANY({ids_lit})
+                       OR regexp_replace(o."mlOrderId"::text, '^ML[A-Z]?[-_]?', '') = ANY({ids_lit_stripped})
                 """) or []
                 if erows:
                     log.info("unified_orders ML enrich uid=%s OK schema=%s rows=%d",
@@ -1369,6 +1438,164 @@ def dropshipper_unified_orders(
                 )
         except Exception as _sup_err:
             log.warning("unified_orders supplemental ML fail uid=%s: %s", user_id, str(_sup_err)[:200])
+
+    # 2c) Enrich via _OrderMercadoLibreToPaymentIntent (join table Prisma)
+    # Mas confiable que comparar mlOrderId strings: FK directa intent.id -> oml.id.
+    # Cubre stubs donde el mlOrderId en PI no matcheo con OML por formato distinto.
+    _all_intent_ids = list(intent_meta.keys()) if intent_meta else []
+    if _all_intent_ids:
+        _ji_lit = ",".join(str(i) for i in _all_intent_ids)
+        try:
+            _jt_cols = list_columns(eng, "mercado_libre_dev", "_OrderMercadoLibreToPaymentIntent")
+            _jt_a = next((c for c in ["A", "a", "order_id", "oml_id"] if c in _jt_cols), None)
+            _jt_b = next((c for c in ["B", "b", "intent_id", "payment_intent_id"] if c in _jt_cols), None)
+            log.info("ML join-table cols=%s A=%s B=%s", _jt_cols, _jt_a, _jt_b)
+            if _jt_a and _jt_b:
+                _jt_rows = q(eng, f"""
+                    SELECT jt."{_jt_b}"::int AS intent_id,
+                           o.id::text AS internal_id,
+                           o."mlOrderId"::text AS ext_id,
+                           o."number",
+                           o."buyer_name",
+                           o."dateCreated"::text AS fecha,
+                           o."status",
+                           o."paymentStatus",
+                           o."shippingStatus",
+                           COALESCE(o."merchandise_cost",0)::float AS merch_cost,
+                           COALESCE(o."shipping_cost",0)::float AS shipping_cost,
+                           COALESCE(o."profit_for_subscription",0)::float AS profit,
+                           COALESCE(p.gmv,0)::float AS total,
+                           o."shipping_type"
+                    FROM mercado_libre_dev."_OrderMercadoLibreToPaymentIntent" jt
+                    JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = jt."{_jt_a}"
+                    LEFT JOIN (
+                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        FROM mercado_libre_dev."PaymentMercadoLibre"
+                        GROUP BY 1
+                    ) p ON p."orderId" = o.id
+                    WHERE jt."{_jt_b}"::int IN ({_ji_lit})
+                """) or []
+                if _jt_rows:
+                    _ex2 = {r["external_id"]: i for i, r in enumerate(ml_rows) if r.get("external_id")}
+                    _in2 = {str(r["internal_id"]): i for i, r in enumerate(ml_rows) if r.get("internal_id")}
+                    for jr in _jt_rows:
+                        iid = int(jr[0]) if jr[0] else None
+                        int_id = jr[1] or ""; ext_id = jr[2] or ""; num = jr[3] or ""; buyer = jr[4] or ""
+                        idx = _in2.get(int_id)
+                        if idx is None and ext_id: idx = _ex2.get(ext_id)
+                        if idx is not None:
+                            r = ml_rows[idx]
+                            if int_id and not r.get("internal_id"):
+                                r["internal_id"] = int(int_id) if int_id.isdigit() else None
+                                if int_id not in _in2: _in2[int_id] = idx
+                            if num and not r.get("number"):   r["number"] = num
+                            if buyer and not r.get("buyer_name"): r["buyer_name"] = buyer
+                            r["status"] = jr[6] or r.get("status", "")
+                            r["payment_status"] = jr[7] or r.get("payment_status", "")
+                            r["shipping_status"] = jr[8] or r.get("shipping_status", "")
+                            if float(jr[9] or 0) > 0 and not r.get("merch_cost"):
+                                r["merch_cost"] = round(float(jr[9]), 2)
+                            if float(jr[10] or 0) > 0 and not r.get("shipping_cost"):
+                                r["shipping_cost"] = round(float(jr[10]), 2)
+                            if float(jr[11] or 0) > 0 and not r.get("profit_unidrop"):
+                                r["profit_unidrop"] = round(float(jr[11]), 2)
+                            if float(jr[12] or 0) > 0 and r.get("total", 0) == 0:
+                                r["total"] = round(float(jr[12]), 2)
+                            r["enriched"] = True
+                        elif ext_id or num:
+                            new_idx = len(ml_rows)
+                            _ex2[ext_id] = new_idx
+                            ml_rows.append({
+                                "origen": "ml", "internal_id": int(int_id) if int_id and int_id.isdigit() else None,
+                                "external_id": ext_id, "number": num, "fecha": jr[5],
+                                "status": jr[6] or "", "payment_status": jr[7] or "", "shipping_status": jr[8] or "",
+                                "merch_cost": round(float(jr[9] or 0), 2), "shipping_cost": round(float(jr[10] or 0), 2),
+                                "profit_unidrop": round(float(jr[11] or 0), 2), "total": round(float(jr[12] or 0), 2),
+                                "buyer_name": buyer, "shipping_type": jr[13] or "", "intent_id": iid,
+                                "enriched": True, "items": [], "shipment": None,
+                            })
+                    log.info("ML join-table uid=%s jt_rows=%d ml_total=%d", user_id, len(_jt_rows), len(ml_rows))
+        except Exception as _jt_err:
+            log.warning("ML join-table fail uid=%s: %s", user_id, str(_jt_err)[:200])
+
+    # 2d) WebhookOrder como fuente de buyer_name para stubs
+    # WebhookOrder (12K rows) tiene orders no sincronizadas a OML.
+    # Solo busca buyer info para rows que aun no tienen buyer_name.
+    _stubs_sin_buyer = [r for r in ml_rows if not r.get("buyer_name") and r.get("external_id")]
+    if _stubs_sin_buyer:
+        _wo_ext_ids = [r["external_id"] for r in _stubs_sin_buyer]
+        _wo_lit = "ARRAY[" + ",".join("'" + i + "'" for i in _wo_ext_ids) + "]::text[]"
+        try:
+            _wo_cols = list_columns(eng, "mercado_libre_dev", "WebhookOrder")
+            log.info("WebhookOrder cols=%s", sorted(_wo_cols)[:20])
+            _wo_order_col = next((c for c in ["orderId", "mlOrderId", "order_id", "id"] if c in _wo_cols), None)
+            _wo_buyer_col = next((c for c in ["buyerNickname", "buyerName", "buyer_name", "buyer"] if c in _wo_cols), None)
+            _wo_status_col = next((c for c in ["status", "orderStatus"] if c in _wo_cols), None)
+            # Buyer info: columna directa o extraida del payload JSON
+            # WebhookOrder.payload = {"buyer": {"first_name": "...", "last_name": "...", "nickname": "..."}}
+            if _wo_buyer_col:
+                _wo_buyer_expr = f'COALESCE("{_wo_buyer_col}"::text, \'\')'
+            elif "payload" in _wo_cols:
+                _wo_buyer_expr = (
+                    "COALESCE(NULLIF(TRIM("
+                    "  COALESCE(payload->'buyer'->>'first_name','') || ' ' ||"
+                    "  COALESCE(payload->'buyer'->>'last_name','')"
+                    "), ''), payload->'buyer'->>'nickname', '')"
+                )
+            else:
+                _wo_buyer_expr = None
+            _wo_st_sel = f'COALESCE("{_wo_status_col}"::text, \'\')' if _wo_status_col else "''"
+            if _wo_order_col and _wo_buyer_expr:
+                _wo_rows = q(eng, f"""
+                    SELECT "{_wo_order_col}"::text,
+                           COALESCE({_wo_buyer_expr}, '') AS buyer,
+                           '' AS num,
+                           {_wo_st_sel} AS status
+                    FROM mercado_libre_dev."WebhookOrder"
+                    WHERE "{_wo_order_col}"::text = ANY({_wo_lit})
+                """) or []
+                if _wo_rows:
+                    _wo_map = {r[0]: {"buyer": r[1], "num": r[2], "status": r[3]} for r in _wo_rows if r[0]}
+                    for r in _stubs_sin_buyer:
+                        if r.get("external_id") in _wo_map:
+                            wd = _wo_map[r["external_id"]]
+                            if wd["buyer"] and not r.get("buyer_name"):
+                                r["buyer_name"] = wd["buyer"]
+                            if wd["num"] and not r.get("number"):
+                                r["number"] = wd["num"]
+                            if wd["status"]:
+                                r["status"] = wd["status"]
+                    log.info("WebhookOrder uid=%s wo_rows=%d", user_id, len(_wo_rows))
+        except Exception as _wo_err:
+            log.warning("WebhookOrder fail uid=%s: %s", user_id, str(_wo_err)[:200])
+
+    # 2e) Patch ML rows sin DROP number usando OML mlOrderId→number lookup por dni.
+    # PaymentIntent.mlOrderIds y OML.mlOrderId comparten el mismo ID numérico externo,
+    # pero el formato de PI puede diferir del number (DROP-{dni}-{seq}) en OML.
+    # Consultamos OML por numero LIKE 'DROP-{dni}-%' y mapeamos mlOrderId → number.
+    if dni:
+        _ml_without_num = [r for r in ml_rows if not r.get("number") and r.get("external_id")]
+        if _ml_without_num:
+            try:
+                _oml_num_rows = q(eng, """
+                    SELECT "mlOrderId"::text, "number"
+                    FROM mercado_libre_dev."OrderMercadoLibre"
+                    WHERE "number" LIKE :pat
+                      AND "mlOrderId" IS NOT NULL
+                    LIMIT 1000
+                """, {"pat": f"DROP-{dni}-%"}) or []
+                if _oml_num_rows:
+                    _oml_num_map = {r[0]: r[1] for r in _oml_num_rows if r[0] and r[1]}
+                    _patched = 0
+                    for r in _ml_without_num:
+                        ext = r.get("external_id", "")
+                        if ext in _oml_num_map:
+                            r["number"] = _oml_num_map[ext]
+                            _patched += 1
+                    log.info("DROP num patch uid=%s dni=%s oml=%d patched=%d",
+                             user_id, dni, len(_oml_num_rows), _patched)
+            except Exception as _dn_err:
+                log.warning("DROP num patch fail uid=%s: %s", user_id, str(_dn_err)[:100])
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()
@@ -1594,65 +1821,262 @@ def dropshipper_unified_orders(
                 if ship and ship.get("status"):
                     r["shipping_status"] = ship["status"]
 
-    # 4b) Items ML — carga bulk por internal_id (usando list_columns para nombres defensivos)
+    # 4b) Items ML — OrderItemMercadoLibre.orderId ES el mlOrderId externo (no el id interno).
+    # Usamos external_id para el join. sellerSKU contiene nuestro SKU de catálogo.
     if ml_rows:
-        ml_internal_enriched = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
-        if ml_internal_enriched:
+        ml_ext_for_items = [str(r["external_id"]) for r in ml_rows if r.get("external_id")]
+        if ml_ext_for_items:
             oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
-            sku_col = next((c for c in ["sellerCustomField", "seller_custom_field", "sku", "seller_sku"] if c in oi_cols), None)
+            log.info("ML items oi_cols=%s", oi_cols)
+            # sellerSKU / seller_sku = nuestro SKU (SBUNIB4, PARA005, etc.)
+            sku_col = next((c for c in ["sellerSku", "sellerSKU", "seller_sku", "sellerCustomField", "seller_custom_field", "sku"] if c in oi_cols), None)
             oid_col = next((c for c in ["orderId", "order_id"] if c in oi_cols), None)
             price_col = next((c for c in ["unitPrice", "unit_price"] if c in oi_cols), None)
             qty_col = "quantity" if "quantity" in oi_cols else None
             title_col = "title" if "title" in oi_cols else None
+            type_col = next((c for c in ["type", "orderType", "order_type"] if c in oi_cols), None)
+            cost_col = next((c for c in ["unitCost", "cost", "merchandiseCost", "merchandise_cost"] if c in oi_cols), None)
             if sku_col and oid_col and qty_col:
-                ml_ids_bulk = ",".join(ml_internal_enriched)
+                ml_ext_bulk = ",".join("'" + i + "'" for i in ml_ext_for_items)
                 oi_price = f'COALESCE(oi."{price_col}", 0)::float' if price_col else "0::float"
                 oi_title = f'COALESCE(oi."{title_col}"::text, \'\')' if title_col else "''"
+                oi_type = f'COALESCE(oi."{type_col}"::text, \'\')' if type_col else "''"
+                oi_cost = f'COALESCE(oi."{cost_col}", 0)::float' if cost_col else "0::float"
                 ml_item_rows = q(eng, f"""
                     SELECT oi."{oid_col}"::text,
                            COALESCE(oi."{sku_col}"::text, '') AS sku,
                            {oi_title} AS title,
                            COALESCE(oi."{qty_col}", 0)::int AS qty,
-                           {oi_price} AS price
+                           {oi_price} AS unit_price,
+                           {oi_type} AS item_type,
+                           {oi_cost} AS cost
                     FROM mercado_libre_dev."OrderItemMercadoLibre" oi
-                    WHERE oi."{oid_col}"::text IN ({ml_ids_bulk})
+                    WHERE oi."{oid_col}"::text IN ({ml_ext_bulk})
+                    ORDER BY oi.id ASC
                 """) or []
-                items_by_ml: dict[str, list] = {}
+                items_by_ml_ext: dict[str, list] = {}
                 for ir in ml_item_rows:
                     k = ir[0] or ""
-                    items_by_ml.setdefault(k, []).append({
-                        "sku": ir[1] or "", "name": ir[2] or "",
-                        "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                    items_by_ml_ext.setdefault(k, []).append({
+                        "sku":       ir[1] or "",
+                        "name":      ir[2] or "",
+                        "qty":       int(ir[3] or 0),
+                        "price":     round(float(ir[4] or 0), 2),
+                        "item_type": ir[5] or "",   # "COMBO" o "item"
+                        "cost":      round(float(ir[6] or 0), 2),
                     })
-                log.info("unified_orders ML items uid=%s orders=%d items=%d",
-                         user_id, len(ml_internal_enriched), len(ml_item_rows))
+                log.info("unified_orders ML items uid=%s sku_col=%s orders=%d items=%d",
+                         user_id, sku_col, len(ml_ext_for_items), len(ml_item_rows))
                 for r in ml_rows:
-                    iid = str(r.get("internal_id") or "")
-                    r["items"] = items_by_ml.get(iid, [])
-        # MercadoLibreReturn — flags por orden (devoluciones)
-        ml_with_id = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
-        if ml_with_id:
+                    ext = str(r.get("external_id") or "")
+                    if ext in items_by_ml_ext:
+                        r["items"] = items_by_ml_ext[ext]
+        # MercadoLibreReturn — orderId también es el mlOrderId externo
+        ml_ext_all = [str(r["external_id"]) for r in ml_rows if r.get("external_id")]
+        if ml_ext_all:
             ret_cols = list_columns(eng, "mercado_libre_dev", "MercadoLibreReturn")
             ret_order_col = next((c for c in ["orderId", "order_id"] if c in ret_cols), None)
             if ret_order_col:
-                ret_ids_bulk = ",".join(ml_with_id)
+                ret_ext_bulk = ",".join("'" + i + "'" for i in ml_ext_all)
                 ret_rows = q(eng, f"""
                     SELECT "{ret_order_col}"::text, COUNT(*)::int AS cant
                     FROM mercado_libre_dev."MercadoLibreReturn"
-                    WHERE "{ret_order_col}"::text IN ({ret_ids_bulk})
+                    WHERE "{ret_order_col}"::text IN ({ret_ext_bulk})
                     GROUP BY 1
                 """) or []
                 returns_by_order = {r[0]: int(r[1] or 0) for r in ret_rows if r[0]}
                 for r in ml_rows:
-                    iid = str(r.get("internal_id") or "")
-                    if iid in returns_by_order:
-                        r["returns_count"] = returns_by_order[iid]
+                    ext = str(r.get("external_id") or "")
+                    if ext in returns_by_order:
+                        r["returns_count"] = returns_by_order[ext]
 
-    # 4) Combinar y ordenar por fecha desc
+    # 4c) Stub ML enrichment desde tablas extra de mercado_libre_dev
+    # Para órdenes que no matchearon en OML: descubrimos schema y enriquecemos
+    # con Shipment, Buyer, y cualquier tabla que tenga mlOrderId directo.
+    _stub_ml = [r for r in ml_rows if not r.get("internal_id")]
+    if _stub_ml:
+        _stub_ext_ids = [r["external_id"] for r in _stub_ml if r.get("external_id")]
+        if _stub_ext_ids:
+            try:
+                _ml_tbls = q(eng, """
+                    SELECT t.table_name,
+                           string_agg(c.column_name, ',' ORDER BY c.ordinal_position) AS cols
+                    FROM information_schema.tables t
+                    JOIN information_schema.columns c
+                         ON c.table_schema = t.table_schema AND c.table_name = t.table_name
+                    WHERE t.table_schema = 'mercado_libre_dev'
+                    GROUP BY t.table_name
+                    ORDER BY t.table_name
+                """) or []
+                _avail: dict[str, list[str]] = {r[0]: (r[1] or "").split(",") for r in _ml_tbls}
+                log.info("ML schema discovery uid=%s tables=%s", user_id, list(_avail.keys()))
+
+                _stub_lit = "ARRAY[" + ",".join("'" + i + "'" for i in _stub_ext_ids) + "]::text[]"
+
+                # Intenta Shipment por mlOrderId (tracking / estado envío)
+                for _sname in ["ShipmentMercadoLibre", "MercadoLibreShipment", "MercadoLibreShipping"]:
+                    if _sname not in _avail:
+                        continue
+                    _sc = _avail[_sname]
+                    _so = next((c for c in ["mlOrderId", "orderId", "order_id"] if c in _sc), None)
+                    if not _so:
+                        continue
+                    _ss = next((c for c in ["status", "shippingStatus", "shipping_status"] if c in _sc), None)
+                    _sk = next((c for c in ["carrier", "logisticType", "logistic_type", "shippingType"] if c in _sc), None)
+                    try:
+                        _shp_sel = f'"{_so}"::text'
+                        _shp_sel += f', COALESCE("{_ss}"::text, \'\')' if _ss else ", ''"
+                        _shp_sel += f', COALESCE("{_sk}"::text, \'\')' if _sk else ", ''"
+                        _shp_r = q(eng, f"""
+                            SELECT {_shp_sel}
+                            FROM mercado_libre_dev."{_sname}"
+                            WHERE "{_so}"::text = ANY({_stub_lit})
+                        """) or []
+                        if _shp_r:
+                            _shp_map = {sr[0]: {"carrier": sr[2] or "MELI", "status": sr[1] or "", "entregado": None, "costo": 0.0} for sr in _shp_r if sr[0]}
+                            for r in _stub_ml:
+                                if r.get("external_id") in _shp_map:
+                                    r["shipment"] = _shp_map[r["external_id"]]
+                                    if _shp_map[r["external_id"]].get("status"):
+                                        r["shipping_status"] = _shp_map[r["external_id"]]["status"]
+                            log.info("ML stub shipment enrich table=%s rows=%d", _sname, len(_shp_r))
+                        break
+                    except Exception as _se:
+                        log.warning("ML stub shipment %s fail: %s", _sname, str(_se)[:80])
+
+                # Intenta tablas de buyer para nombre del comprador
+                for _bname, _bcols in _avail.items():
+                    if "buyer" not in _bname.lower():
+                        continue
+                    _bo = next((c for c in ["mlOrderId", "orderId", "order_id"] if c in _bcols), None)
+                    _bn = next((c for c in ["nickname", "name", "buyer_name", "full_name", "username"] if c in _bcols), None)
+                    if not _bo or not _bn:
+                        continue
+                    try:
+                        _br = q(eng, f"""
+                            SELECT "{_bo}"::text, COALESCE("{_bn}"::text, '')
+                            FROM mercado_libre_dev."{_bname}"
+                            WHERE "{_bo}"::text = ANY({_stub_lit})
+                        """) or []
+                        if _br:
+                            _bmap = {b[0]: b[1] for b in _br if b[0] and b[1]}
+                            for r in _stub_ml:
+                                if r.get("external_id") in _bmap and not r.get("buyer_name"):
+                                    r["buyer_name"] = _bmap[r["external_id"]]
+                            log.info("ML stub buyer enrich table=%s rows=%d", _bname, len(_br))
+                    except Exception as _be:
+                        log.warning("ML stub buyer %s fail: %s", _bname, str(_be)[:80])
+
+                # Intenta items por mlOrderId directo (OrderItemMercadoLibre
+                # normalmente usa orderId interno, pero algunas integraciones
+                # tienen mlOrderId como columna extra)
+                if "OrderItemMercadoLibre" in _avail:
+                    _ic = _avail["OrderItemMercadoLibre"]
+                    _ml_col = next((c for c in ["mlOrderId", "ml_order_id"] if c in _ic), None)
+                    if _ml_col:
+                        _sku_c = next((c for c in ["sellerCustomField", "seller_custom_field", "sku"] if c in _ic), None)
+                        _qty_c = "quantity" if "quantity" in _ic else None
+                        _ttl_c = "title" if "title" in _ic else None
+                        _prc_c = next((c for c in ["unitPrice", "unit_price"] if c in _ic), None)
+                        if _sku_c and _qty_c:
+                            try:
+                                _ii_sel = f'"{_ml_col}"::text'
+                                _ii_sel += f', COALESCE(oi."{_sku_c}"::text, \'\')'
+                                _ii_sel += f', COALESCE(oi."{_ttl_c}"::text, \'\')' if _ttl_c else ", ''"
+                                _ii_sel += f', COALESCE(oi."{_qty_c}", 0)::int'
+                                _ii_sel += f', COALESCE(oi."{_prc_c}", 0)::float' if _prc_c else ", 0::float"
+                                _ii_rows = q(eng, f"""
+                                    SELECT {_ii_sel}
+                                    FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                                    WHERE "{_ml_col}"::text = ANY({_stub_lit})
+                                """) or []
+                                if _ii_rows:
+                                    _imap: dict[str, list] = {}
+                                    for ir in _ii_rows:
+                                        _imap.setdefault(ir[0], []).append({
+                                            "sku": ir[1] or "", "name": ir[2] or "",
+                                            "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                                        })
+                                    for r in _stub_ml:
+                                        if r.get("external_id") in _imap:
+                                            r["items"] = _imap[r["external_id"]]
+                                    log.info("ML stub items via mlOrderId rows=%d", len(_ii_rows))
+                            except Exception as _ie:
+                                log.warning("ML stub items mlOrderId fail: %s", str(_ie)[:80])
+
+            except Exception as _disc_err:
+                log.warning("ML stub enrichment fail uid=%s: %s", user_id, str(_disc_err)[:150])
+
+    # 4.5) Enrich items con image_url via SKU → Variant → Image (catálogo Unidrop)
+    all_item_skus = list({
+        item["sku"]
+        for rows_list in [ml_rows, tn_rows]
+        for r in rows_list
+        for item in (r.get("items") or [])
+        if item.get("sku")
+    })
+    if all_item_skus:
+        try:
+            sku_lit_img = ",".join("'" + s.replace("'", "''") + "'" for s in all_item_skus)
+            img_rows = q(eng, f"""
+                WITH fi AS (
+                    SELECT DISTINCT ON (i.product_id)
+                        i.product_id, i.src AS img_url
+                    FROM public."Image" i
+                    ORDER BY i.product_id, i.position ASC NULLS LAST, i.id ASC
+                )
+                SELECT v.sku, fi.img_url
+                FROM public."Variant" v
+                LEFT JOIN fi ON fi.product_id = v.product_id
+                WHERE v.sku IN ({sku_lit_img})
+            """) or []
+            sku_img_map = {r[0]: r[1] for r in img_rows if r[0] and r[1]}
+            if sku_img_map:
+                for r in ml_rows + tn_rows:
+                    for item in (r.get("items") or []):
+                        if item.get("sku") in sku_img_map:
+                            item["image_url"] = sku_img_map[item["sku"]]
+                log.info("SKU images uid=%s skus=%d imgs=%d", user_id, len(all_item_skus), len(sku_img_map))
+        except Exception as _img_err:
+            log.warning("SKU image enrichment fail uid=%s: %s", user_id, str(_img_err)[:100])
+
+    # 4.6) Combo pricing redistribution + is_combo flag.
+    # OML guarda unitPrice = precio completo del combo en CADA item → inflación Nx.
+    # Fórmula: new_unit_price = (item_cost / sum_costs) × combo_total
+    # Garantiza que sum(price*qty) == order.total para combos.
+    for r in ml_rows + tn_rows:
+        items = r.get("items") or []
+        if not items:
+            r["is_combo"] = False
+            continue
+        all_combo = all((item.get("item_type") or "").upper() == "COMBO" for item in items)
+        r["is_combo"] = all_combo
+        if not all_combo:
+            continue
+        combo_total = float(r.get("total") or 0)
+        sum_costs = sum(float(item.get("cost") or 0) for item in items)
+        if combo_total > 0:
+            if sum_costs > 0:
+                distributed = 0.0
+                for i, item in enumerate(items):
+                    if i < len(items) - 1:
+                        p = round(float(item.get("cost") or 0) / sum_costs * combo_total, 2)
+                        item["price"] = p
+                        distributed += p
+                    else:
+                        item["price"] = round(combo_total - distributed, 2)
+            else:
+                per_item = round(combo_total / len(items), 2)
+                for item in items:
+                    item["price"] = per_item
+    log.info("combo uid=%s combos=%d", user_id,
+             sum(1 for r in ml_rows + tn_rows if r.get("is_combo")))
+
+    # 5) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
     unified.sort(key=lambda x: x.get("fecha") or "", reverse=True)
 
-    # 5) Limit
+    # 6) Limit
     return unified[:int(limit)]
 
 
