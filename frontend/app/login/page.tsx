@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { login } from "@/lib/api";
+import { login, Requires2FAError } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,16 +11,23 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [needs2FA, setNeeds2FA] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setLoading(true);
     try {
-      await login(email.trim(), password);
+      await login(email.trim(), password, needs2FA ? totpCode.trim() : undefined);
       router.push("/dashboard/home");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error de login");
+      if (err instanceof Requires2FAError) {
+        setNeeds2FA(true);
+        setTotpCode("");
+      } else {
+        setError(err instanceof Error ? err.message : "Error de login");
+      }
     } finally {
       setLoading(false);
     }
@@ -81,6 +88,29 @@ export default function LoginPage() {
                   placeholder="*********"
                 />
               </div>
+
+              {needs2FA && (
+                <div>
+                  <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">
+                    Codigo 2FA
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    required
+                    maxLength={6}
+                    placeholder="000000"
+                    className="w-full px-4 py-2.5 rounded-lg border border-amber-400 bg-amber-50 text-text text-center text-xl tracking-[0.5em] font-mono outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+                  />
+                  <p className="mt-1.5 text-xs text-text-muted">
+                    Abre Google Authenticator o Authy y buscá la cuenta UNIDATA.
+                  </p>
+                </div>
+              )}
 
               {error && (
                 <div className="text-sm bg-red-50 text-error border border-red-200 rounded-lg px-3 py-2">

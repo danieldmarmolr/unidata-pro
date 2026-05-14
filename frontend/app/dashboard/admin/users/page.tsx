@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
+import { fmtArDate } from "@/lib/dates";
 import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X } from "lucide-react";
 
 type User = {
@@ -148,7 +149,7 @@ export default function AdminUsersPage() {
                     </button>
                   </td>
                   <td className="px-3 py-2 text-text-muted text-xs">
-                    {new Date(u.created_at).toLocaleDateString("es-AR")}
+                    {fmtArDate(u.created_at)}
                   </td>
                   <td className="px-3 py-2 text-right pr-4">
                     <button

@@ -13,6 +13,7 @@ from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services._utils import resolve_window
 from app.services import costs as costs_svc
+from app.utils.tz import today_ar
 
 log = logging.getLogger("unidata.products")
 
@@ -620,7 +621,7 @@ def customer_journey(customer_id: int) -> dict:
             "narrative": "Aun no hizo su primera compra paga.",
         }
 
-    today = dt.date.today()
+    today = today_ar()
     events: list[dict] = []
     gaps: list[int] = []
     prev_date: dt.date | None = None

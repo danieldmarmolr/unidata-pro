@@ -22,12 +22,18 @@ export function DonutChart({
   caption,
   height = 260,
   onSliceClick,
+  colorMap,
+  highlightName,
 }: {
   data: Datum[];
   caption?: string;
   height?: number;
   /** Click en una porcion → drill */
   onSliceClick?: (d: Datum) => void;
+  /** Override de colores por nombre de slice */
+  colorMap?: Record<string, string>;
+  /** Slice destacado (el resto se atenua) */
+  highlightName?: string | null;
 }) {
   const total = data.reduce((sum, d) => sum + d.value, 0);
   return (
@@ -60,13 +66,18 @@ export function DonutChart({
             }}
             labelLine={false}
           >
-            {data.map((d, i) => (
-              <Cell
-                key={d.name}
-                fill={STATUS_COLORS[d.name.toLowerCase()] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]}
-                style={{ cursor: onSliceClick ? "pointer" : "default" }}
-              />
-            ))}
+            {data.map((d, i) => {
+              const color = colorMap?.[d.name] ?? STATUS_COLORS[d.name.toLowerCase()] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length];
+              const dimmed = !!highlightName && highlightName !== d.name;
+              return (
+                <Cell
+                  key={d.name}
+                  fill={color}
+                  fillOpacity={dimmed ? 0.25 : 1}
+                  style={{ cursor: onSliceClick ? "pointer" : "default" }}
+                />
+              );
+            })}
           </Pie>
           <Tooltip
             formatter={(v: unknown, name: unknown) => {
@@ -83,12 +94,14 @@ export function DonutChart({
       {/* Tabla compacta debajo: valores exactos */}
       <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
         {data.map((d, i) => {
-          const color = STATUS_COLORS[d.name.toLowerCase()] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length];
+          const color = colorMap?.[d.name] ?? STATUS_COLORS[d.name.toLowerCase()] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length];
+          const isHighlighted = !!highlightName && highlightName === d.name;
+          const dimmed = !!highlightName && !isHighlighted;
           const pct = total > 0 ? (d.value / total * 100).toFixed(1) : "0.0";
           const item = (
-            <div className="flex items-center gap-1.5 py-0.5 truncate">
+            <div className={`flex items-center gap-1.5 py-0.5 truncate transition ${dimmed ? "opacity-40" : ""}`}>
               <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <span className="text-text-muted truncate">{d.name}</span>
+              <span className={`truncate ${isHighlighted ? "font-bold text-text" : "text-text-muted"}`}>{d.name}</span>
               <span className="ml-auto font-semibold text-text tabular-nums">
                 {formatNumber(d.value)} <span className="text-text-muted font-normal">({pct}%)</span>
               </span>
@@ -98,7 +111,7 @@ export function DonutChart({
             <button
               key={d.name}
               onClick={() => onSliceClick(d)}
-              className="text-left hover:bg-soft rounded px-1 -mx-1 transition"
+              className={`text-left hover:bg-soft rounded px-1 -mx-1 transition ${isHighlighted ? "ring-1 ring-primary/30 bg-soft/60" : ""}`}
             >
               {item}
             </button>

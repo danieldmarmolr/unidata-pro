@@ -1294,7 +1294,6 @@ def dropshipper_unified_orders(
                             r["buyer_name"] = loc["buyer_name"]
                         r["billing_province"] = loc["billing_province"]
                         r["billing_city"] = loc["billing_city"]
-            # Fallback: si loc_rows fallo por schema, intentar solo buyer_name
             elif loc_rows is None:
                 try:
                     buyer_rows = q(eng, f"""

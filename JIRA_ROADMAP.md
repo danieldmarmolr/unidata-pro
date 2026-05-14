@@ -23,8 +23,8 @@
 | Métrica | Valor |
 |---|---|
 | Stories totales | 96 |
-| Stories Done | 92 |
-| Stories pendientes | 4 |
+| Stories Done | 96 |
+| Stories pendientes | 0 |
 | Bugs críticos resueltos | 18 |
 | Últimos 14 días | 35 stories Done |
 | Avance global | ~96% |
@@ -118,7 +118,7 @@
 | US-409 | Pagos Talo: "Órdenes pagadas" en vez de "Transacciones" | Done | unfold mlOrderIds + orderIds |
 | US-410 | Suscripciones MELI list page | Done | |
 | US-411 | Envíos Unidrop (por modo MELI) | Done | |
-| US-412 | RFM Flows con popups (Unidrop) | Pendiente | hoy solo Unistore |
+| US-412 | RFM Flows con popups (Unidrop) | Done | toggle Unistore/Unidrop, PaymentIntent ground truth |
 
 ### 🟢 Unidev (Devoluciones)
 
@@ -139,7 +139,7 @@
 | US-605 | Stories panel en /home (cumples + aniversarios del mes) | Done | banner ámbar |
 | US-606 | Sidebar entry "Mi perfil" en grupo Principal | Done | |
 | US-607 | Admin asigna `role=gerencia` desde /admin/users (cross-area access) | Done | |
-| US-608 | RBAC enforcement por área (colaboradores ven solo su área) | Pendiente | infraestructura lista, falta enforcement |
+| US-608 | RBAC enforcement por área (colaboradores ven solo su área) | Done | sidebar + ~50 endpoints API + cs_actions |
 
 ### 🟢 Fixes críticos y bugs resueltos
 
@@ -164,14 +164,19 @@
 | BUG-017 | Cloudflare puso CNAMEs en proxy ON post-Connect | Fixed | manually changed to DNS only |
 | BUG-018 | Dropshippers list mostraba "0 ventas" para muchos dropshippers | Fixed | MAX(OML.count, PaymentIntent.count) |
 
+### ✅ Completados recientemente
+
+| ID | Story | Notas |
+|---|---|---|
+| US-412 | RFM Flows toggle Unidrop | Done · toggle Unistore/Unidrop funciona, PaymentIntent ground truth |
+| US-608 | RBAC enforcement por área | Done · sidebar + API endpoints (require_area en ~50 endpoints, bypass admin/gerencia) |
+| US-XXX | Sistema notificaciones in-app (banner + bandeja "marcar revisada") | Done · it_alerts + endpoints + bandeja + banner + botón marcar revisada |
+
 ### 🟡 Pendiente
 
 | ID | Story | Notas |
 |---|---|---|
-| US-412 | RFM Flows toggle Unidrop | Hoy solo Unistore funciona |
-| US-608 | RBAC enforcement por área | Infraestructura lista (areas + role), falta filtrado |
-| US-XXX | Sistema notificaciones in-app (banner + bandeja "marcar revisada") | Diseñado, no implementado |
-| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | En curso · Cloudflare Redirect Rule |
+| US-XXX | Apex redirect `unidatacenter.com.ar` → `app.unidatacenter.com.ar` | Done · Cloudflare Redirect Rule configurada |
 
 ---
 

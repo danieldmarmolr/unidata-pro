@@ -2,6 +2,7 @@
 
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { formatCurrency } from "@/lib/utils";
+import { fmtArDate } from "@/lib/dates";
 import type { TimeSeriesPoint } from "@/lib/types";
 
 export function DailyRevenueChart({
@@ -46,8 +47,8 @@ export function DailyRevenueChart({
             axisLine={false}
             tickLine={false}
             tickFormatter={(d) => {
-              const dt = new Date(d);
-              return `${dt.getDate()}/${dt.getMonth() + 1}`;
+              const [, mm, dd] = (fmtArDate(String(d)) || d).split("/");
+              return `${dd}/${mm}`;
             }}
           />
           <YAxis
@@ -58,7 +59,7 @@ export function DailyRevenueChart({
           />
           <Tooltip
             formatter={(v: unknown) => [formatCurrency(Number(v) || 0), "Revenue"] as [string, string]}
-            labelFormatter={(d) => new Date(d).toLocaleDateString("es-AR")}
+            labelFormatter={(d) => fmtArDate(String(d))}
           />
           <Area
             type="monotone"

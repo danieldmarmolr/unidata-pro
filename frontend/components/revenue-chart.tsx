@@ -14,17 +14,37 @@ import {
 import type { TimeSeries } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 
-const CHANNEL_COLORS: Record<string, string> = {
-  "Unistore TN": "#7a3eae",
-  "Unistore ML": "#a259ff",
-  "Unidrop TN": "#f59e0b",
-  "Unidrop ML": "#f97316",
-  "Suscripciones": "#06b6d4",
+// Keyed by exact backend labels de revenue_by_channel
+export const CHANNEL_COLORS: Record<string, string> = {
+  "Unistore - Tienda Nube": "#7a3eae",
+  "Unidrop - Tienda Nube": "#a259ff",
+  "Unistore - Mercado Libre": "#f97316",
+  "Unidrop - Mercado Libre": "#f59e0b",
+  "Unidrop - Suscripciones MELI": "#06b6d4",
+};
+
+// Colores para el donut (revenue_mix) — misma paleta, distintos nombres
+export const DONUT_COLORS: Record<string, string> = {
+  "TN Unistore (retail propio)": "#7a3eae",
+  "TN Unidrop (dropshippers)": "#a259ff",
+  "ML Unistore (Fox Electronics)": "#f97316",
+  "ML Unidrop (dropshippers)": "#f59e0b",
+  "Suscripciones MELI (Unidrop)": "#06b6d4",
+};
+
+// Mapeo donut name → series label del trend chart
+export const DONUT_TO_SERIES: Record<string, string> = {
+  "TN Unistore (retail propio)": "Unistore - Tienda Nube",
+  "ML Unistore (Fox Electronics)": "Unistore - Mercado Libre",
+  "TN Unidrop (dropshippers)": "Unidrop - Tienda Nube",
+  "ML Unidrop (dropshippers)": "Unidrop - Mercado Libre",
+  "Suscripciones MELI (Unidrop)": "Unidrop - Suscripciones MELI",
 };
 
 const FALLBACK_COLORS = ["#7a3eae", "#a259ff", "#f59e0b", "#f97316", "#06b6d4", "#10b981", "#ef4444"];
 
 function getColor(label: string, idx: number): string {
+  if (CHANNEL_COLORS[label]) return CHANNEL_COLORS[label];
   for (const [key, color] of Object.entries(CHANNEL_COLORS)) {
     if (label.toLowerCase().includes(key.toLowerCase())) return color;
   }
@@ -81,9 +101,11 @@ function CustomTooltip({ active, payload, label, stacked }: CustomTooltipProps) 
 export function RevenueChart({
   series,
   height = 320,
+  filterSeries,
 }: {
   series: TimeSeries[];
   height?: number;
+  filterSeries?: string | null;
 }) {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [stacked, setStacked] = useState(false);
@@ -102,7 +124,10 @@ export function RevenueChart({
     return row;
   });
 
-  const visibleSeries = series.filter((s) => !hidden.has(s.label));
+  const visibleSeries = series.filter((s) => {
+    if (filterSeries) return s.label === filterSeries;
+    return !hidden.has(s.label);
+  });
 
   const totalAcrossAll = useMemo(() => {
     return series.reduce((sum, s) => {
@@ -171,26 +196,36 @@ export function RevenueChart({
       </div>
 
       {/* Leyenda interactiva */}
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap gap-2 mb-4 items-center">
+        {filterSeries && (
+          <span className="text-[10px] text-primary font-semibold px-2 py-0.5 bg-primary/10 rounded-full border border-primary/20">
+            Filtrado desde torta ·{" "}
+            <span className="underline cursor-pointer" onClick={() => {}}>
+              click en torta para limpiar
+            </span>
+          </span>
+        )}
         {series.map((s, i) => {
-          const isHidden = hidden.has(s.label);
+          const isFiltered = !!filterSeries && filterSeries !== s.label;
+          const isHidden = !filterSeries && hidden.has(s.label);
+          const dimmed = isFiltered || isHidden;
           const color = colors[i];
           return (
             <button
               key={s.label}
               type="button"
-              onClick={() => toggleSeries(s.label)}
+              onClick={() => !filterSeries && toggleSeries(s.label)}
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border transition ${
-                isHidden
-                  ? "border-border text-text-muted bg-soft opacity-50"
+                dimmed
+                  ? "border-border text-text-muted bg-soft opacity-40"
                   : "border-transparent text-white"
-              }`}
-              style={isHidden ? {} : { background: color }}
-              title={isHidden ? "Click para mostrar" : "Click para ocultar"}
+              } ${filterSeries ? "cursor-default" : ""}`}
+              style={dimmed ? {} : { background: color }}
+              title={filterSeries ? s.label : isHidden ? "Click para mostrar" : "Click para ocultar"}
             >
               <span
                 className="w-2 h-2 rounded-full shrink-0"
-                style={{ background: isHidden ? "#9ca3af" : "white" }}
+                style={{ background: dimmed ? "#9ca3af" : "white" }}
               />
               {s.label}
             </button>

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from cachetools import TTLCache, cached
 from fastapi import APIRouter, Depends, Query
 
-from app.auth.security import current_user
+from app.auth.security import current_user, require_area
 from app.schemas.common import SalesOverview
 from app.services.sales import sales_unistore
 
@@ -17,10 +17,11 @@ _cache: TTLCache = TTLCache(maxsize=32, ttl=60)
 
 @router.get("/sales/unistore", response_model=SalesOverview)
 def get_sales_unistore(
-    _: Annotated[str, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
 ) -> SalesOverview:
+    require_area(user, ["ventas"])
     key = f"sales-uni:{period}:{channel}"
 
     @cached(_cache, key=lambda: key)

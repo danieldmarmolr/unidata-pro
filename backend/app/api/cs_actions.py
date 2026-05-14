@@ -16,7 +16,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.auth.security import current_user
+from app.auth.security import current_user, require_area
 from app.db import cs_actions_db
 
 router = APIRouter(prefix="/api/cs-actions", tags=["cs-actions"])
@@ -38,12 +38,13 @@ class NoteBody(BaseModel):
 
 @router.get("")
 def list_actions(
-    _: Annotated[dict, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     status: Annotated[Literal["pending", "doing", "done", "cancelled"] | None, Query()] = None,
     unit: Annotated[Literal["unistore", "unidrop"] | None, Query()] = None,
     assigned_to: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict:
+    require_area(user, ["cs", "marketing"])
     items = cs_actions_db.list_actions(
         status=status, unit=unit, assigned_to=assigned_to, limit=limit,
     )
@@ -57,8 +58,9 @@ def list_actions(
 
 @router.get("/count")
 def count(
-    _: Annotated[dict, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    require_area(user, ["cs", "marketing"])
     return {
         "pending": cs_actions_db.count_pending(),
         "pending_unistore": cs_actions_db.count_pending(unit="unistore"),
@@ -71,6 +73,7 @@ def create(
     body: CreateActionBody,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    require_area(user, ["cs", "marketing"])
     if not body.target_ids:
         raise HTTPException(400, "target_ids no puede estar vacio")
     action = cs_actions_db.create_action(
@@ -91,6 +94,7 @@ def take(
     action_id: int,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    require_area(user, ["cs"])
     result = cs_actions_db.take_action(action_id, user["id"])
     if not result:
         raise HTTPException(404, "Accion no encontrada o ya tomada")
@@ -103,6 +107,7 @@ def complete(
     user: Annotated[dict, Depends(current_user)],
     body: NoteBody = Body(default_factory=NoteBody),
 ) -> dict:
+    require_area(user, ["cs"])
     result = cs_actions_db.complete_action(action_id, user["id"], body.note)
     if not result:
         raise HTTPException(404, "Accion no encontrada o ya cerrada")
@@ -115,6 +120,7 @@ def cancel(
     user: Annotated[dict, Depends(current_user)],
     body: NoteBody = Body(default_factory=NoteBody),
 ) -> dict:
+    require_area(user, ["cs", "marketing"])
     result = cs_actions_db.cancel_action(action_id, user["id"], body.note)
     if not result:
         raise HTTPException(404, "Accion no encontrada o ya cerrada")
@@ -125,8 +131,9 @@ def cancel(
 def patch_note(
     action_id: int,
     body: NoteBody,
-    _: Annotated[dict, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    require_area(user, ["cs"])
     result = cs_actions_db.update_note(action_id, body.note)
     if not result:
         raise HTTPException(404, "Accion no encontrada")

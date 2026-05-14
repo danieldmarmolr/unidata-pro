@@ -4,9 +4,13 @@ Cada funcion devuelve un set de filas listo para mostrar como tabla.
 """
 from __future__ import annotations
 
+import logging
+
 from app.db.engines import get_engine
 from app.services._utils import q, col_or_null
 from app.services._utils import resolve_window
+
+log = logging.getLogger("unidata.drilldowns")
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
@@ -835,24 +839,32 @@ def subs_meli_active(plan: str | None = None) -> dict:
 
 def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     try:
-        eng = get_engine("unidev")
-    except Exception:
+        eng = get_engine("unistore")  # devoluciones vive en unistore_api (mismo cluster RDS)
+    except Exception as e:
+        log.warning("devoluciones_list: no engine unistore: %s", e)
         return _serialize([], [])
     win = resolve_window(period, from_iso, to_iso)
     where = "d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts"
     p: dict = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
+    log.info("devoluciones_list: period=%s from=%s to=%s", period, win["from_ts"], win["to_ts"])
     if modelo != "all":
         where += " AND d.modelo_negocio = :m"
         p["m"] = modelo
+    # Sanity: cuantos registros hay sin el subquery
+    count_check = q(eng, f"SELECT COUNT(*) FROM public.devoluciones d WHERE {where}", p)
+    log.info("devoluciones_list count_check: %s", count_check[0][0] if count_check else "NONE")
     rows = q(eng, f"""
         SELECT d.devolucion_id, d.fecha_creacion::text, d.estado_general,
                d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email,
-               COALESCE((SELECT SUM(di.cantidad_solicitada * di.monto_unitario)
-                         FROM public.devolucion_items di WHERE di.devolucion_id = d.devolucion_id), 0)::float AS monto
+               COALESCE(SUM(di.cantidad_solicitada * di.monto_unitario), 0)::float AS monto
         FROM public.devoluciones d
+        LEFT JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id
         WHERE {where}
+        GROUP BY d.devolucion_id, d.fecha_creacion, d.estado_general,
+                 d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email
         ORDER BY d.fecha_creacion DESC LIMIT 1000
     """, p) or []
+    log.info("devoluciones_list result rows: %d", len(rows))
     return _serialize(rows, ["id", "fecha", "estado", "modelo", "resolucion", "email", "monto"])
 
 
