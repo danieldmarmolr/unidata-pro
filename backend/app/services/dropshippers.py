@@ -1472,10 +1472,13 @@ def dropshipper_unified_orders(
             _name_candidates = ["contact_name", "buyer_name", "customer_name", "client_name"]
             _name_col = next((c for c in _name_candidates if c in tno_all_cols), None)
             _id_col   = next((c for c in ["contact_identification", "buyer_dni", "customer_dni"] if c in tno_all_cols), None)
-            _name_expr = (
-                f'COALESCE(NULLIF("{_name_col}"::text, \'\'), {f\'"{_id_col}"::text\' if _id_col else "NULL"}, \'\')'
-                if _name_col else f'COALESCE("{_id_col}"::text, \'\')' if _id_col else "''"
-            )
+            _id_col_sql = f'"{_id_col}"::text' if _id_col else "NULL"
+            if _name_col:
+                _name_expr = f"COALESCE(NULLIF(\"{_name_col}\"::text, ''), {_id_col_sql}, '')"
+            elif _id_col:
+                _name_expr = f"COALESCE(\"{_id_col}\"::text, '')"
+            else:
+                _name_expr = "''"
             # Columnas opcionales (contact + address)
             _opt_cols: list[tuple[str, str]] = [
                 ("billing_province",  "billing_province"),
