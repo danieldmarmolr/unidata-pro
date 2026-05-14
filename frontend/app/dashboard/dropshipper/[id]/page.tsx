@@ -183,6 +183,7 @@ type UnifiedOrder = {
   items?: OrderItem[];
   shipment?: Shipment;
   returns_count?: number;
+  is_combo?: boolean;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -218,6 +219,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   // unified_orders que vienen en data (top 50 sin filtro).
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
+  const [comboFilter, setComboFilter] = useState<"all" | "combo" | "individual">("all");
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
   const toggleExpand = (key: string) =>
@@ -231,11 +233,12 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const unifiedAll: UnifiedOrder[] = selectedIntent
     ? (filteredQuery.data?.items ?? [])
     : (data?.unified_orders ?? []);
-  const unifiedFiltered: UnifiedOrder[] = channelFilter === "all"
-    ? unifiedAll
-    : unifiedAll.filter((o) => o.origen === channelFilter);
+  const unifiedFiltered: UnifiedOrder[] = unifiedAll
+    .filter((o) => channelFilter === "all" || o.origen === channelFilter)
+    .filter((o) => comboFilter === "all" || (comboFilter === "combo" ? !!o.is_combo : !o.is_combo));
   const countMl = unifiedAll.filter((o) => o.origen === "ml").length;
   const countTn = unifiedAll.filter((o) => o.origen === "tn").length;
+  const countCombo = unifiedAll.filter((o) => !!o.is_combo).length;
   const unifiedSorted = useTableSort<UnifiedOrder>(unifiedFiltered, "fecha", "desc");
   const unifiedOrders = unifiedSorted.rows;
   // Sort para Pagos Talo
@@ -887,13 +890,6 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       <ExternalLink size={11} /> Abrir en Unidrop
                     </a>
                   )}
-                  {modalOrder.origen === "ml" && modalOrder.external_id && (
-                    <a href={`https://www.mercadolibre.com.ar/ventas/${modalOrder.external_id}/detalle`}
-                       target="_blank" rel="noopener noreferrer"
-                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#FFE600]/60 bg-[#FFE600]/10 text-[#333] text-xs font-semibold hover:bg-[#FFE600]/20">
-                      <ExternalLink size={11} /> Ver en ML
-                    </a>
-                  )}
                   <button onClick={() => setModalOrder(null)}
                     className="w-8 h-8 flex items-center justify-center rounded-lg border border-border hover:bg-soft text-text-muted hover:text-text">
                     <X size={14} />
@@ -1109,6 +1105,22 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
                   </button>
                 </div>
+                {countCombo > 0 && (
+                  <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
+                    <button onClick={() => setComboFilter("all")}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                      Tipo
+                    </button>
+                    <button onClick={() => setComboFilter("combo")}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "combo" ? "bg-primary/10 text-primary shadow" : "text-text-muted hover:text-text")}>
+                      Combo ({countCombo})
+                    </button>
+                    <button onClick={() => setComboFilter("individual")}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "individual" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                      Ind ({countMl + countTn - countCombo})
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
             <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
@@ -1160,6 +1172,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                                 className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
                                 {o.number || o.external_id || "—"}
                               </button>
+                              {o.is_combo && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 leading-tight">C</span>}
                             </div>
                           </td>
                           {/* Cliente */}

@@ -1569,6 +1569,34 @@ def dropshipper_unified_orders(
         except Exception as _wo_err:
             log.warning("WebhookOrder fail uid=%s: %s", user_id, str(_wo_err)[:200])
 
+    # 2e) Patch ML rows sin DROP number usando OML mlOrderId→number lookup por dni.
+    # PaymentIntent.mlOrderIds y OML.mlOrderId comparten el mismo ID numérico externo,
+    # pero el formato de PI puede diferir del number (DROP-{dni}-{seq}) en OML.
+    # Consultamos OML por numero LIKE 'DROP-{dni}-%' y mapeamos mlOrderId → number.
+    if dni:
+        _ml_without_num = [r for r in ml_rows if not r.get("number") and r.get("external_id")]
+        if _ml_without_num:
+            try:
+                _oml_num_rows = q(eng, """
+                    SELECT "mlOrderId"::text, "number"
+                    FROM mercado_libre_dev."OrderMercadoLibre"
+                    WHERE "number" LIKE :pat
+                      AND "mlOrderId" IS NOT NULL
+                    LIMIT 1000
+                """, {"pat": f"DROP-{dni}-%"}) or []
+                if _oml_num_rows:
+                    _oml_num_map = {r[0]: r[1] for r in _oml_num_rows if r[0] and r[1]}
+                    _patched = 0
+                    for r in _ml_without_num:
+                        ext = r.get("external_id", "")
+                        if ext in _oml_num_map:
+                            r["number"] = _oml_num_map[ext]
+                            _patched += 1
+                    log.info("DROP num patch uid=%s dni=%s oml=%d patched=%d",
+                             user_id, dni, len(_oml_num_rows), _patched)
+            except Exception as _dn_err:
+                log.warning("DROP num patch fail uid=%s: %s", user_id, str(_dn_err)[:100])
+
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()
     # con ANY(ARRAY[...]::text[]). Bajamos a single-WHERE por query, que
@@ -2012,11 +2040,43 @@ def dropshipper_unified_orders(
         except Exception as _img_err:
             log.warning("SKU image enrichment fail uid=%s: %s", user_id, str(_img_err)[:100])
 
-    # 4) Combinar y ordenar por fecha desc
+    # 4.6) Combo pricing redistribution + is_combo flag.
+    # OML guarda unitPrice = precio completo del combo en CADA item → inflación Nx.
+    # Fórmula: new_unit_price = (item_cost / sum_costs) × combo_total
+    # Garantiza que sum(price*qty) == order.total para combos.
+    for r in ml_rows + tn_rows:
+        items = r.get("items") or []
+        if not items:
+            r["is_combo"] = False
+            continue
+        all_combo = all((item.get("item_type") or "").upper() == "COMBO" for item in items)
+        r["is_combo"] = all_combo
+        if not all_combo:
+            continue
+        combo_total = float(r.get("total") or 0)
+        sum_costs = sum(float(item.get("cost") or 0) for item in items)
+        if combo_total > 0:
+            if sum_costs > 0:
+                distributed = 0.0
+                for i, item in enumerate(items):
+                    if i < len(items) - 1:
+                        p = round(float(item.get("cost") or 0) / sum_costs * combo_total, 2)
+                        item["price"] = p
+                        distributed += p
+                    else:
+                        item["price"] = round(combo_total - distributed, 2)
+            else:
+                per_item = round(combo_total / len(items), 2)
+                for item in items:
+                    item["price"] = per_item
+    log.info("combo uid=%s combos=%d", user_id,
+             sum(1 for r in ml_rows + tn_rows if r.get("is_combo")))
+
+    # 5) Combinar y ordenar por fecha desc
     unified = ml_rows + tn_rows
     unified.sort(key=lambda x: x.get("fecha") or "", reverse=True)
 
-    # 5) Limit
+    # 6) Limit
     return unified[:int(limit)]
 
 
