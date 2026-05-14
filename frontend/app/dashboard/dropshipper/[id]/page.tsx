@@ -78,6 +78,7 @@ type DropshipperDetail = {
     ordenes_totales: number;
     canceladas: number;
     ultima_venta: string | null;
+    ultima_venta_number?: string | null;
     primera_venta: string | null;
     gmv: number;
     costo_mercaderia: number;
@@ -149,7 +150,7 @@ type DropshipperDetail = {
   generated_at: string;
 };
 
-type OrderItem = { sku: string; name: string; qty: number; price: number };
+type OrderItem = { sku: string; name: string; qty: number; price: number; item_type?: string; cost?: number };
 type Shipment = { carrier: string; status: string; entregado: string | null; costo: number } | null;
 
 type UnifiedOrder = {
@@ -467,9 +468,10 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           <KpiBox
             icon={Calendar}
             label="Última venta"
-            value={recencyD === null ? "Sin ventas" : recencyD === 0 ? "Hoy" : `${recencyD}d atrás`}
+            value={v.ultima_venta_number || (recencyD === null ? "Sin ventas" : recencyD === 0 ? "Hoy" : `${recencyD}d atrás`)}
             accent={recencyD === null ? "rose" : recencyD <= 30 ? "emerald" : "amber"}
             hint={v.ultima_venta?.slice(0, 16) || "Aún no vendió"}
+            mono={!!v.ultima_venta_number}
           />
           <KpiBox
             icon={CreditCard}
@@ -911,6 +913,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       </div>
                       <div className="space-y-2">
                         {modalOrder.items!.map((item, ii) => {
+                          const isCombo = item.item_type?.toUpperCase() === "COMBO";
                           const subtotal = item.price * item.qty;
                           return (
                             <div key={ii} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
@@ -918,9 +921,12 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                                 <Package size={14} className="text-text-muted" />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <div className="text-xs font-semibold text-text truncate">{item.name || "—"}</div>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-xs font-semibold text-text truncate">{item.name || "—"}</span>
+                                  {isCombo && <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">COMBO</span>}
+                                </div>
                                 <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
-                                <div className="text-[10px] text-text-muted">{item.qty}× {formatCurrency(item.price)}</div>
+                                <div className="text-[10px] text-text-muted">{item.qty}× {formatCurrency(item.price)}{item.cost ? ` · costo $${item.cost.toLocaleString("es-AR")}` : ""}</div>
                               </div>
                               <div className="text-xs font-bold tabular-nums text-text flex-shrink-0">{formatCurrency(subtotal)}</div>
                             </div>
@@ -1199,6 +1205,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                                         <div key={ii} className="flex items-baseline justify-between text-[11px] border-b border-border/30 pb-0.5 last:border-0">
                                           <div className="flex-1 min-w-0">
                                             <span className="font-mono text-[9px] text-text-muted mr-1.5">{item.sku || "—"}</span>
+                                            {item.item_type?.toUpperCase() === "COMBO" && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 mr-1">C</span>}
                                             <span className="truncate">{item.name || "—"}</span>
                                             <span className="text-text-muted ml-1.5">{item.qty}×{item.price > 0 ? ` ${formatCurrency(item.price)}` : ""}</span>
                                           </div>
@@ -1460,12 +1467,14 @@ function KpiBox({
   value,
   accent,
   hint,
+  mono = false,
 }: {
   icon: any;
   label: string;
   value: string;
   accent: "primary" | "emerald" | "amber" | "rose";
   hint?: string;
+  mono?: boolean;
 }) {
   const accentClasses = {
     primary: "from-primary to-accent",
@@ -1481,7 +1490,7 @@ function KpiBox({
           <Icon size={14} />
         </div>
       </div>
-      <div className="text-xl font-extrabold text-text tabular-nums">{value}</div>
+      <div className={`text-xl font-extrabold text-text truncate ${mono ? "font-mono text-base" : "tabular-nums"}`}>{value}</div>
       {hint && <div className="text-[10px] text-text-muted mt-1">{hint}</div>}
     </div>
   );

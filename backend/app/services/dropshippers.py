@@ -557,6 +557,7 @@ def dropshipper_detail(
         "ordenes_totales": max(int(v[1] or 0), ventas_pagadas_intent),
         "canceladas": int(v[2] or 0),
         "ultima_venta": v[3],
+        "ultima_venta_number": None,  # se completa abajo
         "primera_venta": v[4],
         "gmv": float(v[5] or 0),
         "costo_mercaderia": float(v[6] or 0),
@@ -566,6 +567,22 @@ def dropshipper_detail(
         "tasa_cancelacion_pct": round(int(v[2] or 0) / max(int(v[1] or 1), 1) * 100, 1),
         "intents_ml_count": ml_intents,  # cuantos PaymentIntent cubren MELI
     }
+
+    # Número DROP de la última orden pagada (para mostrar en KPI en lugar de "X atrás")
+    _last_num_row = q(eng, """
+        SELECT o."number", o."dateCreated"::text
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
+        WHERE (mla."userId" = :uid OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix))
+          AND o."status" = 'paid'
+          AND o."number" IS NOT NULL AND o."number" != ''
+        ORDER BY o."dateCreated" DESC NULLS LAST
+        LIMIT 1
+    """, {"uid": int(user_id), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or []
+    if _last_num_row and _last_num_row[0][0]:
+        ventas_kpi["ultima_venta_number"] = _last_num_row[0][0]
+        if not ventas_kpi.get("ultima_venta"):
+            ventas_kpi["ultima_venta"] = _last_num_row[0][1]
 
     # KPIs de ventas TN: ground truth = PaymentIntent.orderIds, enrichment con tienda_nube_orders
     intent_tn = q(eng, """
@@ -1606,59 +1623,73 @@ def dropshipper_unified_orders(
                 if ship and ship.get("status"):
                     r["shipping_status"] = ship["status"]
 
-    # 4b) Items ML — carga bulk por internal_id (usando list_columns para nombres defensivos)
+    # 4b) Items ML — OrderItemMercadoLibre.orderId ES el mlOrderId externo (no el id interno).
+    # Usamos external_id para el join. sellerSKU contiene nuestro SKU de catálogo.
     if ml_rows:
-        ml_internal_enriched = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
-        if ml_internal_enriched:
+        ml_ext_for_items = [str(r["external_id"]) for r in ml_rows if r.get("external_id")]
+        if ml_ext_for_items:
             oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
-            sku_col = next((c for c in ["sellerCustomField", "seller_custom_field", "sku", "seller_sku"] if c in oi_cols), None)
+            # sellerSKU = nuestro SKU (SBUNIB4, PARA005, etc.)
+            sku_col = next((c for c in ["sellerSKU", "sellerCustomField", "seller_custom_field", "sku"] if c in oi_cols), None)
             oid_col = next((c for c in ["orderId", "order_id"] if c in oi_cols), None)
             price_col = next((c for c in ["unitPrice", "unit_price"] if c in oi_cols), None)
             qty_col = "quantity" if "quantity" in oi_cols else None
             title_col = "title" if "title" in oi_cols else None
+            type_col = "type" if "type" in oi_cols else None  # "COMBO" | "item"
+            cost_col = next((c for c in ["cost", "merchandiseCost", "merchandise_cost"] if c in oi_cols), None)
             if sku_col and oid_col and qty_col:
-                ml_ids_bulk = ",".join(ml_internal_enriched)
+                ml_ext_bulk = ",".join("'" + i + "'" for i in ml_ext_for_items)
                 oi_price = f'COALESCE(oi."{price_col}", 0)::float' if price_col else "0::float"
                 oi_title = f'COALESCE(oi."{title_col}"::text, \'\')' if title_col else "''"
+                oi_type = f'COALESCE(oi."{type_col}"::text, \'\')' if type_col else "''"
+                oi_cost = f'COALESCE(oi."{cost_col}", 0)::float' if cost_col else "0::float"
                 ml_item_rows = q(eng, f"""
                     SELECT oi."{oid_col}"::text,
                            COALESCE(oi."{sku_col}"::text, '') AS sku,
                            {oi_title} AS title,
                            COALESCE(oi."{qty_col}", 0)::int AS qty,
-                           {oi_price} AS price
+                           {oi_price} AS unit_price,
+                           {oi_type} AS item_type,
+                           {oi_cost} AS cost
                     FROM mercado_libre_dev."OrderItemMercadoLibre" oi
-                    WHERE oi."{oid_col}"::text IN ({ml_ids_bulk})
+                    WHERE oi."{oid_col}"::text IN ({ml_ext_bulk})
+                    ORDER BY oi.id ASC
                 """) or []
-                items_by_ml: dict[str, list] = {}
+                items_by_ml_ext: dict[str, list] = {}
                 for ir in ml_item_rows:
                     k = ir[0] or ""
-                    items_by_ml.setdefault(k, []).append({
-                        "sku": ir[1] or "", "name": ir[2] or "",
-                        "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                    items_by_ml_ext.setdefault(k, []).append({
+                        "sku":       ir[1] or "",
+                        "name":      ir[2] or "",
+                        "qty":       int(ir[3] or 0),
+                        "price":     round(float(ir[4] or 0), 2),
+                        "item_type": ir[5] or "",   # "COMBO" o "item"
+                        "cost":      round(float(ir[6] or 0), 2),
                     })
-                log.info("unified_orders ML items uid=%s orders=%d items=%d",
-                         user_id, len(ml_internal_enriched), len(ml_item_rows))
+                log.info("unified_orders ML items uid=%s sku_col=%s orders=%d items=%d",
+                         user_id, sku_col, len(ml_ext_for_items), len(ml_item_rows))
                 for r in ml_rows:
-                    iid = str(r.get("internal_id") or "")
-                    r["items"] = items_by_ml.get(iid, [])
-        # MercadoLibreReturn — flags por orden (devoluciones)
-        ml_with_id = [str(r["internal_id"]) for r in ml_rows if r.get("internal_id")]
-        if ml_with_id:
+                    ext = str(r.get("external_id") or "")
+                    if ext in items_by_ml_ext:
+                        r["items"] = items_by_ml_ext[ext]
+        # MercadoLibreReturn — orderId también es el mlOrderId externo
+        ml_ext_all = [str(r["external_id"]) for r in ml_rows if r.get("external_id")]
+        if ml_ext_all:
             ret_cols = list_columns(eng, "mercado_libre_dev", "MercadoLibreReturn")
             ret_order_col = next((c for c in ["orderId", "order_id"] if c in ret_cols), None)
             if ret_order_col:
-                ret_ids_bulk = ",".join(ml_with_id)
+                ret_ext_bulk = ",".join("'" + i + "'" for i in ml_ext_all)
                 ret_rows = q(eng, f"""
                     SELECT "{ret_order_col}"::text, COUNT(*)::int AS cant
                     FROM mercado_libre_dev."MercadoLibreReturn"
-                    WHERE "{ret_order_col}"::text IN ({ret_ids_bulk})
+                    WHERE "{ret_order_col}"::text IN ({ret_ext_bulk})
                     GROUP BY 1
                 """) or []
                 returns_by_order = {r[0]: int(r[1] or 0) for r in ret_rows if r[0]}
                 for r in ml_rows:
-                    iid = str(r.get("internal_id") or "")
-                    if iid in returns_by_order:
-                        r["returns_count"] = returns_by_order[iid]
+                    ext = str(r.get("external_id") or "")
+                    if ext in returns_by_order:
+                        r["returns_count"] = returns_by_order[ext]
 
     # 4c) Stub ML enrichment desde tablas extra de mercado_libre_dev
     # Para órdenes que no matchearon en OML: descubrimos schema y enriquecemos
