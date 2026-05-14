@@ -1505,10 +1505,10 @@ def dropshipper_unified_orders(
                 _wo_buyer_expr = f'COALESCE("{_wo_buyer_col}"::text, \'\')'
             elif "payload" in _wo_cols:
                 _wo_buyer_expr = (
-                    "COALESCE(TRIM("
+                    "COALESCE(NULLIF(TRIM("
                     "  COALESCE(payload->'buyer'->>'first_name','') || ' ' ||"
                     "  COALESCE(payload->'buyer'->>'last_name','')"
-                    "), payload->'buyer'->>'nickname', '')"
+                    "), ''), payload->'buyer'->>'nickname', '')"
                 )
             else:
                 _wo_buyer_expr = None
