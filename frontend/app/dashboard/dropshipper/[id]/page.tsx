@@ -874,17 +874,32 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
         )}
 
         {/* Modal de detalle de orden */}
-        {modalOrder && (
+        {modalOrder && (() => {
+          const sumPrice = (modalOrder.items ?? []).reduce((s, i) => s + i.price * i.qty, 0);
+          const sumCost = (modalOrder.items ?? []).reduce((s, i) => s + (i.cost ?? 0) * i.qty, 0);
+          const sumProfit = sumPrice - sumCost;
+          const merchCost = modalOrder.merch_cost > 0 ? modalOrder.merch_cost : sumCost;
+          const totalPagar = merchCost + modalOrder.shipping_cost;
+          const profit = modalOrder.profit_unidrop > 0 ? modalOrder.profit_unidrop : (modalOrder.total - totalPagar);
+          const fullAddress = [
+            modalOrder.shipping_address || modalOrder.billing_address,
+            modalOrder.shipping_city || modalOrder.billing_city,
+            modalOrder.billing_province,
+            modalOrder.shipping_zipcode || modalOrder.billing_zipcode,
+          ].filter(Boolean).join(" · ");
+          return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModalOrder(null)}>
-            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               {/* Header */}
-              <div className="px-6 py-4 border-b border-border flex items-start gap-3">
+              <div className="px-6 py-4 border-b border-border flex items-start gap-3 sticky top-0 bg-surface z-10">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <ChannelBadge origen={modalOrder.origen} />
                     <span className="text-lg font-bold text-text font-mono">{modalOrder.number || modalOrder.external_id || `ID ${modalOrder.internal_id ?? '?'}`}</span>
                     <OrderStatusBadge status={modalOrder.payment_status || modalOrder.status} />
                     {modalOrder.shipping_status && <OrderStatusBadge status={modalOrder.shipping_status} />}
+                    {modalOrder.is_combo && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">COMBO</span>}
+                    {modalOrder.shipping_type && <ShippingTypeBadge type={modalOrder.shipping_type} />}
                   </div>
                   <div className="text-xs text-text-muted mt-1">{fmtArDateTime(modalOrder.fecha)}</div>
                 </div>
@@ -904,176 +919,187 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               </div>
 
               {/* Body */}
-              <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* LEFT: productos + logística + pago */}
-                <div className="space-y-5">
-                  {/* Productos */}
-                  {(modalOrder.items?.length ?? 0) > 0 && (
-                    <div>
-                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <Package size={12} /> Detalle de la venta · {modalOrder.items!.length} {modalOrder.items!.length === 1 ? "producto" : "productos"}
-                      </div>
-                      <div className="space-y-2">
-                        {modalOrder.items!.map((item, ii) => {
-                          const isCombo = item.item_type?.toUpperCase() === "COMBO";
-                          const subtotal = item.price * item.qty;
-                          return (
-                            <div key={ii} className="flex items-start gap-3 py-2 border-b border-border/50 last:border-0">
-                              {item.image_url ? (
-                                <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
-                              ) : (
-                                <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
-                                  <Package size={14} className="text-text-muted" />
-                                </div>
-                              )}
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="text-xs font-semibold text-text truncate">{item.name || "—"}</span>
-                                  {isCombo && <span className="px-1 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">COMBO</span>}
-                                </div>
-                                <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
-                                <div className="text-[10px] text-text-muted">{item.qty}× {formatCurrency(item.price)}{item.cost ? ` · costo $${item.cost.toLocaleString("es-AR")}` : ""}</div>
-                              </div>
-                              <div className="text-xs font-bold tabular-nums text-text flex-shrink-0">{formatCurrency(subtotal)}</div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-2 flex justify-between text-xs pt-2 border-t border-border">
-                        <span className="text-text-muted">Subtotal productos</span>
-                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
-                      </div>
-                    </div>
-                  )}
+              <div className="p-6 space-y-5">
 
-                  {/* Pago */}
+                {/* Productos — tabla con costo/precio/ganancia */}
+                {(modalOrder.items?.length ?? 0) > 0 && (
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Package size={12} /> Productos · {modalOrder.items!.length} {modalOrder.items!.length === 1 ? "línea" : "líneas"}
+                    </div>
+                    <div className="border border-border rounded-lg overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+                          <tr>
+                            <th className="text-left px-3 py-2">Producto</th>
+                            <th className="text-center px-2 py-2 w-12">Uds</th>
+                            <th className="text-right px-2 py-2 w-24">Costo Ud.</th>
+                            <th className="text-right px-2 py-2 w-24">Precio Ud.</th>
+                            <th className="text-right px-2 py-2 w-24">Ganancia Ud.</th>
+                            <th className="text-right px-2 py-2 w-24">Costo Total</th>
+                            <th className="text-right px-2 py-2 w-24">Precio Total</th>
+                            <th className="text-right px-3 py-2 w-24">Ganancia Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {modalOrder.items!.map((item, ii) => {
+                            const isCombo = item.item_type?.toUpperCase() === "COMBO";
+                            const ganUd = item.price - (item.cost ?? 0);
+                            const costTot = (item.cost ?? 0) * item.qty;
+                            const priceTot = item.price * item.qty;
+                            const ganTot = priceTot - costTot;
+                            return (
+                              <tr key={ii} className="border-t border-border align-top">
+                                <td className="px-3 py-2">
+                                  <div className="flex items-start gap-2">
+                                    {item.image_url ? (
+                                      <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
+                                    ) : (
+                                      <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                        <Package size={12} className="text-text-muted" />
+                                      </div>
+                                    )}
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-semibold text-text truncate">{item.name || "—"}</span>
+                                        {isCombo && <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">C</span>}
+                                      </div>
+                                      <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="text-center px-2 py-2 tabular-nums">{item.qty}</td>
+                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(item.cost) : "—"}</td>
+                                <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(item.price)}</td>
+                                <td className="text-right px-2 py-2 tabular-nums text-primary font-semibold">{item.cost ? formatCurrency(ganUd) : "—"}</td>
+                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(costTot) : "—"}</td>
+                                <td className="text-right px-2 py-2 tabular-nums font-semibold">{formatCurrency(priceTot)}</td>
+                                <td className="text-right px-3 py-2 tabular-nums text-primary font-bold">{item.cost ? formatCurrency(ganTot) : "—"}</td>
+                              </tr>
+                            );
+                          })}
+                          <tr className="border-t-2 border-border bg-soft/50 font-bold">
+                            <td className="px-3 py-2 text-text-muted text-[10px] uppercase tracking-wider" colSpan={5}>Totales</td>
+                            <td className="text-right px-2 py-2 tabular-nums">{sumCost > 0 ? formatCurrency(sumCost) : "—"}</td>
+                            <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(sumPrice)}</td>
+                            <td className="text-right px-3 py-2 tabular-nums text-primary">{sumCost > 0 ? formatCurrency(sumProfit) : "—"}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Grid: pago + envío + cliente + pipeline */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Pago — breakdown completo */}
                   <div>
                     <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
                       <DollarSign size={12} /> Pago
                     </div>
-                    <div className="bg-soft rounded-lg p-3 space-y-1.5">
-                      <div className="flex justify-between text-xs">
-                        <span className="text-text-muted">Total orden</span>
-                        <span className="font-bold tabular-nums">{formatCurrency(modalOrder.total)}</span>
+                    <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">Costo mercadería</span>
+                        <span className="tabular-nums">{merchCost > 0 ? formatCurrency(merchCost) : "—"}</span>
                       </div>
-                      {modalOrder.merch_cost > 0 && (
-                        <div className="flex justify-between text-xs">
-                          <span className="text-text-muted">Costo mercadería (Unidrop)</span>
-                          <span className="tabular-nums">{formatCurrency(modalOrder.merch_cost)}</span>
-                        </div>
-                      )}
-                      {modalOrder.shipping_cost > 0 && (
-                        <div className="flex justify-between text-xs">
-                          <span className="text-text-muted">Costo envío</span>
-                          <span className="tabular-nums">{formatCurrency(modalOrder.shipping_cost)}</span>
-                        </div>
-                      )}
-                      {modalOrder.profit_unidrop > 0 && (
-                        <div className="flex justify-between text-xs border-t border-border pt-1.5 mt-1.5">
-                          <span className="text-text-muted">Margen Unidrop</span>
-                          <span className="tabular-nums font-semibold text-primary">{formatCurrency(modalOrder.profit_unidrop)}</span>
+                      <div className="flex justify-between">
+                        <span className="text-text-muted">Costo envío</span>
+                        <span className="tabular-nums">{modalOrder.shipping_cost > 0 ? formatCurrency(modalOrder.shipping_cost) : "—"}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-border pt-1.5 mt-1.5 font-bold">
+                        <span>Total a pagar (Unidrop)</span>
+                        <span className="tabular-nums text-primary">{formatCurrency(totalPagar)}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-border pt-1.5 mt-1.5">
+                        <span className="text-text-muted">Total cobrado en {modalOrder.origen === "ml" ? "ML" : "TN"}</span>
+                        <span className="tabular-nums font-semibold">{formatCurrency(modalOrder.total)}</span>
+                      </div>
+                      {profit > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Margen dropshipper</span>
+                          <span className="tabular-nums font-semibold text-emerald-600">{formatCurrency(profit)}</span>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Logística */}
-                  {modalOrder.shipment && (
-                    <div>
-                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <Truck size={12} /> Logística · {carrierLabel(modalOrder.shipment.carrier)}
-                      </div>
-                      <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                  {/* Envío */}
+                  <div>
+                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Truck size={12} /> Envío {modalOrder.shipment && `· ${carrierLabel(modalOrder.shipment.carrier)}`}
+                    </div>
+                    <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                      {modalOrder.shipping_type && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Tipo</span>
+                          <ShippingTypeBadge type={modalOrder.shipping_type} />
+                        </div>
+                      )}
+                      {modalOrder.shipment?.status && (
                         <div className="flex justify-between">
                           <span className="text-text-muted">Estado</span>
-                          <span className="font-semibold">{modalOrder.shipment.status || "—"}</span>
+                          <span className="font-semibold">{modalOrder.shipment.status}</span>
                         </div>
-                        {modalOrder.shipment.entregado && (
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Entregado</span>
-                            <span className="text-emerald-700 font-semibold">{modalOrder.shipment.entregado.slice(0, 10)}</span>
-                          </div>
-                        )}
-                        {(modalOrder.shipment.costo > 0 || modalOrder.shipping_cost > 0) && (
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Costo envío</span>
-                            <span className="tabular-nums">{formatCurrency(modalOrder.shipment.costo || modalOrder.shipping_cost)}</span>
-                          </div>
-                        )}
-                        {(modalOrder.shipping_address || modalOrder.billing_address) && (
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Dirección</span>
-                            <span className="text-right">{modalOrder.shipping_address || modalOrder.billing_address}</span>
-                          </div>
-                        )}
-                        {(modalOrder.shipping_city || modalOrder.billing_city) && (
-                          <div className="flex justify-between">
-                            <span className="text-text-muted">Ciudad · CP</span>
-                            <span>{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</span>
-                          </div>
-                        )}
-                      </div>
+                      )}
+                      {modalOrder.shipment?.entregado && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Entregado</span>
+                          <span className="text-emerald-700 font-semibold">{modalOrder.shipment.entregado.slice(0, 10)}</span>
+                        </div>
+                      )}
+                      {fullAddress && (
+                        <div className="pt-1.5 border-t border-border mt-1.5">
+                          <div className="text-text-muted text-[10px] uppercase tracking-wider mb-1">Dirección de entrega</div>
+                          <div className="text-text">{fullAddress}</div>
+                        </div>
+                      )}
+                      {!fullAddress && !modalOrder.shipment && (
+                        <div className="text-text-muted italic">Sin info de envío registrada</div>
+                      )}
                     </div>
-                  )}
-                  {!modalOrder.shipment && (modalOrder.billing_address || modalOrder.shipping_address) && (
-                    <div>
-                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Dirección de entrega</div>
-                      <div className="bg-soft rounded-lg p-3 text-xs space-y-0.5">
-                        <div>{modalOrder.shipping_address || modalOrder.billing_address}</div>
-                        <div className="text-text-muted">{[modalOrder.shipping_city || modalOrder.billing_city, modalOrder.billing_province, modalOrder.shipping_zipcode || modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                  </div>
 
-                {/* RIGHT: cliente + pipeline */}
-                <div className="space-y-5">
                   {/* Datos del cliente */}
                   <div>
                     <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2">Datos del cliente</div>
-                    <div className="bg-soft rounded-lg p-3 space-y-2">
+                    <div className="bg-soft rounded-lg p-3 space-y-2 text-xs">
                       {modalOrder.buyer_name ? (
                         <div className="text-sm font-bold text-text">{modalOrder.buyer_name}</div>
-                      ) : <div className="text-xs text-text-muted italic">Sin nombre registrado</div>}
+                      ) : <div className="text-text-muted italic">Sin nombre registrado</div>}
                       {modalOrder.contact_email && (
-                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
-                          <Mail size={11} /> <span>{modalOrder.contact_email}</span>
-                        </div>
+                        <div className="flex items-center gap-1.5 text-text-muted"><Mail size={11} /> {modalOrder.contact_email}</div>
                       )}
                       {modalOrder.contact_phone && (
-                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
-                          <Phone size={11} /> <span>{modalOrder.contact_phone}</span>
-                        </div>
+                        <div className="flex items-center gap-1.5 text-text-muted"><Phone size={11} /> {modalOrder.contact_phone}</div>
                       )}
                       {modalOrder.contact_dni && (
-                        <div className="flex items-center gap-1.5 text-xs text-text-muted">
-                          <IdCard size={11} /> <span>DNI/CUIT: {modalOrder.contact_dni}</span>
-                        </div>
+                        <div className="flex items-center gap-1.5 text-text-muted"><IdCard size={11} /> DNI/CUIT {modalOrder.contact_dni}</div>
                       )}
-                      {(modalOrder.billing_city || modalOrder.billing_province) && (
-                        <div className="text-xs text-text-muted">
-                          {[modalOrder.billing_address, modalOrder.billing_city, modalOrder.billing_province, modalOrder.billing_zipcode].filter(Boolean).join(" · ")}
+                      {modalOrder.billing_address && modalOrder.shipping_address && modalOrder.billing_address !== modalOrder.shipping_address && (
+                        <div className="pt-1.5 border-t border-border mt-1.5">
+                          <div className="text-text-muted text-[10px] uppercase tracking-wider mb-1">Dirección de facturación</div>
+                          <div>{[modalOrder.billing_address, modalOrder.billing_city, modalOrder.billing_province, modalOrder.billing_zipcode].filter(Boolean).join(" · ")}</div>
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Pipeline de estado */}
+                  {/* Pipeline */}
                   <div>
                     <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Estado del pedido</div>
                     <OrderPipelineDetail o={modalOrder} />
                   </div>
+                </div>
 
-                  {/* ID técnicos */}
-                  <div className="bg-soft/50 border border-border rounded-lg p-3 text-[10px] text-text-muted space-y-0.5">
-                    {modalOrder.number && <div>Número DROP: <span className="font-mono font-bold">{modalOrder.number}</span></div>}
-                    {modalOrder.external_id && <div>ID externo: <span className="font-mono">{modalOrder.external_id}</span></div>}
-                    {modalOrder.internal_id && <div>ID interno: <span className="font-mono">{modalOrder.internal_id}</span></div>}
-                    {modalOrder.intent_id && <div>PaymentIntent: <span className="font-mono">#{modalOrder.intent_id}</span></div>}
-                    {modalOrder.returns_count && modalOrder.returns_count > 0 && (
-                      <div className="text-rose-600 font-semibold flex items-center gap-1"><RotateCcw size={9} /> {modalOrder.returns_count} devolución{modalOrder.returns_count !== 1 ? "es" : ""}</div>
-                    )}
-                  </div>
+                {/* IDs técnicos */}
+                <div className="bg-soft/50 border border-border rounded-lg p-3 text-[10px] text-text-muted grid grid-cols-2 md:grid-cols-4 gap-y-1 gap-x-4">
+                  {modalOrder.number && <div>Número DROP: <span className="font-mono font-bold text-text">{modalOrder.number}</span></div>}
+                  {modalOrder.external_id && <div>ID externo: <span className="font-mono text-text">{modalOrder.external_id}</span></div>}
+                  {modalOrder.internal_id && <div>ID interno: <span className="font-mono text-text">{modalOrder.internal_id}</span></div>}
+                  {modalOrder.intent_id && <div>PaymentIntent: <span className="font-mono text-text">#{modalOrder.intent_id}</span></div>}
+                  {modalOrder.returns_count && modalOrder.returns_count > 0 && (
+                    <div className="text-rose-600 font-semibold flex items-center gap-1 col-span-2"><RotateCcw size={9} /> {modalOrder.returns_count} devolución{modalOrder.returns_count !== 1 ? "es" : ""}</div>
+                  )}
                 </div>
               </div>
               <div className="px-6 py-3 border-t border-border text-[10px] text-text-muted">
@@ -1081,7 +1107,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
           {/* Vista unificada estilo Unidrop panel */}
@@ -1405,6 +1432,28 @@ function OrderStatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${cls}`}>
       {status}
+    </span>
+  );
+}
+
+function ShippingTypeBadge({ type }: { type: string }) {
+  const t = (type || "").toLowerCase();
+  // FLEXI (self_service) / PR (Punto de Retiro) / FULL (fulfillment)
+  const cls =
+    t.includes("flex") || t.includes("self") || t.includes("xd")
+      ? "bg-blue-50 text-blue-700 border-blue-200"
+      : t.includes("full") || t.includes("fulfillment")
+      ? "bg-violet-50 text-violet-700 border-violet-200"
+      : t.includes("pr") || t.includes("retiro") || t.includes("drop_off")
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : "bg-zinc-50 text-zinc-600 border-zinc-200";
+  const label = t.includes("flex") || t.includes("self") ? "FLEXI"
+    : t.includes("full") ? "FULL"
+    : t.includes("retiro") || t.includes("drop_off") ? "PR"
+    : type.toUpperCase().slice(0, 10);
+  return (
+    <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${cls}`}>
+      {label}
     </span>
   );
 }
