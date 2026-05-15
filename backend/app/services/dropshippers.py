@@ -1569,13 +1569,39 @@ def dropshipper_unified_orders(
         except Exception as _wo_err:
             log.warning("WebhookOrder fail uid=%s: %s", user_id, str(_wo_err)[:200])
 
-    # 2e) Patch ML rows sin DROP number usando OML mlOrderId→number lookup por dni.
-    # PaymentIntent.mlOrderIds y OML.mlOrderId comparten el mismo ID numérico externo,
-    # pero el formato de PI puede diferir del number (DROP-{dni}-{seq}) en OML.
-    # Consultamos OML por numero LIKE 'DROP-{dni}-%' y mapeamos mlOrderId → number.
-    if dni:
-        _ml_without_num = [r for r in ml_rows if not r.get("number") and r.get("external_id")]
-        if _ml_without_num:
+    # 2e) Patch ML rows sin DROP number.
+    # Fuente 1: pedidos_por_lotes.order_id (ML numeric ID) → .number (DROP format).
+    #   Funciona para dropshippers donde el lote fue creado con el ML order ID.
+    # Fuente 2: OrderMercadoLibre.mlOrderId → .number.
+    #   Fallback para dropshippers con OML sincronizado.
+    _ml_without_num = [r for r in ml_rows if not r.get("number") and r.get("external_id")]
+    if _ml_without_num:
+        _ext_ids_wn = [r["external_id"] for r in _ml_without_num]
+        _ext_lit = "ARRAY[" + ",".join("'" + i + "'" for i in _ext_ids_wn) + "]::text[]"
+        # Fuente 1 — pedidos_por_lotes (más cobertura, formato nuevo: order_id = ML numeric ID)
+        try:
+            _ppl_rows = q(eng, f"""
+                SELECT order_id::text, number
+                FROM public.pedidos_por_lotes
+                WHERE platform = 'ML'
+                  AND order_id NOT LIKE 'DROP-%'
+                  AND order_id::text = ANY({_ext_lit})
+                LIMIT 1000
+            """) or []
+            if _ppl_rows:
+                _ppl_map = {r[0]: r[1] for r in _ppl_rows if r[0] and r[1]}
+                _patched_ppl = 0
+                for r in _ml_without_num:
+                    if r.get("external_id") in _ppl_map:
+                        r["number"] = _ppl_map[r["external_id"]]
+                        _patched_ppl += 1
+                log.info("DROP num ppl uid=%s ppl=%d patched=%d",
+                         user_id, len(_ppl_rows), _patched_ppl)
+        except Exception as _ppl_err:
+            log.warning("DROP num ppl fail uid=%s: %s", user_id, str(_ppl_err)[:100])
+        # Fuente 2 — OML por dni (fallback)
+        _still_without = [r for r in _ml_without_num if not r.get("number")]
+        if _still_without and dni:
             try:
                 _oml_num_rows = q(eng, """
                     SELECT "mlOrderId"::text, "number"
@@ -1586,16 +1612,15 @@ def dropshipper_unified_orders(
                 """, {"pat": f"DROP-{dni}-%"}) or []
                 if _oml_num_rows:
                     _oml_num_map = {r[0]: r[1] for r in _oml_num_rows if r[0] and r[1]}
-                    _patched = 0
-                    for r in _ml_without_num:
-                        ext = r.get("external_id", "")
-                        if ext in _oml_num_map:
-                            r["number"] = _oml_num_map[ext]
-                            _patched += 1
-                    log.info("DROP num patch uid=%s dni=%s oml=%d patched=%d",
-                             user_id, dni, len(_oml_num_rows), _patched)
+                    _patched_oml = 0
+                    for r in _still_without:
+                        if r.get("external_id") in _oml_num_map:
+                            r["number"] = _oml_num_map[r["external_id"]]
+                            _patched_oml += 1
+                    log.info("DROP num oml uid=%s oml=%d patched=%d",
+                             user_id, len(_oml_num_rows), _patched_oml)
             except Exception as _dn_err:
-                log.warning("DROP num patch fail uid=%s: %s", user_id, str(_dn_err)[:100])
+                log.warning("DROP num oml fail uid=%s: %s", user_id, str(_dn_err)[:100])
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()
