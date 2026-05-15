@@ -17,6 +17,7 @@ Las llamadas usan el JWT del usuario, así que respetan RBAC por rol+área.
 """
 from __future__ import annotations
 
+import contextvars
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
@@ -28,10 +29,23 @@ from .config import Config
 Unit = Literal["unistore", "unidrop", "unidev"]
 Period = Literal["7d", "30d", "90d", "1y", "all"]
 
-# Singleton client — FastMCP no nos da hooks de lifecycle limpios para stdio,
-# pero httpx.AsyncClient reusa connections y se cierra cuando el process termina.
+# Singleton client (stdio mode) + contextvar (HTTP mode).
+# En HTTP el middleware setea _request_token con el JWT del header Authorization
+# de cada request, y get_client() devuelve un cliente nuevo con ese token.
+# En stdio el contextvar queda en None y todo cae al singleton con env var.
 _cfg = Config.load()
 _client = UnidataClient(_cfg)
+_request_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "unidata_mcp_request_token", default=None,
+)
+
+
+def get_client() -> UnidataClient:
+    tok = _request_token.get()
+    if tok:
+        return UnidataClient(Config(api_url=_cfg.api_url, token=tok, timeout_s=_cfg.timeout_s))
+    return _client
+
 
 mcp = FastMCP("unidata")
 
@@ -52,7 +66,7 @@ async def whoami() -> dict[str, Any]:
     invocar otras tools (algunos endpoints requieren rol admin/analista/gerencia).
     """
     try:
-        return await _client.get("/api/users/me")
+        return await get_client().get("/api/users/me")
     except UnidataError as e:
         return _err(e)
 
@@ -72,7 +86,7 @@ async def list_dropshippers(
 ) -> dict[str, Any]:
     """Lista dropshippers de Unidrop con KPIs (GMV, profit, ordenes, ticket prom, recencia)."""
     try:
-        return await _client.get(
+        return await get_client().get(
             "/api/dashboards/dropshippers",
             params={"search": search, "period": period, "sort": sort, "limit": limit},
         )
@@ -87,7 +101,7 @@ async def get_dropshipper(
 ) -> dict[str, Any]:
     """Vista 360 de un dropshipper: identidad, suscripción, ventas ML+TN, pagos Talo, referidos, top clientes finales."""
     try:
-        return await _client.get(
+        return await get_client().get(
             f"/api/dashboards/dropshippers/{int(user_id)}",
             params={"period": period},
         )
@@ -111,7 +125,7 @@ async def get_dropshipper_unified_orders(
     if intent_id is not None:
         params["intent_id"] = int(intent_id)
     try:
-        return await _client.get(
+        return await get_client().get(
             f"/api/dashboards/dropshippers/{int(user_id)}/unified-orders",
             params=params,
         )
@@ -132,7 +146,7 @@ async def get_executive_dashboard(
     admin o gerencia.
     """
     try:
-        return await _client.get("/api/dashboards/executive", params={"period": period})
+        return await get_client().get("/api/dashboards/executive", params={"period": period})
     except UnidataError as e:
         return _err(e)
 
@@ -153,7 +167,7 @@ async def get_unit_dashboard(
     - section="finanzas", unit="unidrop" → ingresos suscripción, cobros Talo, deuda
     """
     try:
-        return await _client.get(f"/api/dashboards/{section}/{unit}", params={"period": period})
+        return await get_client().get(f"/api/dashboards/{section}/{unit}", params={"period": period})
     except UnidataError as e:
         return _err(e)
 
@@ -177,7 +191,7 @@ async def list_orders(
     "órdenes trabadas de Unidrop en los últimos 7 días", etc.
     """
     try:
-        return await _client.get(
+        return await get_client().get(
             f"/api/drilldowns/orders/{state}",
             params={"period": period, "unit": unit, "limit": limit},
         )
@@ -203,7 +217,7 @@ async def run_sql(
     - Requiere role admin o analista.
     """
     try:
-        return await _client.post(
+        return await get_client().post(
             f"/api/queries/{unit}/run",
             json={"sql": sql, "max_rows": int(max_rows)},
         )
@@ -218,7 +232,7 @@ async def list_tables(
 ) -> dict[str, Any]:
     """Lista tablas de un schema en la unidad indicada con cantidad aproximada de filas."""
     try:
-        return await _client.get(f"/api/sources/{unit}/schemas/{schema}/tables")
+        return await get_client().get(f"/api/sources/{unit}/schemas/{schema}/tables")
     except UnidataError as e:
         return _err(e)
 
@@ -236,7 +250,7 @@ async def preview_table(
     un run_sql más complejo.
     """
     try:
-        return await _client.get(
+        return await get_client().get(
             f"/api/sources/{unit}/schemas/{schema}/tables/{table}/preview",
             params={"limit": limit},
         )
@@ -252,7 +266,7 @@ async def describe_table(
 ) -> dict[str, Any]:
     """Devuelve las columnas (nombre, tipo, nullable, default, PK) de una tabla."""
     try:
-        return await _client.get(f"/api/sources/{unit}/schemas/{schema}/tables/{table}/columns")
+        return await get_client().get(f"/api/sources/{unit}/schemas/{schema}/tables/{table}/columns")
     except UnidataError as e:
         return _err(e)
 
@@ -288,12 +302,12 @@ async def list_cs_actions(
         params["unit"] = unit
     if assigned_to_me:
         try:
-            me = await _client.get("/api/users/me")
+            me = await get_client().get("/api/users/me")
             params["assigned_to"] = me["id"]
         except UnidataError as e:
             return _err(e)
     try:
-        return await _client.get("/api/cs-actions", params=params)
+        return await get_client().get("/api/cs-actions", params=params)
     except UnidataError as e:
         return _err(e)
 
@@ -304,7 +318,7 @@ async def take_cs_action(
 ) -> dict[str, Any]:
     """Toma una CS action pendiente y la asigna al user actual (pending → doing)."""
     try:
-        return await _client.post(f"/api/cs-actions/{int(action_id)}/take")
+        return await get_client().post(f"/api/cs-actions/{int(action_id)}/take")
     except UnidataError as e:
         return _err(e)
 
@@ -316,7 +330,7 @@ async def complete_cs_action(
 ) -> dict[str, Any]:
     """Marca una CS action como completada con una nota de cierre."""
     try:
-        return await _client.post(f"/api/cs-actions/{int(action_id)}/complete", json={"note": note})
+        return await get_client().post(f"/api/cs-actions/{int(action_id)}/complete", json={"note": note})
     except UnidataError as e:
         return _err(e)
 
@@ -328,7 +342,7 @@ async def cancel_cs_action(
 ) -> dict[str, Any]:
     """Cancela una CS action (no aplica, duplicada, decision de management, etc)."""
     try:
-        return await _client.post(f"/api/cs-actions/{int(action_id)}/cancel", json={"note": reason})
+        return await get_client().post(f"/api/cs-actions/{int(action_id)}/cancel", json={"note": reason})
     except UnidataError as e:
         return _err(e)
 
@@ -340,7 +354,7 @@ async def update_cs_action_note(
 ) -> dict[str, Any]:
     """Actualiza la nota libre de una CS action sin cambiar su estado."""
     try:
-        return await _client.patch(f"/api/cs-actions/{int(action_id)}/note", json={"note": note})
+        return await get_client().patch(f"/api/cs-actions/{int(action_id)}/note", json={"note": note})
     except UnidataError as e:
         return _err(e)
 
@@ -363,7 +377,7 @@ async def create_cs_action(
         "target_ids": target_ids,
     }
     try:
-        return await _client.post("/api/cs-actions", json=payload)
+        return await get_client().post("/api/cs-actions", json=payload)
     except UnidataError as e:
         return _err(e)
 
@@ -382,7 +396,7 @@ async def list_alerts(
     if severity:
         params["severity"] = severity
     try:
-        return await _client.get("/api/notifications", params=params)
+        return await get_client().get("/api/notifications", params=params)
     except UnidataError as e:
         return _err(e)
 
@@ -393,7 +407,7 @@ async def resolve_alert(
 ) -> dict[str, Any]:
     """Marca una alerta IT como revisada/resuelta."""
     try:
-        return await _client.post(f"/api/notifications/{int(alert_id)}/resolve")
+        return await get_client().post(f"/api/notifications/{int(alert_id)}/resolve")
     except UnidataError as e:
         return _err(e)
 
@@ -404,7 +418,7 @@ async def unresolve_alert(
 ) -> dict[str, Any]:
     """Reabre una alerta previamente resuelta. Requiere rol admin."""
     try:
-        return await _client.post(f"/api/notifications/{int(alert_id)}/unresolve")
+        return await get_client().post(f"/api/notifications/{int(alert_id)}/unresolve")
     except UnidataError as e:
         return _err(e)
 
@@ -426,7 +440,7 @@ async def list_dropshipper_notes(
     flags de retencion, etc.
     """
     try:
-        return await _client.get(
+        return await get_client().get(
             "/api/dropshipper-notes",
             params={
                 "dropshipper_id": int(dropshipper_id),
@@ -456,7 +470,7 @@ async def add_dropshipper_note(
     'cliente VIP, priorizar siempre', etc.
     """
     try:
-        return await _client.post(
+        return await get_client().post(
             "/api/dropshipper-notes",
             json={
                 "dropshipper_id": int(dropshipper_id),
@@ -475,7 +489,7 @@ async def archive_dropshipper_note(
 ) -> dict[str, Any]:
     """Archiva (soft-delete) una nota. Sigue existiendo en la BD pero no se muestra."""
     try:
-        return await _client.post(f"/api/dropshipper-notes/{int(note_id)}/archive")
+        return await get_client().post(f"/api/dropshipper-notes/{int(note_id)}/archive")
     except UnidataError as e:
         return _err(e)
 
@@ -493,7 +507,7 @@ async def list_my_reminders(
 ) -> dict[str, Any]:
     """Lista los recordatorios personales del user actual."""
     try:
-        return await _client.get("/api/reminders", params={"status": status, "limit": limit})
+        return await get_client().get("/api/reminders", params={"status": status, "limit": limit})
     except UnidataError as e:
         return _err(e)
 
@@ -524,7 +538,7 @@ async def create_reminder(
     if target_unit is not None:
         payload["target_unit"] = target_unit
     try:
-        return await _client.post("/api/reminders", json=payload)
+        return await get_client().post("/api/reminders", json=payload)
     except UnidataError as e:
         return _err(e)
 
@@ -536,6 +550,6 @@ async def complete_reminder(
 ) -> dict[str, Any]:
     """Marca un recordatorio como completado."""
     try:
-        return await _client.post(f"/api/reminders/{int(reminder_id)}/complete", json={"note": note})
+        return await get_client().post(f"/api/reminders/{int(reminder_id)}/complete", json={"note": note})
     except UnidataError as e:
         return _err(e)
