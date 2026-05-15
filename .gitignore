@@ -39,3 +39,4 @@ frontend/.vercel/
 .idea/
 .vscode/
 .deploy/
+.claude/worktrees/

@@ -2,7 +2,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   ShoppingBag,
@@ -26,10 +26,13 @@ import {
   ChevronDown,
   Truck,
   RotateCcw,
+  StickyNote,
+  Archive,
+  Send,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
-import { api } from "@/lib/api";
+import { api, getUser } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
@@ -649,6 +652,9 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             </div>
           </div>
         )}
+
+        {/* Notas del equipo sobre este dropshipper (source of truth) */}
+        <DropshipperNotes dropshipperId={u.user_id} />
 
         {/* Talo accounts (CustomerPaymentAccount) */}
         {data.talo_accounts && data.talo_accounts.length > 0 && data.talo_accounts.some(a => a.cbu || a.cbu_alias || a.alias) && (
@@ -1508,6 +1514,165 @@ function KpiBox({
       </div>
       <div className={`text-xl font-extrabold text-text truncate ${mono ? "font-mono text-base" : "tabular-nums"}`}>{value}</div>
       {hint && <div className="text-[10px] text-text-muted mt-1">{hint}</div>}
+    </div>
+  );
+}
+
+type DropshipperNote = {
+  id: number;
+  dropshipper_id: number;
+  author_id: number;
+  author_email: string;
+  note: string;
+  category: "general" | "cs" | "billing" | "support" | "retention" | "flag" | "ops";
+  archived: boolean;
+  created_at: string;
+};
+
+const CATEGORY_CONFIG: Record<DropshipperNote["category"], { label: string; cls: string }> = {
+  general: { label: "General", cls: "bg-zinc-100 text-zinc-700 border-zinc-200" },
+  cs: { label: "CS", cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  billing: { label: "Cobranza", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  support: { label: "Soporte", cls: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+  retention: { label: "Retención", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+  flag: { label: "Flag", cls: "bg-rose-50 text-rose-700 border-rose-200" },
+  ops: { label: "Ops", cls: "bg-violet-50 text-violet-700 border-violet-200" },
+};
+
+function DropshipperNotes({ dropshipperId }: { dropshipperId: number }) {
+  const me = getUser();
+  const qc = useQueryClient();
+  const [newNote, setNewNote] = useState("");
+  const [newCategory, setNewCategory] = useState<DropshipperNote["category"]>("general");
+
+  const { data, isLoading } = useQuery<{ items: DropshipperNote[]; count: number }>({
+    queryKey: ["dropshipper-notes", dropshipperId],
+    queryFn: () =>
+      api(`/api/dropshipper-notes?dropshipper_id=${dropshipperId}&unit=unidrop&limit=100`),
+    staleTime: 30_000,
+  });
+
+  const createMut = useMutation({
+    mutationFn: (b: { note: string; category: string }) =>
+      api("/api/dropshipper-notes", {
+        method: "POST",
+        body: JSON.stringify({
+          dropshipper_id: dropshipperId,
+          unit: "unidrop",
+          note: b.note,
+          category: b.category,
+        }),
+      }),
+    onSuccess: () => {
+      setNewNote("");
+      qc.invalidateQueries({ queryKey: ["dropshipper-notes", dropshipperId] });
+    },
+  });
+
+  const archiveMut = useMutation({
+    mutationFn: (noteId: number) =>
+      api(`/api/dropshipper-notes/${noteId}/archive`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["dropshipper-notes", dropshipperId] }),
+  });
+
+  const notes = data?.items ?? [];
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-4 mb-5">
+      <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-bold text-text inline-flex items-center gap-2">
+            <StickyNote size={14} className="text-primary" /> Notas del equipo
+          </h3>
+          <p className="text-[11px] text-text-muted">
+            Source of truth · queda registrado quién escribe qué · accesible también via MCP
+          </p>
+        </div>
+        <span className="text-[10px] text-text-muted">
+          {isLoading ? "Cargando..." : `${notes.length} ${notes.length === 1 ? "nota" : "notas"}`}
+        </span>
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!newNote.trim()) return;
+          createMut.mutate({ note: newNote, category: newCategory });
+        }}
+        className="flex gap-2 mb-3 flex-wrap items-start"
+      >
+        <select
+          value={newCategory}
+          onChange={(e) => setNewCategory(e.target.value as DropshipperNote["category"])}
+          className="px-2 py-1.5 text-xs rounded-lg border border-border bg-bg outline-none focus:border-primary"
+        >
+          {Object.entries(CATEGORY_CONFIG).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v.label}
+            </option>
+          ))}
+        </select>
+        <input
+          value={newNote}
+          onChange={(e) => setNewNote(e.target.value)}
+          placeholder="Escribir nota..."
+          className="flex-1 min-w-[200px] px-3 py-1.5 text-xs rounded-lg border border-border bg-bg outline-none focus:border-primary"
+        />
+        <button
+          type="submit"
+          disabled={!newNote.trim() || createMut.isPending}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-accent text-white text-xs font-semibold shadow-md disabled:opacity-50"
+        >
+          <Send size={11} /> {createMut.isPending ? "..." : "Guardar"}
+        </button>
+      </form>
+
+      {createMut.error && (
+        <div className="text-[11px] text-error mb-2">{(createMut.error as Error).message}</div>
+      )}
+
+      {notes.length === 0 && !isLoading ? (
+        <div className="text-[11px] text-text-muted italic py-2">
+          Sin notas aún. Las notas que agregues quedan visibles para todo el equipo y son consultables desde Claude.
+        </div>
+      ) : (
+        <div className="space-y-2 max-h-[320px] overflow-y-auto">
+          {notes.map((n) => {
+            const cat = CATEGORY_CONFIG[n.category];
+            const isOwn = me?.id === n.author_id;
+            const canArchive = isOwn || !!me?.is_admin || me?.role === "admin";
+            return (
+              <div
+                key={n.id}
+                className="flex items-start gap-2 py-2 px-3 border border-border rounded-lg bg-soft/30"
+              >
+                <span
+                  className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${cat.cls}`}
+                >
+                  {cat.label}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-text whitespace-pre-wrap break-words">{n.note}</div>
+                  <div className="text-[10px] text-text-muted mt-0.5">
+                    {n.author_email} · {fmtArDateTime(n.created_at)}
+                  </div>
+                </div>
+                {canArchive && (
+                  <button
+                    onClick={() => {
+                      if (confirm("¿Archivar esta nota?")) archiveMut.mutate(n.id);
+                    }}
+                    className="text-text-muted hover:text-error p-1 rounded"
+                    title="Archivar nota"
+                  >
+                    <Archive size={12} />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

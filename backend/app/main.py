@@ -132,6 +132,12 @@ app.include_router(notifications_api.router)
 from app.api import cs_actions as cs_actions_api
 app.include_router(cs_actions_api.router)
 
+from app.api import dropshipper_notes as dropshipper_notes_api
+app.include_router(dropshipper_notes_api.router)
+
+from app.api import reminders as reminders_api
+app.include_router(reminders_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

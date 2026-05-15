@@ -255,3 +255,287 @@ async def describe_table(
         return await _client.get(f"/api/sources/{unit}/schemas/{schema}/tables/{table}/columns")
     except UnidataError as e:
         return _err(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# WRITE TOOLS · cada accion queda registrada con user_id + timestamp.
+# El JWT del user determina permisos via RBAC (rol + area).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─── CS Actions ────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_cs_actions(
+    status: Annotated[
+        Literal["pending", "doing", "done", "cancelled"] | None,
+        Field(description="Filtra por estado de la accion."),
+    ] = None,
+    unit: Annotated[Literal["unistore", "unidrop"] | None, Field()] = None,
+    assigned_to_me: Annotated[bool, Field(description="Si True, solo las asignadas al user actual.")] = False,
+    limit: Annotated[int, Field(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Lista CS actions (cola de tareas para Customer Success).
+
+    Pair de lectura para las tools de write — usar primero para encontrar IDs
+    sobre los que actuar. Requiere area=cs o area=marketing.
+    """
+    params: dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    if unit:
+        params["unit"] = unit
+    if assigned_to_me:
+        try:
+            me = await _client.get("/api/users/me")
+            params["assigned_to"] = me["id"]
+        except UnidataError as e:
+            return _err(e)
+    try:
+        return await _client.get("/api/cs-actions", params=params)
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def take_cs_action(
+    action_id: Annotated[int, Field(description="ID de la CS action.")],
+) -> dict[str, Any]:
+    """Toma una CS action pendiente y la asigna al user actual (pending → doing)."""
+    try:
+        return await _client.post(f"/api/cs-actions/{int(action_id)}/take")
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def complete_cs_action(
+    action_id: Annotated[int, Field()],
+    note: Annotated[str, Field(description="Nota describiendo que se resolvio.")] = "",
+) -> dict[str, Any]:
+    """Marca una CS action como completada con una nota de cierre."""
+    try:
+        return await _client.post(f"/api/cs-actions/{int(action_id)}/complete", json={"note": note})
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def cancel_cs_action(
+    action_id: Annotated[int, Field()],
+    reason: Annotated[str, Field(description="Razon de la cancelacion.")],
+) -> dict[str, Any]:
+    """Cancela una CS action (no aplica, duplicada, decision de management, etc)."""
+    try:
+        return await _client.post(f"/api/cs-actions/{int(action_id)}/cancel", json={"note": reason})
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def update_cs_action_note(
+    action_id: Annotated[int, Field()],
+    note: Annotated[str, Field(description="Nuevo contenido de la nota libre.")],
+) -> dict[str, Any]:
+    """Actualiza la nota libre de una CS action sin cambiar su estado."""
+    try:
+        return await _client.patch(f"/api/cs-actions/{int(action_id)}/note", json={"note": note})
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def create_cs_action(
+    unit: Annotated[Literal["unistore", "unidrop"], Field()],
+    title: Annotated[str, Field(description="Titulo corto (max 100 chars).")],
+    suggested_action: Annotated[str, Field(description="Que tendria que hacer el CS (1-3 frases).")],
+    target_ids: Annotated[list[int], Field(description="IDs de los users/customers/dropshippers afectados.")],
+    source_key: Annotated[str, Field(description="Identificador del origen (ej: 'mcp-claude').")] = "mcp",
+) -> dict[str, Any]:
+    """Crea una nueva CS action manual. Aparece en la bandeja CS para que la tomen."""
+    payload = {
+        "source_type": "manual",
+        "source_key": source_key,
+        "unit": unit,
+        "title": title,
+        "suggested_action": suggested_action,
+        "target_ids": target_ids,
+    }
+    try:
+        return await _client.post("/api/cs-actions", json=payload)
+    except UnidataError as e:
+        return _err(e)
+
+
+# ─── IT Alerts ─────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_alerts(
+    only_pending: Annotated[bool, Field(description="Si True, solo las no resueltas.")] = True,
+    severity: Annotated[Literal["info", "warning", "critical"] | None, Field()] = None,
+    limit: Annotated[int, Field(ge=1, le=500)] = 50,
+) -> dict[str, Any]:
+    """Lista alertas IT (it_alerts): integraciones caidas, pedidos atascados, tokens vencidos."""
+    params: dict[str, Any] = {"only_pending": only_pending, "limit": limit}
+    if severity:
+        params["severity"] = severity
+    try:
+        return await _client.get("/api/notifications", params=params)
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def resolve_alert(
+    alert_id: Annotated[int, Field(description="ID de la alerta a marcar como revisada.")],
+) -> dict[str, Any]:
+    """Marca una alerta IT como revisada/resuelta."""
+    try:
+        return await _client.post(f"/api/notifications/{int(alert_id)}/resolve")
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def unresolve_alert(
+    alert_id: Annotated[int, Field()],
+) -> dict[str, Any]:
+    """Reabre una alerta previamente resuelta. Requiere rol admin."""
+    try:
+        return await _client.post(f"/api/notifications/{int(alert_id)}/unresolve")
+    except UnidataError as e:
+        return _err(e)
+
+
+# ─── Dropshipper Notes ─────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_dropshipper_notes(
+    dropshipper_id: Annotated[int, Field()],
+    unit: Annotated[Unit, Field()] = "unidrop",
+    include_archived: Annotated[bool, Field()] = False,
+    limit: Annotated[int, Field(ge=1, le=200)] = 50,
+) -> dict[str, Any]:
+    """Lista las notas atadas a un dropshipper o user de unistore.
+
+    Las notas son la 'source of truth' del equipo sobre cada user: por que
+    se le redujo el plan, en que estado esta la cobranza, anotaciones de CS,
+    flags de retencion, etc.
+    """
+    try:
+        return await _client.get(
+            "/api/dropshipper-notes",
+            params={
+                "dropshipper_id": int(dropshipper_id),
+                "unit": unit,
+                "include_archived": include_archived,
+                "limit": limit,
+            },
+        )
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def add_dropshipper_note(
+    dropshipper_id: Annotated[int, Field(description="ID del user en Unidrop o Unistore.")],
+    note: Annotated[str, Field(description="Contenido de la nota.")],
+    unit: Annotated[Unit, Field()] = "unidrop",
+    category: Annotated[
+        Literal["general", "cs", "billing", "support", "retention", "flag", "ops"],
+        Field(description="Categoria de la nota para filtrar despues."),
+    ] = "general",
+) -> dict[str, Any]:
+    """Agrega una nota a un dropshipper. Queda registrado quien la creo y cuando.
+
+    Usar para anotaciones operativas que el equipo necesita ver despues:
+    'llamamos por whatsapp, no responde', 'pidio aplazar pago hasta fin de mes',
+    'cliente VIP, priorizar siempre', etc.
+    """
+    try:
+        return await _client.post(
+            "/api/dropshipper-notes",
+            json={
+                "dropshipper_id": int(dropshipper_id),
+                "unit": unit,
+                "note": note,
+                "category": category,
+            },
+        )
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def archive_dropshipper_note(
+    note_id: Annotated[int, Field()],
+) -> dict[str, Any]:
+    """Archiva (soft-delete) una nota. Sigue existiendo en la BD pero no se muestra."""
+    try:
+        return await _client.post(f"/api/dropshipper-notes/{int(note_id)}/archive")
+    except UnidataError as e:
+        return _err(e)
+
+
+# ─── Recordatorios ─────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_my_reminders(
+    status: Annotated[
+        Literal["pending", "overdue", "upcoming", "done"],
+        Field(description="pending=no completados | overdue=vencidos sin completar | upcoming=futuros | done=completados"),
+    ] = "pending",
+    limit: Annotated[int, Field(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Lista los recordatorios personales del user actual."""
+    try:
+        return await _client.get("/api/reminders", params={"status": status, "limit": limit})
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def create_reminder(
+    due_at: Annotated[str, Field(description="Fecha en ISO 8601 (ej: '2026-05-22T15:00:00Z').")],
+    note: Annotated[str, Field(description="Que se quiere recordar.")],
+    target_type: Annotated[
+        Literal["dropshipper", "order", "customer", "cs_action", "alert", "general"],
+        Field(),
+    ] = "general",
+    target_id: Annotated[str | None, Field(description="ID del target si target_type != general.")] = None,
+    target_unit: Annotated[Unit | None, Field()] = None,
+) -> dict[str, Any]:
+    """Crea un recordatorio personal con fecha de vencimiento.
+
+    Util para 'revisar al dropshipper X en 7 dias', 'confirmar que el pago llego
+    el viernes', 'seguir el caso de la orden Y manana'. Solo el creador lo ve.
+    """
+    payload: dict[str, Any] = {
+        "target_type": target_type,
+        "due_at": due_at,
+        "note": note,
+    }
+    if target_id is not None:
+        payload["target_id"] = target_id
+    if target_unit is not None:
+        payload["target_unit"] = target_unit
+    try:
+        return await _client.post("/api/reminders", json=payload)
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def complete_reminder(
+    reminder_id: Annotated[int, Field()],
+    note: Annotated[str, Field(description="Nota opcional de cierre.")] = "",
+) -> dict[str, Any]:
+    """Marca un recordatorio como completado."""
+    try:
+        return await _client.post(f"/api/reminders/{int(reminder_id)}/complete", json={"note": note})
+    except UnidataError as e:
+        return _err(e)
