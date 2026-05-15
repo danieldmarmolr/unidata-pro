@@ -93,8 +93,103 @@ export default function AccountPage() {
             <TwoFactorSection initialEnabled={!!(me as any)?.totp_enabled} userEmail={me?.email ?? ""} />
           </div>
         )}
+
+        <div className="max-w-5xl mt-6">
+          <McpTokenSection />
+        </div>
       </div>
     </>
+  );
+}
+
+function McpTokenSection() {
+  const [token, setToken] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  async function generate() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const data = await api<{ access_token: string }>("/api/auth/mcp-token", { method: "POST" });
+      setToken(data.access_token);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Error generando token");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copy() {
+    if (!token) return;
+    await navigator.clipboard.writeText(token);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-6">
+      <div className="flex items-start justify-between gap-4 mb-3 flex-wrap">
+        <div>
+          <h2 className="text-sm font-bold text-text">Token para Claude (MCP)</h2>
+          <p className="text-[12px] text-text-muted mt-0.5">
+            Genera un token de 90 días para usar UNIDATA desde Claude Desktop o Claude Code via MCP.
+            El token tiene tus mismos permisos (rol + área).
+          </p>
+        </div>
+        <button
+          onClick={generate}
+          disabled={busy}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-accent text-white text-xs font-semibold shadow-md disabled:opacity-50"
+        >
+          <KeyRound size={12} /> {busy ? "Generando..." : token ? "Regenerar" : "Generar token"}
+        </button>
+      </div>
+      {err && (
+        <div className="rounded-lg bg-red-50 border border-red-200 text-error px-3 py-2 text-xs mb-3">
+          {err}
+        </div>
+      )}
+      {token && (
+        <>
+          <div className="bg-soft border border-border rounded-lg p-3 font-mono text-[10px] break-all relative">
+            {token}
+            <button
+              onClick={copy}
+              className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded bg-surface border border-border text-[10px] font-semibold hover:border-primary hover:text-primary"
+            >
+              <Copy size={10} /> {copied ? "Copiado" : "Copiar"}
+            </button>
+          </div>
+          <details className="mt-3 text-[12px] text-text-muted">
+            <summary className="cursor-pointer font-semibold text-text">Cómo configurarlo en Claude Desktop</summary>
+            <pre className="mt-2 bg-soft border border-border rounded-lg p-3 text-[10px] overflow-x-auto">
+{`{
+  "mcpServers": {
+    "unidata": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/danieldmarmolr/unidata-pro.git#subdirectory=mcp",
+        "unidata-mcp"
+      ],
+      "env": {
+        "UNIDATA_API_URL": "https://api.unidatacenter.com.ar",
+        "UNIDATA_TOKEN": "${token.slice(0, 24)}..."
+      }
+    }
+  }
+}`}
+            </pre>
+            <div className="mt-1">
+              Pegá este JSON en <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS)
+              o <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) y reiniciá Claude Desktop.
+            </div>
+          </details>
+        </>
+      )}
+    </div>
   );
 }
 
