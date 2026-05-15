@@ -197,6 +197,37 @@ def totp_disable(
     return {"ok": True, "totp_enabled": False}
 
 
+@router.post("/mcp-token")
+def issue_mcp_token(
+    user: Annotated[dict, Depends(current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict:
+    """Emite un JWT de larga vida (90 días) para usar en el MCP server.
+
+    El usuario se loguea normalmente en la web, llama a este endpoint, y
+    obtiene un token que puede pegar en el config de Claude Desktop sin
+    tener que renovarlo todos los días.
+
+    El token tiene los mismos claims (role, is_admin) que el JWT normal —
+    el RBAC sigue aplicando exactamente igual.
+    """
+    token = issue_token(
+        user_id=user["id"],
+        email=user["email"],
+        role=user["role"],
+        settings=settings,
+        is_admin=user.get("is_admin", False),
+        expires_hours=24 * 90,
+        scope="mcp",
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in_days": 90,
+        "scope": "mcp",
+    }
+
+
 @router.post("/check")
 def check_email_status(body: CheckBody) -> dict:
     """Endpoint helper para que el frontend sepa que mostrar:

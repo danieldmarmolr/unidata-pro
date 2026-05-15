@@ -14,17 +14,28 @@ from app.db import users_db, areas_db
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
-def issue_token(user_id: int, email: str, role: str, settings: Settings | None = None, is_admin: bool = False) -> str:
+def issue_token(
+    user_id: int,
+    email: str,
+    role: str,
+    settings: Settings | None = None,
+    is_admin: bool = False,
+    expires_hours: int | None = None,
+    scope: str | None = None,
+) -> str:
     s = settings or get_settings()
     now = dt.datetime.now(dt.timezone.utc)
-    payload = {
+    hours = expires_hours if expires_hours is not None else s.jwt_expires_hours
+    payload: dict = {
         "sub": str(user_id),
         "email": email,
         "role": role,
         "is_admin": bool(is_admin) or role == "admin",
         "iat": int(now.timestamp()),
-        "exp": int((now + dt.timedelta(hours=s.jwt_expires_hours)).timestamp()),
+        "exp": int((now + dt.timedelta(hours=hours)).timestamp()),
     }
+    if scope:
+        payload["scope"] = scope
     return jwt.encode(payload, s.jwt_secret, algorithm=s.jwt_algorithm)
 
 

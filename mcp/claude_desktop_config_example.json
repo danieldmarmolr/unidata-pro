@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "unidata": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/danieldmarmolr/unidata-pro.git#subdirectory=mcp",
+        "unidata-mcp"
+      ],
+      "env": {
+        "UNIDATA_API_URL": "https://api.unidatacenter.com.ar",
+        "UNIDATA_TOKEN": "REEMPLAZAR-CON-TU-JWT"
+      }
+    }
+  }
+}

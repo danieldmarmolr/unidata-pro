@@ -1,0 +1,25 @@
+[project]
+name = "unidata-mcp"
+version = "0.1.0"
+description = "MCP server for UNIDATA — exposes Unistore/Unidrop dashboards and read-only SQL to Claude via Model Context Protocol"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Fox Electronics / Unistore" }]
+dependencies = [
+    "mcp[cli]>=1.2",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+    "pydantic>=2.7",
+]
+
+[project.scripts]
+unidata-mcp = "unidata_mcp.__main__:main"
+unidata-mcp-http = "unidata_mcp.http_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["unidata_mcp"]
