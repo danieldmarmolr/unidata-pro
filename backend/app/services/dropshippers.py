@@ -1569,32 +1569,71 @@ def dropshipper_unified_orders(
         except Exception as _wo_err:
             log.warning("WebhookOrder fail uid=%s: %s", user_id, str(_wo_err)[:200])
 
-    # 2e) Patch ML rows sin DROP number.
-    # Source of truth: OrderMercadoLibre.number (formato 'DROP-{dni}-{seq}').
-    # En OML: .id es el ML order ID externo (bigint), .number es el DROP number,
-    # .userId linkea al dropshipper. NO existe columna 'mlOrderId' — el ML ID
-    # esta en 'id' directamente. Joineamos por userId para resolver todos los
-    # numbers de este dropshipper en una sola query.
-    _ml_without_num = [r for r in ml_rows if not r.get("number") and r.get("external_id")]
-    if _ml_without_num:
+    # 2e) Enrich ML rows con datos reales per-order desde OML por userId.
+    # OML.id = ML order ID externo (bigint), .number = DROP, .userId = dropshipper.
+    # NO existe columna 'mlOrderId'. Esta es la fuente de verdad para totals
+    # por orden — reemplaza el stub que tenia "total" = paid del PaymentIntent
+    # completo (mismo monto para todos los rows del mismo intent, bug visible
+    # al filtrar por transaccion).
+    if ml_rows:
         try:
-            _oml_num_rows = q(eng, """
-                SELECT id::text, "number"
+            _oml_rows = q(eng, """
+                SELECT id::text                                       AS ext_id,
+                       COALESCE("number", '')                         AS number,
+                       COALESCE("totalAmount", 0)::float              AS total,
+                       COALESCE("merchandise_cost", 0)::float         AS merch_cost,
+                       COALESCE("shipping_cost", 0)::float            AS shipping_cost,
+                       COALESCE("profit_for_subscription", 0)::float  AS profit,
+                       COALESCE("buyer_name", '')                     AS buyer_name,
+                       COALESCE("status", '')                         AS status,
+                       COALESCE("shipping_option_reference", '')      AS shipping_type,
+                       COALESCE("shipping_carrier", '')               AS carrier,
+                       "dateCreated"::text                            AS fecha,
+                       COALESCE("label_downloaded", FALSE)            AS label_dl,
+                       "date_label_downloaded"::text                  AS label_dl_at
                 FROM mercado_libre_dev."OrderMercadoLibre"
                 WHERE "userId" = :uid
-                  AND "number" IS NOT NULL
             """, {"uid": int(user_id)}) or []
-            if _oml_num_rows:
-                _oml_num_map = {r[0]: r[1] for r in _oml_num_rows if r[0] and r[1]}
+            if _oml_rows:
+                _oml_map = {r[0]: r for r in _oml_rows if r[0]}
                 _patched = 0
-                for r in _ml_without_num:
-                    if r.get("external_id") in _oml_num_map:
-                        r["number"] = _oml_num_map[r["external_id"]]
-                        _patched += 1
-                log.info("DROP num oml uid=%s oml=%d patched=%d",
-                         user_id, len(_oml_num_rows), _patched)
-        except Exception as _dn_err:
-            log.warning("DROP num oml fail uid=%s: %s", user_id, str(_dn_err)[:100])
+                _patched_total = 0
+                for r in ml_rows:
+                    ext = r.get("external_id")
+                    if not ext or ext not in _oml_map:
+                        continue
+                    o = _oml_map[ext]
+                    if o[1] and not r.get("number"):
+                        r["number"] = o[1]
+                    # total: SIEMPRE override con el real per-order (esto fixea el bug del filtro por transaccion)
+                    if o[2] > 0:
+                        r["total"] = round(float(o[2]), 2)
+                        _patched_total += 1
+                    if o[3] > 0:
+                        r["merch_cost"] = round(float(o[3]), 2)
+                    if o[4] > 0:
+                        r["shipping_cost"] = round(float(o[4]), 2)
+                    if o[5] > 0:
+                        r["profit_unidrop"] = round(float(o[5]), 2)
+                    if o[6] and not r.get("buyer_name"):
+                        r["buyer_name"] = o[6]
+                    if o[7] and r.get("status", "") in ("", "paid (via Talo)"):
+                        r["status"] = o[7]
+                    if o[8] and not r.get("shipping_type"):
+                        r["shipping_type"] = o[8]
+                    if o[9] and not (r.get("shipment") or {}).get("carrier"):
+                        # shipment puede ser None; lo creamos si hace falta
+                        pass  # no piso shipment aca, eso lo arma 4c con detalle
+                    if o[10] and not r.get("fecha"):
+                        r["fecha"] = o[10]
+                    r["label_downloaded"] = bool(o[11])
+                    if o[12]:
+                        r["label_downloaded_at"] = o[12]
+                    _patched += 1
+                log.info("OML enrich uid=%s oml_rows=%d patched=%d totals_overridden=%d",
+                         user_id, len(_oml_rows), _patched, _patched_total)
+        except Exception as e:
+            log.warning("OML enrich fail uid=%s: %s", user_id, str(e)[:200])
 
     # 3) Enrich TN — DOS queries separadas merged en Python (UNION ALL en SQL
     # tambien fallaba silenciosamente; sospechamos algo en SQLAlchemy text()

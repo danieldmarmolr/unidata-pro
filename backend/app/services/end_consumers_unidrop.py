@@ -166,13 +166,18 @@ def end_consumer_detail_unidrop(dni: str) -> dict[str, Any]:
 
 
 def top_end_consumers_for_dropshipper(user_id: int, period_days: int = 365, limit: int = 20) -> list[dict]:
-    """Top clientes finales (DNI) de un dropshipper en el periodo.
+    """Top clientes finales del dropshipper — TN + ML combinados.
 
-    Pivot: contact_identification. Devuelve nombre, provincia, # ordenes, revenue.
-    Para usar como tabla en Dropshipper 360 con drill a End Consumer 360.
+    Los compradores TN se identifican por DNI (contact_identification). Los
+    compradores ML por buyerId numerico (Meli no expone DNI). Ambos canales
+    se muestran en la misma tabla con un campo "canal" para distinguir.
+
+    Para usar como tabla en Dropshipper 360 con drill a End Consumer 360
+    (solo TN, los ML no tienen perfil en nuestra DB todavia).
     """
     eng = get_engine("unidrop")
-    rows = q(eng, """
+
+    tn_rows = q(eng, """
         SELECT
             contact_identification AS dni,
             COALESCE(MAX(billing_name),'(sin nombre)') AS nombre,
@@ -189,14 +194,46 @@ def top_end_consumers_for_dropshipper(user_id: int, period_days: int = 365, limi
         ORDER BY revenue DESC
         LIMIT :limit
     """, {"uid": int(user_id), "d": int(period_days), "limit": int(limit)}) or []
-    return [{
-        "category": r[1] or f"DNI {r[0]}",
-        "value": float(r[4] or 0),
-        "extra": {
-            "dni": r[0],
-            "provincia": r[2],
-            "ordenes": int(r[3] or 0),
-            # marker para auto-drill en CategoryTable
-            "unidrop_consumer": True,
-        },
-    } for r in rows]
+
+    ml_rows = q(eng, """
+        SELECT
+            "buyerId"::text AS buyer_id,
+            COALESCE(MAX(buyer_name), '(sin nombre)') AS nombre,
+            COUNT(*) FILTER (WHERE "paidAmount" > 0)::int AS ordenes,
+            COALESCE(SUM("totalAmount") FILTER (WHERE "paidAmount" > 0), 0)::float AS revenue
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "userId" = :uid
+          AND "buyerId" IS NOT NULL
+          AND "dateCreated" >= NOW() - make_interval(days => :d)
+        GROUP BY "buyerId"
+        HAVING COUNT(*) FILTER (WHERE "paidAmount" > 0) > 0
+        ORDER BY revenue DESC
+        LIMIT :limit
+    """, {"uid": int(user_id), "d": int(period_days), "limit": int(limit)}) or []
+
+    out: list[dict] = []
+    for r in tn_rows:
+        out.append({
+            "category": r[1] or f"DNI {r[0]}",
+            "value": float(r[4] or 0),
+            "extra": {
+                "canal": "TN",
+                "dni": r[0],
+                "provincia": r[2],
+                "ordenes": int(r[3] or 0),
+                "unidrop_consumer": True,
+            },
+        })
+    for r in ml_rows:
+        out.append({
+            "category": r[1] or f"ML buyer {r[0]}",
+            "value": float(r[3] or 0),
+            "extra": {
+                "canal": "ML",
+                "buyer_id": r[0],
+                "ordenes": int(r[2] or 0),
+                "unidrop_consumer": False,
+            },
+        })
+    out.sort(key=lambda x: x["value"], reverse=True)
+    return out[:limit]

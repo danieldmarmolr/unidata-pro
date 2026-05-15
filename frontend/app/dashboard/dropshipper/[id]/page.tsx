@@ -143,7 +143,7 @@ type DropshipperDetail = {
   top_clientes_finales?: {
     category: string;
     value: number;
-    extra?: { dni?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
+    extra?: { canal?: "TN" | "ML"; dni?: string; buyer_id?: string; provincia?: string; ordenes?: number; unidrop_consumer?: boolean };
   }[];
   tiendas_tn_detail?: Record<string, string | null>[];
   talo_accounts?: { id: number | null; creado_en: string | null; cbu?: string | null; cbu_alias?: string | null; alias?: string | null; bank_name?: string | null }[];
@@ -733,15 +733,16 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        {/* Top clientes FINALES (compradores TN del dropshipper) - drill al End Consumer 360 */}
+        {/* Top clientes FINALES (compradores TN + ML del dropshipper) — drill al End Consumer 360 (solo TN) */}
         {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
           <div className="mb-5">
             <CategoryTable
-              caption="Top clientes finales (compradores TN)"
-              subtitle="Personas que le compran a este dropshipper · click para ver el journey del cliente"
+              caption="Top clientes finales del dropshipper"
+              subtitle="Compradores TN y ML combinados · click en TN abre el journey del cliente"
               data={data.top_clientes_finales}
               formatter="currency"
               extraColumns={[
+                { key: "canal", label: "Canal", format: "raw" },
                 { key: "ordenes", label: "Órd", format: "number" },
                 { key: "provincia", label: "Provincia", format: "raw" },
                 { key: "dni", label: "DNI", format: "raw" },
