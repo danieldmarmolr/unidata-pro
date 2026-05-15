@@ -120,16 +120,13 @@ tools manualmente.
 
 ---
 
-## HTTP/SSE remoto (en construcción)
+## HTTP/SSE remoto
 
-El paquete incluye un transport HTTP/SSE (`unidata-mcp-http`) que se puede
-deployar como servicio aparte en Railway:
+Servicio deployado en Railway que cualquier user puede usar **sin instalar nada
+localmente**. Cada request lleva su propio JWT en el header `Authorization`,
+asi el RBAC del backend sigue aplicando por usuario.
 
-```bash
-unidata-mcp-http   # escucha en $PORT (default 8765)
-```
-
-Luego en Claude Desktop:
+### Para usuarios — config Claude Desktop
 
 ```json
 {
@@ -144,10 +141,55 @@ Luego en Claude Desktop:
 }
 ```
 
-> ⚠️ **TODO iteración 2**: el HTTP server actual reusa el token global del env;
-> falta middleware para extraer el JWT del header de cada request y aislar el
-> contexto por usuario. No usar en producción hasta cerrar eso. Para ahora,
-> usar stdio.
+El token se genera en https://app.unidatacenter.com.ar/dashboard/account
+(botón "Generar token"). Dura 90 días.
+
+### Para devs — arquitectura
+
+`http_server.py` levanta una app Starlette con:
+- `Middleware AuthMiddleware` extrae `Authorization: Bearer <jwt>` y lo deposita
+  en el contextvar `_request_token`
+- `get_client()` en server.py lee el contextvar y construye un `UnidataClient`
+  por request con ese token (en stdio el contextvar queda en None y cae al
+  singleton con env var)
+- `Mount("/")` con el SSE app de FastMCP
+- `/health` y `/whoami-probe` (debug) sin auth
+
+### Deploy local (testing)
+
+```bash
+cd mcp
+uv pip install -e .
+UNIDATA_API_URL=https://api.unidatacenter.com.ar unidata-mcp-http
+# escucha en :8765
+```
+
+Verifica:
+```bash
+curl http://localhost:8765/health
+# {"status":"ok","service":"unidata-mcp",...}
+
+curl -H "Authorization: Bearer eyJ..." http://localhost:8765/whoami-probe
+# {"received_bearer_token":true,"token_suffix":"...XYZ"}
+```
+
+### Deploy Railway
+
+El paquete incluye `Dockerfile` y `railway.toml`. Para deployar:
+
+```bash
+# Crear service nuevo si no existe
+railway service create mcp
+
+# Set env vars (solo API_URL; el token va por request)
+railway variables --service mcp --set UNIDATA_API_URL=https://api.unidatacenter.com.ar
+
+# Deploy
+railway up ./mcp --path-as-root --service mcp
+```
+
+Despues asignar custom domain `unidata-mcp.unidatacenter.com.ar` via Cloudflare
+→ Railway.
 
 ---
 
