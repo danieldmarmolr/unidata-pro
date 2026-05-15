@@ -210,14 +210,15 @@ export function Sidebar({
   }, [collapsed, hydrated]);
 
   const role = (user?.role as Role) ?? "user";
+  const isAdmin = !!user?.is_admin || role === "admin";
   // RBAC por area: si el user no es admin/gerencia y el item tiene `areas`,
   // solo se muestra si su area_slug esta incluida. Items sin `areas` se
   // consideran cross-area (todos los pueden ver, respetando roles).
   const userAreaSlug = (user?.area_slug as AreaSlug | undefined) ?? undefined;
-  const isPriviledged = role === "admin" || role === "gerencia";
+  const isPriviledged = isAdmin || role === "gerencia";
   const visibleItems = ITEMS.filter((it) => {
-    if (it.adminOnly && role !== "admin") return false;
-    if (it.roles && role !== "admin" && !it.roles.includes(role)) return false;
+    if (it.adminOnly && !isAdmin) return false;
+    if (it.roles && !isAdmin && !it.roles.includes(role)) return false;
     // RBAC area: si tiene areas restrictivas, gerentes/admin pasan; colaboradores
     // requieren que su area este en la lista.
     if (it.areas && it.areas.length > 0 && !isPriviledged) {
