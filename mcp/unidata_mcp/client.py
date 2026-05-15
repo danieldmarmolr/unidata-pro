@@ -50,6 +50,22 @@ class UnidataClient:
             raise UnidataError(f"No se pudo conectar a {self._cfg.api_url}{path}: {e}") from e
         return _parse(r, path)
 
+    async def patch(self, path: str, json: dict[str, Any] | None = None) -> Any:
+        client = await self._ensure()
+        try:
+            r = await client.patch(path, json=json or {})
+        except httpx.HTTPError as e:
+            raise UnidataError(f"No se pudo conectar a {self._cfg.api_url}{path}: {e}") from e
+        return _parse(r, path)
+
+    async def delete(self, path: str) -> Any:
+        client = await self._ensure()
+        try:
+            r = await client.delete(path)
+        except httpx.HTTPError as e:
+            raise UnidataError(f"No se pudo conectar a {self._cfg.api_url}{path}: {e}") from e
+        return _parse(r, path)
+
 
 def _parse(r: httpx.Response, path: str) -> Any:
     if r.status_code == 401:
