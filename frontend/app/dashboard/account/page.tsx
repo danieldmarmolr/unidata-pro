@@ -102,11 +102,14 @@ export default function AccountPage() {
   );
 }
 
+const MCP_REMOTE_URL = "https://mcp-production-b8c5.up.railway.app";
+
 function McpTokenSection() {
   const [token, setToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"token" | "json" | null>(null);
+  const [mode, setMode] = useState<"remote" | "local">("remote");
 
   async function generate() {
     setBusy(true);
@@ -121,12 +124,45 @@ function McpTokenSection() {
     }
   }
 
-  async function copy() {
-    if (!token) return;
-    await navigator.clipboard.writeText(token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function copyText(text: string, kind: "token" | "json") {
+    await navigator.clipboard.writeText(text);
+    setCopied(kind);
+    setTimeout(() => setCopied(null), 2000);
   }
+
+  const remoteJson = token
+    ? `{
+  "mcpServers": {
+    "unidata": {
+      "url": "${MCP_REMOTE_URL}/sse",
+      "headers": {
+        "Authorization": "Bearer ${token}"
+      }
+    }
+  }
+}`
+    : "";
+
+  const localJson = token
+    ? `{
+  "mcpServers": {
+    "unidata": {
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/danieldmarmolr/unidata-pro.git#subdirectory=mcp",
+        "unidata-mcp"
+      ],
+      "env": {
+        "UNIDATA_API_URL": "https://api.unidatacenter.com.ar",
+        "UNIDATA_TOKEN": "${token}"
+      }
+    }
+  }
+}`
+    : "";
+
+  const currentJson = mode === "remote" ? remoteJson : localJson;
 
   return (
     <div className="bg-surface border border-border rounded-xl p-6">
@@ -134,7 +170,7 @@ function McpTokenSection() {
         <div>
           <h2 className="text-sm font-bold text-text">Token para Claude (MCP)</h2>
           <p className="text-[12px] text-text-muted mt-0.5">
-            Genera un token de 90 días para usar UNIDATA desde Claude Desktop o Claude Code via MCP.
+            Generá un token de 90 días para usar UNIDATA desde Claude Desktop o Claude Code via MCP.
             El token tiene tus mismos permisos (rol + área).
           </p>
         </div>
@@ -146,47 +182,94 @@ function McpTokenSection() {
           <KeyRound size={12} /> {busy ? "Generando..." : token ? "Regenerar" : "Generar token"}
         </button>
       </div>
+
       {err && (
         <div className="rounded-lg bg-red-50 border border-red-200 text-error px-3 py-2 text-xs mb-3">
           {err}
         </div>
       )}
+
       {token && (
         <>
           <div className="bg-soft border border-border rounded-lg p-3 font-mono text-[10px] break-all relative">
             {token}
             <button
-              onClick={copy}
+              onClick={() => copyText(token, "token")}
               className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded bg-surface border border-border text-[10px] font-semibold hover:border-primary hover:text-primary"
             >
-              <Copy size={10} /> {copied ? "Copiado" : "Copiar"}
+              <Copy size={10} /> {copied === "token" ? "Copiado" : "Copiar token"}
             </button>
           </div>
-          <details className="mt-3 text-[12px] text-text-muted">
-            <summary className="cursor-pointer font-semibold text-text">Cómo configurarlo en Claude Desktop</summary>
-            <pre className="mt-2 bg-soft border border-border rounded-lg p-3 text-[10px] overflow-x-auto">
-{`{
-  "mcpServers": {
-    "unidata": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/danieldmarmolr/unidata-pro.git#subdirectory=mcp",
-        "unidata-mcp"
-      ],
-      "env": {
-        "UNIDATA_API_URL": "https://api.unidatacenter.com.ar",
-        "UNIDATA_TOKEN": "${token.slice(0, 24)}..."
-      }
-    }
-  }
-}`}
-            </pre>
-            <div className="mt-1">
-              Pegá este JSON en <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS)
-              o <code>%APPDATA%\Claude\claude_desktop_config.json</code> (Windows) y reiniciá Claude Desktop.
+
+          <div className="mt-4">
+            <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border mb-3">
+              <button
+                onClick={() => setMode("remote")}
+                className={
+                  "px-3 py-1.5 text-[11px] font-bold rounded-md transition " +
+                  (mode === "remote" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+                }
+              >
+                Remoto (recomendado)
+              </button>
+              <button
+                onClick={() => setMode("local")}
+                className={
+                  "px-3 py-1.5 text-[11px] font-bold rounded-md transition " +
+                  (mode === "local" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")
+                }
+              >
+                Local (uvx)
+              </button>
             </div>
-          </details>
+
+            <p className="text-[11px] text-text-muted mb-2">
+              {mode === "remote" ? (
+                <>
+                  Sin instalar nada. Claude se conecta a nuestro servidor MCP en Railway con tu JWT.
+                  Recomendado para todo el equipo.
+                </>
+              ) : (
+                <>
+                  Corre el MCP en tu PC con <code>uvx</code> (requiere{" "}
+                  <a
+                    href="https://docs.astral.sh/uv/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    uv
+                  </a>
+                  ). Útil para devs o cuando hay restricciones de red.
+                </>
+              )}
+            </p>
+
+            <div className="relative">
+              <pre className="bg-soft border border-border rounded-lg p-3 text-[10px] overflow-x-auto pr-20">
+                {currentJson}
+              </pre>
+              <button
+                onClick={() => copyText(currentJson, "json")}
+                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded bg-surface border border-border text-[10px] font-semibold hover:border-primary hover:text-primary"
+              >
+                <Copy size={10} /> {copied === "json" ? "Copiado" : "Copiar JSON"}
+              </button>
+            </div>
+
+            <div className="mt-2 text-[11px] text-text-muted">
+              Pegá este JSON en:
+              <ul className="list-disc list-inside mt-1 space-y-0.5">
+                <li>
+                  <strong>macOS:</strong> <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>
+                </li>
+                <li>
+                  <strong>Windows:</strong> <code>%APPDATA%\Claude\claude_desktop_config.json</code>
+                </li>
+              </ul>
+              Después reiniciá Claude Desktop. Vas a ver el ícono 🛠️ abajo del input cuando el MCP esté conectado.
+            </div>
+          </div>
         </>
       )}
     </div>
