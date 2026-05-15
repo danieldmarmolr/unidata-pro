@@ -257,18 +257,124 @@ function McpTokenSection() {
               </button>
             </div>
 
-            <div className="mt-2 text-[11px] text-text-muted">
-              Pegá este JSON en:
-              <ul className="list-disc list-inside mt-1 space-y-0.5">
-                <li>
-                  <strong>macOS:</strong> <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>
-                </li>
-                <li>
-                  <strong>Windows:</strong> <code>%APPDATA%\Claude\claude_desktop_config.json</code>
-                </li>
-              </ul>
-              Después reiniciá Claude Desktop. Vas a ver el ícono 🛠️ abajo del input cuando el MCP esté conectado.
-            </div>
+          </div>
+
+          <div className="mt-4 bg-soft/30 border border-border rounded-lg p-4">
+            <h3 className="text-xs font-bold text-text uppercase tracking-wider mb-3">
+              Cómo usarlo (paso a paso)
+            </h3>
+            <ol className="text-[12px] text-text space-y-3 list-decimal list-inside [&_code]:font-mono [&_code]:text-[11px] [&_code]:bg-soft [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded">
+              <li>
+                <strong>Instalá Claude Desktop</strong> si no lo tenés —{" "}
+                <a
+                  href="https://claude.ai/download"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  claude.ai/download
+                </a>
+                . Abrilo al menos una vez para que cree los archivos de config.
+              </li>
+              <li>
+                <strong>Copiá el JSON</strong> de arriba con el botón "Copiar JSON" (asegurate de tener
+                seleccionada la pestaña <strong>Remoto</strong> si querés usar el server en Railway).
+              </li>
+              <li>
+                <strong>Abrí el archivo de config</strong> de Claude Desktop:
+                <div className="mt-2 ml-6 space-y-2">
+                  <div className="bg-surface border border-border rounded-md p-2.5">
+                    <div className="font-semibold text-[11px] text-text mb-1">Forma fácil (recomendada)</div>
+                    <div className="text-[11px] text-text-muted">
+                      En Claude Desktop: <code>File</code> → <code>Settings</code> → tab{" "}
+                      <code>Developer</code> → botón <strong>"Edit Config"</strong>. Se abre el archivo
+                      en tu editor por defecto (Notepad / VSCode).
+                    </div>
+                  </div>
+                  <div className="bg-surface border border-border rounded-md p-2.5">
+                    <div className="font-semibold text-[11px] text-text mb-1">Forma manual (Windows)</div>
+                    <div className="text-[11px] text-text-muted">
+                      Apretá <code>Win + R</code> → escribí{" "}
+                      <code>%APPDATA%\Claude</code> → Enter. Se abre la carpeta. Buscá{" "}
+                      <code>claude_desktop_config.json</code>. Si no existe, creá un archivo nuevo
+                      con ese nombre exacto.
+                    </div>
+                  </div>
+                  <div className="bg-surface border border-border rounded-md p-2.5">
+                    <div className="font-semibold text-[11px] text-text mb-1">Forma manual (macOS)</div>
+                    <div className="text-[11px] text-text-muted">
+                      Finder → <code>Cmd + Shift + G</code> → pegá{" "}
+                      <code>~/Library/Application Support/Claude/</code> → Enter. Mismo archivo:{" "}
+                      <code>claude_desktop_config.json</code>.
+                    </div>
+                  </div>
+                </div>
+              </li>
+              <li>
+                <strong>Pegá el JSON adentro del archivo y guardá</strong>. Si ya tenías otros MCPs
+                configurados, mergealos: agregá la clave <code>"unidata"</code> dentro del objeto{" "}
+                <code>"mcpServers"</code> existente (sin duplicar las llaves de afuera).
+              </li>
+              <li>
+                <strong>Cerrá Claude Desktop completamente y abrilo de nuevo</strong>. Importante: no
+                solo cerrar la ventana — desde el system tray (Windows) o menú superior (macOS) hacé
+                "Quit" y volvé a abrir. Sino no recarga la config.
+              </li>
+              <li>
+                <strong>Verificá la conexión</strong>: en un chat nuevo deberías ver el ícono 🛠️ debajo
+                del input. Click ahí y debería listar las tools de UNIDATA (whoami, list_dropshippers,
+                run_sql, etc.).
+              </li>
+            </ol>
+          </div>
+
+          <div className="mt-4 bg-primary/5 border border-primary/20 rounded-lg p-4">
+            <h3 className="text-xs font-bold text-text uppercase tracking-wider mb-2">
+              Probá estos prompts
+            </h3>
+            <ul className="text-[12px] text-text space-y-1.5 list-disc list-inside marker:text-primary">
+              <li>
+                <em>"Llamá a whoami y decime quién soy en UNIDATA"</em>
+              </li>
+              <li>
+                <em>
+                  "Listame los 10 dropshippers que más facturaron este mes con ticket promedio"
+                </em>
+              </li>
+              <li>
+                <em>"Dame el 360 del dropshipper 102 y resumime en bullets su estado"</em>
+              </li>
+              <li>
+                <em>
+                  "Agregale una nota al dropshipper 102 categoría retention: 'cliente VIP,
+                  priorizar siempre'"
+                </em>
+              </li>
+              <li>
+                <em>
+                  "Corré un SELECT en Unistore que cuente órdenes pagadas por provincia este
+                  trimestre y armame un CSV"
+                </em>
+              </li>
+              <li>
+                <em>"Listame mis recordatorios pendientes"</em>
+              </li>
+            </ul>
+          </div>
+
+          <div className="mt-4 text-[11px] text-text-muted leading-relaxed">
+            <strong className="text-text">Tips:</strong> el token dura 90 días, después generá uno
+            nuevo acá. Si Claude tira "Token JWT inválido", regenerá. Si el ícono 🛠️ no aparece,
+            revisá que el JSON sea válido (probá pegarlo en{" "}
+            <a
+              href="https://jsonlint.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              jsonlint.com
+            </a>
+            ) y que cerraste Claude del todo antes de reabrirlo.
           </div>
         </>
       )}
