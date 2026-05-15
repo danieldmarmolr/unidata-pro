@@ -1573,8 +1573,9 @@ def dropshipper_unified_orders(
     # OML.id = ML order ID externo (bigint), .number = DROP, .userId = dropshipper.
     # NO existe columna 'mlOrderId'. Esta es la fuente de verdad para totals
     # por orden — reemplaza el stub que tenia "total" = paid del PaymentIntent
-    # completo (mismo monto para todos los rows del mismo intent, bug visible
-    # al filtrar por transaccion).
+    # completo (mismo monto para todos los rows del mismo intent).
+    # Tambien traemos shipping_address_detail (JSONB) para dirreccion completa,
+    # tags[], statusDetail, dateClosed, notification flags, carrier, etc.
     if ml_rows:
         try:
             _oml_rows = q(eng, """
@@ -1583,14 +1584,26 @@ def dropshipper_unified_orders(
                        COALESCE("totalAmount", 0)::float              AS total,
                        COALESCE("merchandise_cost", 0)::float         AS merch_cost,
                        COALESCE("shipping_cost", 0)::float            AS shipping_cost,
+                       COALESCE("shipping_price", 0)::float           AS ship_price,
+                       COALESCE("total_cost", 0)::float               AS total_cost,
                        COALESCE("profit_for_subscription", 0)::float  AS profit,
                        COALESCE("buyer_name", '')                     AS buyer_name,
                        COALESCE("status", '')                         AS status,
+                       COALESCE("statusDetail", '')                   AS status_detail,
                        COALESCE("shipping_option_reference", '')      AS shipping_type,
                        COALESCE("shipping_carrier", '')               AS carrier,
                        "dateCreated"::text                            AS fecha,
+                       "dateClosed"::text                             AS fecha_cerrada,
                        COALESCE("label_downloaded", FALSE)            AS label_dl,
-                       "date_label_downloaded"::text                  AS label_dl_at
+                       "date_label_downloaded"::text                  AS label_dl_at,
+                       COALESCE("cancel_by_unidrop", FALSE)           AS canc_unidrop,
+                       COALESCE("notification_pack", FALSE)           AS notif_pack,
+                       COALESCE("notification_ship", FALSE)           AS notif_ship,
+                       COALESCE(tags, ARRAY[]::text[])                AS tags,
+                       "buyerId"::text                                AS buyer_id,
+                       "shippingId"::text                             AS shipping_id,
+                       "contabilium_client_id"::text                  AS contab_client,
+                       COALESCE(shipping_address_detail, '{}'::jsonb) AS ship_addr
                 FROM mercado_libre_dev."OrderMercadoLibre"
                 WHERE "userId" = :uid
             """, {"uid": int(user_id)}) or []
@@ -1605,7 +1618,7 @@ def dropshipper_unified_orders(
                     o = _oml_map[ext]
                     if o[1] and not r.get("number"):
                         r["number"] = o[1]
-                    # total: SIEMPRE override con el real per-order (esto fixea el bug del filtro por transaccion)
+                    # total: SIEMPRE override con el real per-order (fixea bug filtro transaccion)
                     if o[2] > 0:
                         r["total"] = round(float(o[2]), 2)
                         _patched_total += 1
@@ -1614,21 +1627,57 @@ def dropshipper_unified_orders(
                     if o[4] > 0:
                         r["shipping_cost"] = round(float(o[4]), 2)
                     if o[5] > 0:
-                        r["profit_unidrop"] = round(float(o[5]), 2)
-                    if o[6] and not r.get("buyer_name"):
-                        r["buyer_name"] = o[6]
-                    if o[7] and r.get("status", "") in ("", "paid (via Talo)"):
-                        r["status"] = o[7]
-                    if o[8] and not r.get("shipping_type"):
-                        r["shipping_type"] = o[8]
-                    if o[9] and not (r.get("shipment") or {}).get("carrier"):
-                        # shipment puede ser None; lo creamos si hace falta
-                        pass  # no piso shipment aca, eso lo arma 4c con detalle
-                    if o[10] and not r.get("fecha"):
-                        r["fecha"] = o[10]
-                    r["label_downloaded"] = bool(o[11])
+                        r["shipping_price"] = round(float(o[5]), 2)
+                    if o[6] > 0:
+                        r["total_cost"] = round(float(o[6]), 2)
+                    if o[7] > 0:
+                        r["profit_unidrop"] = round(float(o[7]), 2)
+                    if o[8] and not r.get("buyer_name"):
+                        r["buyer_name"] = o[8]
+                    if o[9] and r.get("status", "") in ("", "paid (via Talo)"):
+                        r["status"] = o[9]
+                    if o[10]:
+                        r["status_detail"] = o[10]
+                    if o[11] and not r.get("shipping_type"):
+                        r["shipping_type"] = o[11]
                     if o[12]:
-                        r["label_downloaded_at"] = o[12]
+                        r["shipping_carrier"] = o[12]
+                    if o[13] and not r.get("fecha"):
+                        r["fecha"] = o[13]
+                    if o[14]:
+                        r["fecha_closed"] = o[14]
+                    r["label_downloaded"] = bool(o[15])
+                    if o[16]:
+                        r["label_downloaded_at"] = o[16]
+                    r["cancel_by_unidrop"] = bool(o[17])
+                    r["notification_pack"] = bool(o[18])
+                    r["notification_ship"] = bool(o[19])
+                    r["tags"] = list(o[20] or [])
+                    if o[21]:
+                        r["buyer_id"] = o[21]
+                    if o[22]:
+                        r["shipping_id"] = o[22]
+                    if o[23]:
+                        r["contabilium_client_id"] = o[23]
+                    # shipping_address_detail JSONB: parseamos a campos planos
+                    addr = o[24] if isinstance(o[24], dict) else {}
+                    if addr:
+                        if not r.get("shipping_address"):
+                            r["shipping_address"] = addr.get("address_line") or (
+                                f"{addr.get('street_name', '')} {addr.get('street_number', '')}".strip() or None
+                            )
+                        if not r.get("shipping_city"):
+                            r["shipping_city"] = addr.get("city") or ""
+                        if not r.get("billing_province"):
+                            r["billing_province"] = addr.get("state") or ""
+                        if not r.get("shipping_zipcode"):
+                            r["shipping_zipcode"] = addr.get("zip_code") or ""
+                        if addr.get("comment"):
+                            r["shipping_comment"] = addr["comment"]
+                        if addr.get("receiver_name"):
+                            r["shipping_receiver"] = addr["receiver_name"]
+                        if addr.get("receiver_phone"):
+                            r["shipping_phone"] = addr["receiver_phone"]
                     _patched += 1
                 log.info("OML enrich uid=%s oml_rows=%d patched=%d totals_overridden=%d",
                          user_id, len(_oml_rows), _patched, _patched_total)
@@ -1805,51 +1854,226 @@ def dropshipper_unified_orders(
                     log.info("unified_orders TN shipping_cost OK col=%s rows=%d", col_name, len(ship_rows))
                     break
 
+            # 3b) Enriquecimiento TN completo — todas las columnas que muestra Unidrop
+            # pero UNIDATA no exponia: shipping_address JSONB, gateway, total_cost,
+            # subtotal, discount, timestamps, label_downloaded, notifications, etc.
+            try:
+                tn_full_rows = q(eng, f"""
+                    SELECT tienda_nube_id::text                    AS tn_id,
+                           COALESCE(shipping_address, '{{}}'::jsonb)   AS ship_addr,
+                           COALESCE(total_cost, 0)::float           AS total_cost,
+                           COALESCE(subtotal, 0)::float             AS subtotal,
+                           COALESCE(discount, 0)::float             AS discount,
+                           COALESCE(shipping_option_cost, 0)::float AS ship_opt_cost,
+                           COALESCE(shipping_carrier, '')           AS carrier,
+                           COALESCE(shipping_option, '')            AS ship_option,
+                           COALESCE(shipping_option_reference, '')  AS ship_ref,
+                           COALESCE(gateway, '')                    AS gateway,
+                           COALESCE(gateway_name, '')               AS gateway_name,
+                           COALESCE(gateway_link, '')               AS gateway_link,
+                           paid_at::text                            AS paid_at,
+                           completed_at::text                       AS completed_at,
+                           cancelled_at::text                       AS cancelled_at,
+                           closed_at::text                          AS closed_at,
+                           COALESCE(shipping_status, '')            AS ship_status,
+                           COALESCE(notification_pack, FALSE)       AS notif_pack,
+                           COALESCE(notification_ship, FALSE)       AS notif_ship,
+                           COALESCE(label_downloaded, FALSE)        AS label_dl,
+                           date_label_downloaded::text              AS label_dl_at,
+                           COALESCE(cancel_by_unidrop, FALSE)       AS canc_unidrop,
+                           manual_packed_marked_at::text            AS man_pack_at,
+                           manual_payment_marked_at::text           AS man_pay_at,
+                           COALESCE(note, '')                       AS note,
+                           COALESCE(owner_note, '')                 AS owner_note,
+                           "contabilium_client_id"::text            AS contab_client,
+                           order_number                             AS tn_number
+                    FROM public.tienda_nube_orders
+                    WHERE tienda_nube_id::text IN ({ids_for_enrich})
+                """) or []
+                if tn_full_rows:
+                    _tn_map = {r[0]: r for r in tn_full_rows if r[0]}
+                    for r in tn_rows:
+                        iid = str(r.get("internal_id") or "")
+                        if iid not in _tn_map:
+                            continue
+                        d = _tn_map[iid]
+                        addr = d[1] if isinstance(d[1], dict) else {}
+                        if addr:
+                            if not r.get("shipping_address"):
+                                r["shipping_address"] = addr.get("address") or addr.get("street") or ""
+                            if not r.get("shipping_city"):
+                                r["shipping_city"] = addr.get("city") or ""
+                            if not r.get("billing_province"):
+                                r["billing_province"] = addr.get("province") or addr.get("state") or ""
+                            if not r.get("shipping_zipcode"):
+                                r["shipping_zipcode"] = addr.get("zipcode") or addr.get("zip_code") or ""
+                            if addr.get("floor"):
+                                r["shipping_floor"] = addr["floor"]
+                            if addr.get("locality"):
+                                r["shipping_locality"] = addr["locality"]
+                            if addr.get("number"):
+                                r["shipping_number"] = addr["number"]
+                            if addr.get("phone"):
+                                r["shipping_phone"] = addr["phone"]
+                        if d[2] > 0:
+                            r["total_cost"] = round(float(d[2]), 2)
+                            # merch_cost = total_cost - shipping_cost (mejor que 0)
+                            if not r.get("merch_cost"):
+                                _mc = float(d[2]) - r.get("shipping_cost", 0)
+                                if _mc > 0:
+                                    r["merch_cost"] = round(_mc, 2)
+                        if d[3] > 0:
+                            r["subtotal"] = round(float(d[3]), 2)
+                        if d[4] > 0:
+                            r["discount"] = round(float(d[4]), 2)
+                        if d[5] > 0 and not r.get("shipping_cost"):
+                            r["shipping_cost"] = round(float(d[5]), 2)
+                        if d[6]:
+                            r["shipping_carrier"] = d[6]
+                        if d[7]:
+                            r["shipping_option"] = d[7]
+                        if d[8] and not r.get("shipping_type"):
+                            r["shipping_type"] = d[8]
+                        if d[9]:
+                            r["gateway"] = d[9]
+                        if d[10]:
+                            r["gateway_name"] = d[10]
+                        if d[11]:
+                            r["gateway_link"] = d[11]
+                        if d[12]:
+                            r["paid_at"] = d[12]
+                        if d[13]:
+                            r["completed_at"] = d[13]
+                        if d[14]:
+                            r["cancelled_at"] = d[14]
+                        if d[15]:
+                            r["closed_at"] = d[15]
+                        if d[16] and not r.get("shipping_status"):
+                            r["shipping_status"] = d[16]
+                        r["notification_pack"] = bool(d[17])
+                        r["notification_ship"] = bool(d[18])
+                        r["label_downloaded"] = bool(d[19])
+                        if d[20]:
+                            r["label_downloaded_at"] = d[20]
+                        r["cancel_by_unidrop"] = bool(d[21])
+                        if d[22]:
+                            r["manual_packed_at"] = d[22]
+                        if d[23]:
+                            r["manual_payment_at"] = d[23]
+                        if d[24]:
+                            r["note"] = d[24]
+                        if d[25]:
+                            r["owner_note"] = d[25]
+                        if d[26]:
+                            r["contabilium_client_id"] = d[26]
+                        if d[27] and not r.get("tn_number"):
+                            r["tn_number"] = d[27]
+                    log.info("TN full enrich uid=%s tn_rows=%d", user_id, len(tn_full_rows))
+            except Exception as _tn_full_err:
+                log.warning("TN full enrich fail uid=%s: %s", user_id, str(_tn_full_err)[:200])
+
     # 4a) Items + envío TN — carga bulk por internal_id
     if tn_rows:
         tn_internal = [str(r["internal_id"]) for r in tn_rows if r.get("internal_id")]
         if tn_internal:
             tn_ids_bulk = ",".join("'" + i + "'" for i in tn_internal)
-            # tienda_nube_order_items
+            # tienda_nube_order_items — incluye cost y order_type (combos para TN)
             tni_rows = q(eng, f"""
-                SELECT order_id::text, sku, name, quantity::int, price::float
+                SELECT tienda_nube_order_id::text,
+                       COALESCE(sku, ''),
+                       COALESCE(name, ''),
+                       COALESCE(quantity, 0)::int,
+                       COALESCE(price, 0)::float,
+                       COALESCE(cost, 0)::float,
+                       COALESCE(order_type::text, '')
                 FROM public.tienda_nube_order_items
-                WHERE order_id::text IN ({tn_ids_bulk})
-                ORDER BY order_id
+                WHERE tienda_nube_order_id::text IN ({tn_ids_bulk})
+                ORDER BY tienda_nube_order_id
             """) or []
             items_by_tn: dict[str, list] = {}
             for ir in tni_rows:
                 k = ir[0] or ""
                 items_by_tn.setdefault(k, []).append({
-                    "sku": ir[1] or "", "name": ir[2] or "",
-                    "qty": int(ir[3] or 0), "price": round(float(ir[4] or 0), 2),
+                    "sku": ir[1] or "",
+                    "name": ir[2] or "",
+                    "qty": int(ir[3] or 0),
+                    "price": round(float(ir[4] or 0), 2),
+                    "cost": round(float(ir[5] or 0), 2),
+                    "item_type": ir[6] or "",
                 })
             log.info("unified_orders TN items uid=%s orders=%d items=%d",
                      user_id, len(tn_internal), len(tni_rows))
-            # oca_shipments (status, fecha_entrega, costo_envio)
+            # oca_shipments — incluye tracking + direccion destino
             oca_ship: dict[str, dict] = {}
             oca_rows = q(eng, f"""
                 SELECT order_tienda_nube_id::text,
-                       COALESCE(ultimo_estado_oca, status::text, '') AS estado,
-                       fecha_entrega::text,
-                       COALESCE(costo_envio, 0)::float
+                       COALESCE(ultimo_estado_oca, status::text, '')        AS estado,
+                       fecha_entrega::text                                   AS entregado,
+                       COALESCE(costo_envio, 0)::float                       AS costo,
+                       COALESCE(numero_envio, '')                            AS tracking,
+                       COALESCE(destinatario_nombre, '')                     AS receiver,
+                       COALESCE(destinatario_telefono, '')                   AS phone,
+                       COALESCE(destinatario_calle, '') || ' ' ||
+                       COALESCE(destinatario_numero, '')                     AS calle_full,
+                       COALESCE(destinatario_localidad, '')                  AS localidad,
+                       COALESCE(destinatario_provincia, '')                  AS provincia,
+                       COALESCE(destinatario_cp, '')                         AS cp
                 FROM public.oca_shipments
                 WHERE order_tienda_nube_id::text IN ({tn_ids_bulk})
             """) or []
             for sr in oca_rows:
                 k = sr[0] or ""
-                oca_ship[k] = {"carrier": "OCA", "status": sr[1] or "", "entregado": sr[2], "costo": float(sr[3] or 0)}
-            # lightdata_shipments
+                oca_ship[k] = {
+                    "carrier": "OCA",
+                    "status": sr[1] or "",
+                    "entregado": sr[2],
+                    "costo": float(sr[3] or 0),
+                    "tracking_number": sr[4] or "",
+                    "receiver_name": sr[5] or "",
+                    "receiver_phone": sr[6] or "",
+                    "address": (sr[7] or "").strip(),
+                    "city": sr[8] or "",
+                    "province": sr[9] or "",
+                    "zipcode": sr[10] or "",
+                }
+            # lightdata_shipments — incluye tracking_url + numero_envio
             ld_ship: dict[str, dict] = {}
             ld_rows = q(eng, f"""
-                SELECT orden_tn_id::text, COALESCE(estado, '') AS estado,
-                       COALESCE(costo_envio_ars, 0)::float
+                SELECT orden_tn_id::text,
+                       COALESCE(estado, '')                       AS estado,
+                       COALESCE(costo_envio_ars, 0)::float        AS costo,
+                       COALESCE(numero_envio_lightdata, '')       AS tracking,
+                       COALESCE(tracking_url, '')                 AS tracking_url,
+                       COALESCE(tracking_qr, '')                  AS tracking_qr,
+                       COALESCE(destinatario_nombre, '')          AS receiver,
+                       COALESCE(telefono_destinatario, '')        AS phone,
+                       COALESCE(direccion_calle, '') || ' ' ||
+                       COALESCE(direccion_numero, '')             AS calle_full,
+                       COALESCE(direccion_localidad, '')          AS localidad,
+                       COALESCE(direccion_provincia, '')          AS provincia,
+                       COALESCE(direccion_cp, '')                 AS cp,
+                       ultima_actualizacion::text                 AS last_update
                 FROM public.lightdata_shipments
                 WHERE orden_tn_id::text IN ({tn_ids_bulk})
             """) or []
             for sr in ld_rows:
                 k = sr[0] or ""
-                ld_ship[k] = {"carrier": "Lightdata", "status": sr[1] or "", "entregado": None, "costo": float(sr[2] or 0)}
+                ld_ship[k] = {
+                    "carrier": "Lightdata",
+                    "status": sr[1] or "",
+                    "entregado": None,
+                    "costo": float(sr[2] or 0),
+                    "tracking_number": sr[3] or "",
+                    "tracking_url": sr[4] or "",
+                    "tracking_qr": sr[5] or "",
+                    "receiver_name": sr[6] or "",
+                    "receiver_phone": sr[7] or "",
+                    "address": (sr[8] or "").strip(),
+                    "city": sr[9] or "",
+                    "province": sr[10] or "",
+                    "zipcode": sr[11] or "",
+                    "last_update": sr[12],
+                }
             # Apply to rows
             for r in tn_rows:
                 iid = str(r.get("internal_id") or "")
@@ -1858,6 +2082,16 @@ def dropshipper_unified_orders(
                 r["shipment"] = ship
                 if ship and ship.get("status"):
                     r["shipping_status"] = ship["status"]
+                # Si el shipment trae mejor direccion que la del row, completar
+                if ship:
+                    if not r.get("shipping_address") and ship.get("address"):
+                        r["shipping_address"] = ship["address"]
+                    if not r.get("shipping_city") and ship.get("city"):
+                        r["shipping_city"] = ship["city"]
+                    if not r.get("billing_province") and ship.get("province"):
+                        r["billing_province"] = ship["province"]
+                    if not r.get("shipping_zipcode") and ship.get("zipcode"):
+                        r["shipping_zipcode"] = ship["zipcode"]
 
     # 4b) Items ML — OrderItemMercadoLibre.orderId ES el mlOrderId externo (no el id interno).
     # Usamos external_id para el join. sellerSKU contiene nuestro SKU de catálogo.

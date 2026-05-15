@@ -154,7 +154,22 @@ type DropshipperDetail = {
 };
 
 type OrderItem = { sku: string; name: string; qty: number; price: number; item_type?: string; cost?: number; image_url?: string };
-type Shipment = { carrier: string; status: string; entregado: string | null; costo: number } | null;
+type Shipment = {
+  carrier: string;
+  status: string;
+  entregado: string | null;
+  costo: number;
+  tracking_number?: string;
+  tracking_url?: string;
+  tracking_qr?: string;
+  receiver_name?: string;
+  receiver_phone?: string;
+  address?: string;
+  city?: string;
+  province?: string;
+  zipcode?: string;
+  last_update?: string;
+} | null;
 
 type UnifiedOrder = {
   origen: "ml" | "tn";
@@ -187,6 +202,43 @@ type UnifiedOrder = {
   shipment?: Shipment;
   returns_count?: number;
   is_combo?: boolean;
+  // Nuevos campos enriquecidos
+  status_detail?: string;
+  fecha_closed?: string;
+  total_cost?: number;
+  shipping_price?: number;
+  shipping_carrier?: string;
+  label_downloaded?: boolean;
+  label_downloaded_at?: string;
+  cancel_by_unidrop?: boolean;
+  notification_pack?: boolean;
+  notification_ship?: boolean;
+  tags?: string[];
+  buyer_id?: string;
+  shipping_id?: string;
+  contabilium_client_id?: string;
+  shipping_comment?: string;
+  shipping_receiver?: string;
+  shipping_phone?: string;
+  shipping_floor?: string;
+  shipping_locality?: string;
+  shipping_number?: string;
+  // TN-specific
+  tn_number?: string;
+  subtotal?: number;
+  discount?: number;
+  shipping_option?: string;
+  gateway?: string;
+  gateway_name?: string;
+  gateway_link?: string;
+  paid_at?: string;
+  completed_at?: string;
+  cancelled_at?: string;
+  closed_at?: string;
+  manual_packed_at?: string;
+  manual_payment_at?: string;
+  note?: string;
+  owner_note?: string;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -901,8 +953,16 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     {modalOrder.shipping_status && <OrderStatusBadge status={modalOrder.shipping_status} />}
                     {modalOrder.is_combo && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">COMBO</span>}
                     {modalOrder.shipping_type && <ShippingTypeBadge type={modalOrder.shipping_type} />}
+                    {modalOrder.cancel_by_unidrop && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200">CANCELADA UNIDROP</span>}
                   </div>
                   <div className="text-xs text-text-muted mt-1">{fmtArDateTime(modalOrder.fecha)}</div>
+                  {modalOrder.tags && modalOrder.tags.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap mt-2">
+                      {modalOrder.tags.map((t) => (
+                        <span key={t} className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-soft text-text-muted border border-border">{t}</span>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {(modalOrder.number || modalOrder.external_id) && (
@@ -999,6 +1059,18 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       <DollarSign size={12} /> Pago
                     </div>
                     <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
+                      {modalOrder.subtotal && modalOrder.subtotal > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Subtotal productos</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.subtotal)}</span>
+                        </div>
+                      )}
+                      {modalOrder.discount && modalOrder.discount > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Descuento</span>
+                          <span className="tabular-nums text-rose-600">−{formatCurrency(modalOrder.discount)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-text-muted">Costo mercadería</span>
                         <span className="tabular-nums">{merchCost > 0 ? formatCurrency(merchCost) : "—"}</span>
@@ -1007,27 +1079,43 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                         <span className="text-text-muted">Costo envío</span>
                         <span className="tabular-nums">{modalOrder.shipping_cost > 0 ? formatCurrency(modalOrder.shipping_cost) : "—"}</span>
                       </div>
+                      {modalOrder.total_cost && modalOrder.total_cost > 0 && (
+                        <div className="flex justify-between font-semibold">
+                          <span className="text-text-muted">Costo total</span>
+                          <span className="tabular-nums">{formatCurrency(modalOrder.total_cost)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between border-t border-border pt-1.5 mt-1.5 font-bold">
                         <span>Total a pagar (Unidrop)</span>
                         <span className="tabular-nums text-primary">{formatCurrency(totalPagar)}</span>
                       </div>
                       <div className="flex justify-between border-t border-border pt-1.5 mt-1.5">
-                        <span className="text-text-muted">Total cobrado en {modalOrder.origen === "ml" ? "ML" : "TN"}</span>
+                        <span className="text-text-muted">Ingreso total ({modalOrder.origen === "ml" ? "ML" : "TN"})</span>
                         <span className="tabular-nums font-semibold">{formatCurrency(modalOrder.total)}</span>
                       </div>
                       {profit > 0 && (
                         <div className="flex justify-between">
-                          <span className="text-text-muted">Margen dropshipper</span>
-                          <span className="tabular-nums font-semibold text-emerald-600">{formatCurrency(profit)}</span>
+                          <span className="text-text-muted">Net revenue dropshipper</span>
+                          <span className="tabular-nums font-bold text-emerald-600">{formatCurrency(profit)}</span>
                         </div>
                       )}
                     </div>
+                    {/* Gateway TN */}
+                    {(modalOrder.gateway_name || modalOrder.gateway) && (
+                      <div className="mt-2 px-3 py-2 bg-soft/60 border border-border rounded-lg text-[11px]">
+                        <span className="text-text-muted">Gateway: </span>
+                        <span className="font-semibold text-text">{modalOrder.gateway_name || modalOrder.gateway}</span>
+                        {modalOrder.gateway_link && (
+                          <a href={modalOrder.gateway_link} target="_blank" rel="noopener noreferrer" className="ml-2 text-primary hover:underline inline-flex items-center gap-1"><ExternalLink size={9} />Ver pago</a>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* Envío */}
                   <div>
                     <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <Truck size={12} /> Envío {modalOrder.shipment && `· ${carrierLabel(modalOrder.shipment.carrier)}`}
+                      <Truck size={12} /> Envío {modalOrder.shipping_carrier ? `· ${modalOrder.shipping_carrier}` : (modalOrder.shipment ? `· ${carrierLabel(modalOrder.shipment.carrier)}` : "")}
                     </div>
                     <div className="bg-soft rounded-lg p-3 space-y-1.5 text-xs">
                       {modalOrder.shipping_type && (
@@ -1048,10 +1136,34 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                           <span className="text-emerald-700 font-semibold">{modalOrder.shipment.entregado.slice(0, 10)}</span>
                         </div>
                       )}
+                      {modalOrder.shipment?.tracking_number && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Tracking #</span>
+                          <span className="font-mono text-[11px]">{modalOrder.shipment.tracking_number}</span>
+                        </div>
+                      )}
+                      {modalOrder.shipment?.tracking_url && (
+                        <div className="flex justify-between">
+                          <span className="text-text-muted">Tracking</span>
+                          <a href={modalOrder.shipment.tracking_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1"><ExternalLink size={9} />Seguir envío</a>
+                        </div>
+                      )}
                       {fullAddress && (
                         <div className="pt-1.5 border-t border-border mt-1.5">
                           <div className="text-text-muted text-[10px] uppercase tracking-wider mb-1">Dirección de entrega</div>
                           <div className="text-text">{fullAddress}</div>
+                          {modalOrder.shipping_floor && (
+                            <div className="text-text-muted text-[10px]">Piso/Depto: {modalOrder.shipping_floor}</div>
+                          )}
+                          {modalOrder.shipping_comment && modalOrder.shipping_comment !== "." && (
+                            <div className="text-text-muted text-[10px] italic mt-1">📝 {modalOrder.shipping_comment}</div>
+                          )}
+                          {(modalOrder.shipping_receiver || modalOrder.shipment?.receiver_name) && (
+                            <div className="text-text-muted text-[10px] mt-1">Recibe: <span className="text-text font-semibold">{modalOrder.shipping_receiver || modalOrder.shipment?.receiver_name}</span></div>
+                          )}
+                          {(modalOrder.shipping_phone || modalOrder.shipment?.receiver_phone) && (
+                            <div className="text-text-muted text-[10px]">📞 {modalOrder.shipping_phone || modalOrder.shipment?.receiver_phone}</div>
+                          )}
                         </div>
                       )}
                       {!fullAddress && !modalOrder.shipment && (
@@ -1076,6 +1188,9 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       {modalOrder.contact_dni && (
                         <div className="flex items-center gap-1.5 text-text-muted"><IdCard size={11} /> DNI/CUIT {modalOrder.contact_dni}</div>
                       )}
+                      {modalOrder.buyer_id && modalOrder.origen === "ml" && (
+                        <div className="flex items-center gap-1.5 text-text-muted"><IdCard size={11} /> ML buyer #{modalOrder.buyer_id}</div>
+                      )}
                       {modalOrder.billing_address && modalOrder.shipping_address && modalOrder.billing_address !== modalOrder.shipping_address && (
                         <div className="pt-1.5 border-t border-border mt-1.5">
                           <div className="text-text-muted text-[10px] uppercase tracking-wider mb-1">Dirección de facturación</div>
@@ -1085,12 +1200,86 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     </div>
                   </div>
 
-                  {/* Pipeline */}
-                  <div>
-                    <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Estado del pedido</div>
-                    <OrderPipelineDetail o={modalOrder} />
+                  {/* Pipeline + Operativa */}
+                  <div className="space-y-3">
+                    <div>
+                      <div className="text-xs font-bold text-text-muted uppercase tracking-wider mb-3">Estado del pedido</div>
+                      <OrderPipelineDetail o={modalOrder} />
+                    </div>
+                    {/* Operativa: etiquetas + notificaciones + manual marks */}
+                    {(modalOrder.label_downloaded || modalOrder.notification_pack || modalOrder.notification_ship || modalOrder.manual_packed_at || modalOrder.manual_payment_at) && (
+                      <div className="bg-soft/60 border border-border rounded-lg p-3 text-[11px] space-y-1">
+                        <div className="text-text-muted text-[10px] uppercase tracking-wider mb-1">Operativa</div>
+                        {modalOrder.label_downloaded && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-text-muted">Etiqueta descargada</span>
+                            <span className="text-emerald-700 font-semibold">{modalOrder.label_downloaded_at ? fmtArDateTime(modalOrder.label_downloaded_at) : "Sí"}</span>
+                          </div>
+                        )}
+                        {modalOrder.notification_pack && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-text-muted">Notif. empaquetado</span>
+                            <span className="text-emerald-700 font-semibold">Enviada</span>
+                          </div>
+                        )}
+                        {modalOrder.notification_ship && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-text-muted">Notif. envío</span>
+                            <span className="text-emerald-700 font-semibold">Enviada</span>
+                          </div>
+                        )}
+                        {modalOrder.manual_packed_at && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-text-muted">Marcada empaquetada</span>
+                            <span className="text-text-muted">{fmtArDateTime(modalOrder.manual_packed_at)}</span>
+                          </div>
+                        )}
+                        {modalOrder.manual_payment_at && (
+                          <div className="flex items-center justify-between">
+                            <span className="text-text-muted">Marcada pagada</span>
+                            <span className="text-text-muted">{fmtArDateTime(modalOrder.manual_payment_at)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
+
+                {/* Timestamps TN */}
+                {(modalOrder.paid_at || modalOrder.completed_at || modalOrder.cancelled_at || modalOrder.closed_at) && (
+                  <div className="bg-soft/40 border border-border rounded-lg p-3 text-[11px] grid grid-cols-2 md:grid-cols-4 gap-y-1.5 gap-x-4">
+                    {modalOrder.paid_at && (
+                      <div><span className="text-text-muted">Pagada:</span> <span className="font-semibold text-emerald-700">{fmtArDateTime(modalOrder.paid_at)}</span></div>
+                    )}
+                    {modalOrder.completed_at && (
+                      <div><span className="text-text-muted">Completada:</span> <span className="font-semibold">{fmtArDateTime(modalOrder.completed_at)}</span></div>
+                    )}
+                    {modalOrder.closed_at && (
+                      <div><span className="text-text-muted">Cerrada:</span> <span className="font-semibold">{fmtArDateTime(modalOrder.closed_at)}</span></div>
+                    )}
+                    {modalOrder.cancelled_at && (
+                      <div><span className="text-text-muted">Cancelada:</span> <span className="font-semibold text-rose-600">{fmtArDateTime(modalOrder.cancelled_at)}</span></div>
+                    )}
+                  </div>
+                )}
+
+                {/* Notas TN */}
+                {(modalOrder.note || modalOrder.owner_note) && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {modalOrder.note && (
+                      <div className="bg-amber-50/50 border border-amber-200 rounded-lg p-3 text-xs">
+                        <div className="text-amber-800 text-[10px] uppercase tracking-wider mb-1 font-bold">Nota del cliente</div>
+                        <div className="text-text">{modalOrder.note}</div>
+                      </div>
+                    )}
+                    {modalOrder.owner_note && (
+                      <div className="bg-blue-50/50 border border-blue-200 rounded-lg p-3 text-xs">
+                        <div className="text-blue-800 text-[10px] uppercase tracking-wider mb-1 font-bold">Nota del dropshipper</div>
+                        <div className="text-text">{modalOrder.owner_note}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* IDs técnicos */}
                 <div className="bg-soft/50 border border-border rounded-lg p-3 text-[10px] text-text-muted grid grid-cols-2 md:grid-cols-4 gap-y-1 gap-x-4">
