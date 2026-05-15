@@ -134,10 +134,14 @@ function McpTokenSection() {
     ? `{
   "mcpServers": {
     "unidata": {
-      "url": "${MCP_REMOTE_URL}/sse",
-      "headers": {
-        "Authorization": "Bearer ${token}"
-      }
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "${MCP_REMOTE_URL}/sse",
+        "--header",
+        "Authorization:Bearer ${token}"
+      ]
     }
   }
 }`
@@ -226,8 +230,18 @@ function McpTokenSection() {
             <p className="text-[11px] text-text-muted mb-2">
               {mode === "remote" ? (
                 <>
-                  Sin instalar nada. Claude se conecta a nuestro servidor MCP en Railway con tu JWT.
-                  Recomendado para todo el equipo.
+                  Claude se conecta a nuestro servidor MCP en Railway con tu JWT via un bridge stdio
+                  (<code>mcp-remote</code> sobre <code>npx</code>). Requiere tener{" "}
+                  <a
+                    href="https://nodejs.org"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline"
+                  >
+                    Node.js
+                  </a>{" "}
+                  instalado (versión LTS, ~30 MB). La primera vez tarda ~5 seg en bajar el bridge,
+                  después queda cacheado. Recomendado para todo el equipo.
                 </>
               ) : (
                 <>
