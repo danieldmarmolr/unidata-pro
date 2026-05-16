@@ -349,6 +349,101 @@ def get_dropshipper_unified_orders(
 
 
 # ============================================================
+# Descarga de etiquetas de envio (PDF)
+# ============================================================
+import base64
+import binascii
+from fastapi import HTTPException
+from fastapi.responses import Response
+from sqlalchemy import text as _sql_text
+from app.db.engines import get_engine as _get_engine
+
+
+@router.get("/orders/ml/{ext_id}/label")
+def download_ml_label(
+    ext_id: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> Response:
+    """Descarga la etiqueta PDF de una orden MELI (FLEX, ML FLEX, PR, Punto de Retiro).
+
+    Source: mercado_libre_dev.OrderMercadoLibre.etiqueta_pdf_base64.
+    Devuelve application/pdf con header Content-Disposition para forzar download.
+    """
+    require_area(user, ["ventas", "cs", "logistica"])
+    eng = _get_engine("unidrop")
+    with eng.connect() as c:
+        row = c.execute(_sql_text("""
+            SELECT etiqueta_pdf_base64, number
+            FROM mercado_libre_dev."OrderMercadoLibre"
+            WHERE id::text = :ext
+            LIMIT 1
+        """), {"ext": str(ext_id)}).first()
+    if not row or not row[0]:
+        raise HTTPException(404, f"Etiqueta no disponible para la orden ML {ext_id}")
+    try:
+        pdf_bytes = base64.b64decode(row[0])
+    except binascii.Error:
+        raise HTTPException(500, "PDF mal codificado en la BD")
+    fname = (row[1] or f"orden-ml-{ext_id}") + ".pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/orders/tn/{internal_id}/label")
+def download_tn_label(
+    internal_id: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> Response:
+    """Descarga la etiqueta PDF de una orden Tiendanube (OCA, Lightdata).
+
+    Prueba en este orden:
+    1. oca_shipments.etiqueta_pdf_base64 (por order_tienda_nube_id)
+    2. lightdata_shipments.etiqueta_pdf_base64 (por orden_tn_id)
+    """
+    require_area(user, ["ventas", "cs", "logistica"])
+    eng = _get_engine("unidrop")
+    with eng.connect() as c:
+        # Try OCA first
+        oca = c.execute(_sql_text("""
+            SELECT etiqueta_pdf_base64
+            FROM public.oca_shipments
+            WHERE order_tienda_nube_id::text = :tn AND etiqueta_pdf_base64 IS NOT NULL
+            LIMIT 1
+        """), {"tn": str(internal_id)}).first()
+        pdf_b64 = oca[0] if oca else None
+        carrier = "OCA" if oca else None
+        if not pdf_b64:
+            ld = c.execute(_sql_text("""
+                SELECT etiqueta_pdf_base64
+                FROM public.lightdata_shipments
+                WHERE orden_tn_id::text = :tn AND etiqueta_pdf_base64 IS NOT NULL
+                LIMIT 1
+            """), {"tn": str(internal_id)}).first()
+            pdf_b64 = ld[0] if ld else None
+            carrier = "Lightdata" if ld else None
+        # Get TN number for filename
+        tn_num = c.execute(_sql_text("""
+            SELECT number FROM public.tienda_nube_orders
+            WHERE tienda_nube_id::text = :tn LIMIT 1
+        """), {"tn": str(internal_id)}).first()
+    if not pdf_b64:
+        raise HTTPException(404, f"Etiqueta no disponible para la orden TN {internal_id}")
+    try:
+        pdf_bytes = base64.b64decode(pdf_b64)
+    except binascii.Error:
+        raise HTTPException(500, "PDF mal codificado en la BD")
+    fname = (tn_num[0] if tn_num and tn_num[0] else f"orden-tn-{internal_id}") + f"-{carrier or 'envio'}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ============================================================
 # UNIDROP END CONSUMER 360 (compradores finales de los dropshippers)
 # ============================================================
 from app.services import end_consumers_unidrop as ec_unidrop_svc
