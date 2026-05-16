@@ -125,3 +125,78 @@ Story,Vista mobile dedicada PWA,Actualmente responsive,To Do,Low,13,,Frontend,mo
 Story,API publica con OAuth,Para integraciones externas,To Do,Low,13,,Backend,api
 Story,Dark mode,Tokens ya soportan,To Do,Low,3,,Frontend,theme
 Story,Internacionalizacion EN/PT,Hoy hardcoded ES,To Do,Low,8,,Frontend,i18n
+Epic,UD-7 Dropshipper 360 V2,Vista 360 ampliada con pipeline 5-step combos facturas etiquetas returns y analitica,Done,Highest,42,,Backend;Frontend,dropshipper
+Story,DROP number resolution via OML.userId,Reemplaza join roto con _OrderMercadoLibreToPaymentIntent,Done,Highest,3,UD-7,Backend,bug-fix
+Story,Combo detection y filtro Combo/Individual,Detecta orderType=COMBO y agrega filtro en tabla,Done,High,3,UD-7,Backend;Frontend,combos
+Story,Combo pricing redistribution proporcional al costo,Fix bug 3x inflacion combos ML,Done,Highest,5,UD-7,Backend,bug-fix
+Story,SKU image fix combos,Usa OrderItemMercadoLibre.imagesUrls primero fallback Variant,Done,High,3,UD-7,Backend,images
+Story,Pipeline 5-icon compact en tabla con tooltip,Hover muestra status fecha y hora exacta,Done,High,5,UD-7,Frontend,ux
+Story,Pipeline 5-step detail en modal con fechas debajo,Creada Pagada Empaquetado En camino Entregada,Done,High,3,UD-7,Frontend,ux
+Story,ML enrichment shipping_address_detail JSONB,Parsea calle ciudad CP comment receiver phone,Done,High,3,UD-7,Backend,enrichment
+Story,ML enrichment tags array + statusDetail + dateClosed,Tags como chips en modal,Done,Medium,2,UD-7,Backend,enrichment
+Story,ML enrichment notification_pack/ship + cancel_by_unidrop,Bloque Operativa,Done,Medium,2,UD-7,Backend,enrichment
+Story,ML enrichment label_downloaded + date_label_downloaded,Para mostrar etiqueta descargada en pipeline,Done,High,2,UD-7,Backend,enrichment
+Story,TN enrichment shipping_address JSONB,Parsea direccion completa,Done,High,3,UD-7,Backend,enrichment
+Story,TN enrichment items cost + order_type,Combos TN funcionan ahora,Done,High,3,UD-7,Backend,enrichment
+Story,TN enrichment gateway + gateway_link,Link Ver pago,Done,Medium,2,UD-7,Backend,enrichment
+Story,TN enrichment timestamps paid/completed/closed/cancelled,Grid timestamps modal,Done,Medium,2,UD-7,Backend,enrichment
+Story,TN enrichment notes + owner_note,Bloques amber/blue,Done,Low,1,UD-7,Backend,enrichment
+Story,Carrier enrichment OCA tracking + direccion,numero_envio + ultima_actualizacion + dir completa,Done,Medium,3,UD-7,Backend,carriers
+Story,Carrier enrichment Lightdata tracking_url y tracking_qr,Boton Seguir envio,Done,Medium,3,UD-7,Backend,carriers
+Story,Carrier shipped_at/delivered_at inferidos desde status text,OCA Entregado / Lightdata ENTREGADO etc,Done,Medium,3,UD-7,Backend,carriers
+Story,Contabilium invoice integration,idVentaIntegracion matchea OML.id o TN.tienda_nube_id,Done,Highest,5,UD-7,Backend,contabilium
+Story,Ver Factura button abre linkPublico,3789 invoices linkeadas,Done,High,2,UD-7,Frontend,contabilium
+Story,Bloque Factura emitida en modal,Tipo numero CAE total,Done,Medium,2,UD-7,Frontend,contabilium
+Story,Label PDF download endpoint ML/TN,GET /api/dashboards/orders/{ml|tn}/{id}/label,Done,Highest,3,UD-7,Backend,etiquetas
+Story,Etiqueta button descarga PDF,Maneja FLEXI PR Full OCA Lightdata,Done,High,2,UD-7,Frontend,etiquetas
+Story,MercadoLibreReturn detail enrichment,status motivo monto tracking photos,Done,Medium,3,UD-7,Backend,returns
+Story,Bloque Devoluciones MELI en modal,Detalle completo con foto discrepancia,Done,Medium,2,UD-7,Frontend,returns
+Story,Modal redesign max-w-5xl header sticky,Layout amplio para toda la data,Done,Medium,2,UD-7,Frontend,ux
+Story,Tabla productos modal Costo/Precio/Ganancia per linea + totales,Como Unistore,Done,High,3,UD-7,Frontend,ux
+Story,Row expandido replica tabla productos del modal,Detalle completo sin abrir modal,Done,High,3,UD-7,Frontend,ux
+Story,SKU clickeable abre Producto 360,En modal y inline,Done,Medium,2,UD-7,Frontend,navigation
+Story,Metodo envio clean column,FLEXI/ML FLEX/FULL/PR/OCA filtrando status,Done,Medium,2,UD-7,Frontend,ux
+Story,Columna Costo invoice.total Contabilium,Alineado con finanzas,Done,High,2,UD-7,Frontend,finance
+Story,Columna Ganancia Ingreso menos Costo,Verde/rosa segun signo,Done,Medium,1,UD-7,Frontend,finance
+Story,Combo analytics dropshipper 360,Dual bar + top 10 SKUs con foto qty revenue,Done,High,5,UD-7,Backend;Frontend,analytics
+Story,Top clientes finales combinados TN+ML,Columna Canal,Done,Medium,3,UD-7,Backend,clients
+Story,Ingreso omnicanal KPI ML+TN sumados siempre,Antes mostraba Solo MELI / Solo TN,Done,High,2,UD-7,Frontend,kpi
+Story,Segmentacion omnicanal cards ML/TN siempre visibles,Badge ACTIVO/SIN VENTAS,Done,High,2,UD-7,Frontend,kpi
+Epic,UD-8 Notas equipo + Reminders,Source of truth para anotaciones operativas y recordatorios,Done,High,12,,Backend;Frontend,collaboration
+Story,Tabla dropshipper_notes Supabase,7 categorias + soft-archive,Done,High,2,UD-8,Backend,notes
+Story,CRUD /api/dropshipper-notes,GET/POST/PATCH/archive,Done,High,2,UD-8,Backend,notes
+Story,Componente DropshipperNotes inline vista 360,Form compacto con selector categoria,Done,High,3,UD-8,Frontend,notes
+Story,Tabla reminders Supabase,target_type + due_at + completed_at,Done,Medium,2,UD-8,Backend,reminders
+Story,CRUD /api/reminders con filtros status,pending/overdue/upcoming/done,Done,Medium,2,UD-8,Backend,reminders
+Story,RBAC: autor/admin para editar notas - dueno para reminders,Permisos granulares,Done,Medium,1,UD-8,Backend,security
+Epic,UD-9 MCP Server,Servidor Model Context Protocol stdio + HTTP/SSE remoto en Railway,Done,Highest,32,,Backend;DevOps,mcp
+Story,Paquete Python unidata-mcp FastMCP,mcp/ en repo,Done,High,3,UD-9,Backend,mcp
+Story,10 read tools (dropshippers/dashboards/run_sql/etc),Cubren BI consultivo,Done,High,5,UD-9,Backend,mcp
+Story,Transport stdio (unidata-mcp CLI),Para uso local,Done,Medium,2,UD-9,Backend,mcp
+Story,Endpoint POST /api/auth/mcp-token JWT 90d,Reusa issue_token con scope=mcp,Done,High,2,UD-9,Backend,auth
+Story,Seccion Token para Claude (MCP) en /dashboard/account,Walkthrough + JSON copy,Done,High,3,UD-9,Frontend,onboarding
+Story,Transport HTTP/SSE deployable Railway,Servicio mcp en mcp-production-b8c5,Done,High,5,UD-9,DevOps,mcp
+Story,Middleware per-request extrae JWT del Authorization header,contextvar isolation,Done,Highest,3,UD-9,Backend,mcp
+Story,Test concurrencia 3 requests paralelos no se pisan,contextvars.ContextVar verificado,Done,Medium,1,UD-9,Backend,testing
+Story,6 write tools CS actions (list/take/complete/cancel/create/note),Cola tareas via MCP,Done,High,3,UD-9,Backend,mcp
+Story,3 write tools IT Alerts (list/resolve/unresolve),Mark alertas,Done,Medium,1,UD-9,Backend,mcp
+Story,3 write tools Dropshipper Notes (add/list/archive),Source of truth via Claude,Done,High,2,UD-9,Backend,mcp
+Story,3 write tools Reminders (create/list_my/complete),Recordatorios personales,Done,Medium,1,UD-9,Backend,mcp
+Story,Config snippet remoto via mcp-remote npx bridge,Compatible Claude Desktop actuales,Done,Medium,1,UD-9,Frontend,docs
+Epic,UD-10 Schema Fixes Critical,Bugs root cause de columnas inexistentes que causaban GMV=0 silencioso,Done,Highest,18,,Backend,bug-fix
+Story,Fix MercadoLibreUserAccount.userId no existe,Causaba GMV=0 - usar OML.userId,Done,Highest,3,UD-10,Backend,schema
+Story,Fix PaymentMercadoLibre.totalAmount no existe,Usar OML.totalAmount directo - es transaction_amount,Done,Highest,3,UD-10,Backend,schema
+Story,Fix SKU Omnichannel Unidrop TN/MELI Sin ventas registradas,Columnas reales sellerSku tienda_nube_order_id,Done,Highest,3,UD-10,Backend,schema
+Story,Fix tienda_nube_order_items.order_id no existe,Usar tienda_nube_order_id,Done,High,2,UD-10,Backend,schema
+Story,Fix OrderItemMercadoLibre.mlOrderId no existe,Usar orderId (FK a OML.id),Done,High,2,UD-10,Backend,schema
+Story,Cubrir 3 paths OML matching (userId/mlUserId via User/DROP prefix),Para todos los dropshippers,Done,Highest,3,UD-10,Backend,schema
+Story,Sidebar admin respeta is_admin ademas de role=admin,Multiples admins habilitados,Done,High,2,UD-10,Frontend,rbac
+Epic,UD-11 Meta Ads (Pending),Sync Meta Marketing API para gasto en pautas + ROAS,Pending,High,32,,Backend;Frontend,meta-ads
+Story,Tablas meta_ad_accounts/campaigns/adsets/ads/insights_daily,Supabase schema,Pending,High,3,UD-11,Backend,schema
+Story,Sync service con facebook-business SDK,Pull diario 1am ART,Pending,High,8,UD-11,Backend,integration
+Story,Endpoints /api/marketing/meta/{overview,campaigns,adsets,ads},KPIs + breakdown,Pending,High,5,UD-11,Backend,api
+Story,Seccion Meta Ads en /dashboard/marketing,Charts + drill-down,Pending,High,8,UD-11,Frontend,marketing
+Story,4 tools MCP get_meta_spend/list_campaigns/etc,Acceso desde Claude,Pending,Medium,3,UD-11,Backend,mcp
+Story,Cron Railway 0 4 * * *,Diario 1am ART,Pending,Medium,2,UD-11,DevOps,cron
+Story,Boton Sync ahora admin-only,Forzar refresh,Pending,Low,2,UD-11,Frontend,admin
+
