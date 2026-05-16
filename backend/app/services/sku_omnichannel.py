@@ -123,6 +123,7 @@ def _unistore_meli(eng, sku: str) -> dict:
 
 
 def _unidrop_tn(eng, sku: str) -> dict:
+    """tienda_nube_order_items.tienda_nube_order_id = tienda_nube_orders.tienda_nube_id"""
     try:
         rows = q(eng, """
             SELECT
@@ -132,13 +133,13 @@ def _unidrop_tn(eng, sku: str) -> dict:
                 SUM(CASE WHEN tno.created_at >= NOW() - INTERVAL '30 days' THEN oi.quantity * oi.price ELSE 0 END)::float AS r30,
                 SUM(CASE WHEN tno.created_at >= NOW() - INTERVAL '90 days' THEN oi.quantity * oi.price ELSE 0 END)::float AS r90,
                 SUM(oi.quantity * oi.price)::float AS rt,
-                COUNT(DISTINCT oi.order_id)::int AS orders,
+                COUNT(DISTINCT oi.tienda_nube_order_id)::int AS orders,
                 MIN(tno.created_at)::text AS first_sale,
                 MAX(tno.created_at)::text AS last_sale,
                 MAX(oi.name) AS name,
                 AVG(oi.price)::float AS avg_price
             FROM public.tienda_nube_order_items oi
-            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.order_id
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
             WHERE oi.sku = :sku
               AND tno.payment_status::text = 'paid'
         """, {"sku": sku}) or []
@@ -149,47 +150,38 @@ def _unidrop_tn(eng, sku: str) -> dict:
 
 
 def _unidrop_meli(eng, sku: str) -> dict:
-    """OrderItemMercadoLibre + OrderMercadoLibre. Como no tenemos certeza absoluta
-    de los nombres de columnas, intentamos las dos convenciones mas probables
-    (sellerCustomField y seller_custom_field / sku / seller_sku) y devolvemos
-    el primero que matchee."""
-    # Convenciones probadas en orden de probabilidad (PascalCase del schema TN-style)
-    candidates = [
-        ('"sellerCustomField"', '"orderId"', '"unitPrice"', '"quantity"', '"title"'),
-        ('"seller_custom_field"', '"order_id"', '"unit_price"', '"quantity"', '"title"'),
-        ('"sku"', '"orderId"', '"unitPrice"', '"quantity"', '"title"'),
-        ('"seller_sku"', '"order_id"', '"unit_price"', '"quantity"', '"title"'),
-    ]
-    last_err = None
-    for sku_col, oid_col, price_col, qty_col, title_col in candidates:
-        try:
-            sql = f"""
-                SELECT
-                    SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '30 days' THEN oi.{qty_col} ELSE 0 END)::int AS u30,
-                    SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '90 days' THEN oi.{qty_col} ELSE 0 END)::int AS u90,
-                    SUM(oi.{qty_col})::int AS ut,
-                    SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '30 days' THEN oi.{qty_col} * oi.{price_col} ELSE 0 END)::float AS r30,
-                    SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '90 days' THEN oi.{qty_col} * oi.{price_col} ELSE 0 END)::float AS r90,
-                    SUM(oi.{qty_col} * oi.{price_col})::float AS rt,
-                    COUNT(DISTINCT oi.{oid_col})::int AS orders,
-                    MIN(o."dateCreated")::text AS first_sale,
-                    MAX(o."dateCreated")::text AS last_sale,
-                    MAX(oi.{title_col}) AS name,
-                    AVG(oi.{price_col})::float AS avg_price
-                FROM mercado_libre_dev."OrderItemMercadoLibre" oi
-                JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi.{oid_col}
-                WHERE oi.{sku_col} = :sku
-                  AND o."status" IN ('paid','confirmed','shipped','delivered')
-            """
-            rows = q(eng, sql, {"sku": sku}) or []
-            return _normalize_row(rows[0] if rows else None)
-        except Exception as e:
-            last_err = str(e)[:200]
-            continue
-    log.warning("unidrop_meli all candidates failed sku=%s err=%s", sku, last_err)
-    d = _empty_channel()
-    d["error"] = (last_err or "OrderItemMercadoLibre no accesible")[:200]
-    return d
+    """OrderItemMercadoLibre + OrderMercadoLibre.
+    Schema real (confirmado en unidrop_api):
+    - OrderItemMercadoLibre.sellerSku (camelCase)
+    - OrderItemMercadoLibre.orderId (bigint, FK -> OML.id)
+    - OrderItemMercadoLibre.unitPrice, quantity, title, unitCost
+    - OrderMercadoLibre.id (bigint, mismo ID externo de ML)
+    - OrderMercadoLibre.dateCreated, status
+    """
+    try:
+        rows = q(eng, """
+            SELECT
+                SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '30 days' THEN oi.quantity ELSE 0 END)::int AS u30,
+                SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '90 days' THEN oi.quantity ELSE 0 END)::int AS u90,
+                SUM(oi.quantity)::int AS ut,
+                SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '30 days' THEN oi.quantity * oi."unitPrice" ELSE 0 END)::float AS r30,
+                SUM(CASE WHEN o."dateCreated" >= NOW() - INTERVAL '90 days' THEN oi.quantity * oi."unitPrice" ELSE 0 END)::float AS r90,
+                SUM(oi.quantity * oi."unitPrice")::float AS rt,
+                COUNT(DISTINCT oi."orderId")::int AS orders,
+                MIN(o."dateCreated")::text AS first_sale,
+                MAX(o."dateCreated")::text AS last_sale,
+                MAX(oi.title) AS name,
+                AVG(oi."unitPrice")::float AS avg_price
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE oi."sellerSku" = :sku
+              AND (o."status" IN ('paid','confirmed','shipped','delivered')
+                   OR o."paidAmount" > 0)
+        """, {"sku": sku}) or []
+        return _normalize_row(rows[0] if rows else None)
+    except Exception as e:
+        log.warning("unidrop_meli fail sku=%s err=%s", sku, e)
+        d = _empty_channel(); d["error"] = str(e)[:200]; return d
 
 
 def _monthly_by_channel(eng_uni, eng_uni_dropper, sku: str) -> list[dict]:
@@ -243,7 +235,7 @@ def _monthly_by_channel(eng_uni, eng_uni_dropper, sku: str) -> list[dict]:
             SELECT to_char(date_trunc('month', tno.created_at), 'YYYY-MM'),
                    SUM(oi.quantity)::int, SUM(oi.quantity * oi.price)::float
             FROM public.tienda_nube_order_items oi
-            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.order_id
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
             WHERE oi.sku = :sku AND tno.payment_status::text = 'paid'
               AND tno.created_at >= NOW() - INTERVAL '12 months'
             GROUP BY 1
@@ -252,31 +244,22 @@ def _monthly_by_channel(eng_uni, eng_uni_dropper, sku: str) -> list[dict]:
     except Exception as e:
         log.warning("monthly unidrop_tn fail: %s", e)
 
-    # Unidrop MELI — solo si encontramos la convencion correcta
-    candidates = [
-        ('"sellerCustomField"', '"orderId"', '"unitPrice"', '"quantity"'),
-        ('"seller_custom_field"', '"order_id"', '"unit_price"', '"quantity"'),
-        ('"sku"', '"orderId"', '"unitPrice"', '"quantity"'),
-        ('"seller_sku"', '"order_id"', '"unit_price"', '"quantity"'),
-    ]
-    for sku_col, oid_col, price_col, qty_col in candidates:
-        try:
-            sql = f"""
-                SELECT to_char(date_trunc('month', o."dateCreated"), 'YYYY-MM'),
-                       SUM(oi.{qty_col})::int,
-                       SUM(oi.{qty_col} * oi.{price_col})::float
-                FROM mercado_libre_dev."OrderItemMercadoLibre" oi
-                JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi.{oid_col}
-                WHERE oi.{sku_col} = :sku
-                  AND o."status" IN ('paid','confirmed','shipped','delivered')
-                  AND o."dateCreated" >= NOW() - INTERVAL '12 months'
-                GROUP BY 1
-            """
-            for r in q(eng_uni_dropper, sql, {"sku": sku}) or []:
-                _add(r[0], "unidrop_meli", r[1], r[2])
-            break
-        except Exception:
-            continue
+    # Unidrop MELI — schema real: sellerSku / orderId / unitPrice / quantity
+    try:
+        for r in q(eng_uni_dropper, """
+            SELECT to_char(date_trunc('month', o."dateCreated"), 'YYYY-MM'),
+                   SUM(oi.quantity)::int,
+                   SUM(oi.quantity * oi."unitPrice")::float
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE oi."sellerSku" = :sku
+              AND (o."status" IN ('paid','confirmed','shipped','delivered') OR o."paidAmount" > 0)
+              AND o."dateCreated" >= NOW() - INTERVAL '12 months'
+            GROUP BY 1
+        """, {"sku": sku}) or []:
+            _add(r[0], "unidrop_meli", r[1], r[2])
+    except Exception as e:
+        log.warning("monthly unidrop_meli fail: %s", e)
 
     return [{"mes": m, **vals} for m, vals in sorted(months.items())]
 

@@ -97,7 +97,9 @@ def dropshippers_master(
                COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
                COUNT(*)::int AS ordenes_totales,
                MAX(o."dateCreated") FILTER (WHERE o."status"='paid') AS ultima_venta,
-               COALESCE(SUM(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
+               -- GMV: usar OML.totalAmount directo (no PaymentMercadoLibre join — falla para muchas ordenes).
+               -- Fallback a p.gmv solo si totalAmount es null/0.
+               COALESCE(SUM(COALESCE(NULLIF(o."totalAmount", 0), p.gmv, 0)) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
                COALESCE(SUM(o."merchandise_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_mercaderia,
                COALESCE(SUM(o."shipping_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_envio,
                COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,

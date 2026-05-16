@@ -538,21 +538,25 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
 
         {/* KPIs principales */}
         {(() => {
-          const gmvTnKpi = data.ventas_tn?.gmv ?? 0;
-          const hasTnKpi = gmvTnKpi > 0;
-          const gmvTotalKpi = v.gmv + gmvTnKpi;
+          const gmvMl = v.gmv;
+          const gmvTn = data.ventas_tn?.gmv ?? 0;
+          const gmvTotal = gmvMl + gmvTn;
+          const ventasTotalCnt = v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0);
+          const hasMl = gmvMl > 0 || v.ventas_pagadas > 0;
+          const hasTn = gmvTn > 0 || (data.ventas_tn?.ventas_pagadas ?? 0) > 0;
+          const mixHint = hasMl && hasTn
+            ? `ML ${formatCurrency(gmvMl)} · TN ${formatCurrency(gmvTn)}`
+            : hasTn ? "Solo TN" : hasMl ? "Solo MELI" : "Sin ventas";
           return <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
           <KpiBox
             icon={DollarSign}
-            label={hasTnKpi ? "GMV Total (MELI+TN)" : "GMV MELI"}
-            value={formatCurrency(hasTnKpi ? gmvTotalKpi : v.gmv)}
+            label="Ingreso omnicanal"
+            value={formatCurrency(gmvTotal)}
             accent="emerald"
-            hint={hasTnKpi
-              ? `ML ${formatCurrency(v.gmv)} · TN ${formatCurrency(gmvTnKpi)}`
-              : `${formatNumber(v.ventas_pagadas)} ventas pagadas en Mercado Libre`}
+            hint={mixHint}
           />
           <KpiBox icon={Wallet} label="Margen Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="profit_for_subscription: ganancia de Unidrop como distribuidor por cada orden ML" />
+                  hint="profit_for_subscription: ganancia de Unidrop por cada orden ML" />
           <KpiBox
             icon={TrendingUp}
             label="Ticket a Unidrop"
@@ -560,18 +564,18 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             accent="amber"
             hint={
               v.ticket_promedio_intent !== undefined && v.ticket_promedio_intent > 0
-                ? `Promedio pagado a Unidrop por orden ML (PaymentIntent / ${formatNumber(v.ventas_pagadas_intent ?? v.ventas_pagadas)} órd)`
-                : "Promedio GMV por venta MELI pagada"
+                ? `Promedio pagado por orden (PI / ${formatNumber(v.ventas_pagadas_intent ?? v.ventas_pagadas)} órd)`
+                : "Promedio GMV por venta MELI"
             }
           />
           <KpiBox
             icon={ShoppingBag}
             label="Órdenes pagadas"
-            value={formatNumber(v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0))}
+            value={formatNumber(ventasTotalCnt)}
             accent="primary"
-            hint={hasTnKpi
+            hint={hasMl && hasTn
               ? `ML ${formatNumber(v.ventas_pagadas)} · TN ${formatNumber(data.ventas_tn!.ventas_pagadas)}`
-              : v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : "Sin cancelaciones"}
+              : v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : `${formatNumber(v.ventas_pagadas)} ML · ${formatNumber(data.ventas_tn?.ventas_pagadas ?? 0)} TN`}
           />
           <KpiBox
             icon={Calendar}
@@ -600,6 +604,48 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   hint="Suma costos de mercadería en órdenes pagadas" />
           <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
                   hint="Suma costos de envío MELI" />
+        </div>
+
+        {/* Segmentación omnicanal — ML vs TN, visible siempre aunque uno sea 0 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
+          <div className="bg-yellow-50/40 border border-yellow-200 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-yellow-900 flex items-center gap-1.5">
+                <Award size={11} /> Canal Mercado Libre
+              </div>
+              {hasMl ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">ACTIVO</span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-zinc-100 text-zinc-500 border border-zinc-200">SIN VENTAS</span>
+              )}
+            </div>
+            <div className="text-2xl font-extrabold text-yellow-900 tabular-nums">{formatCurrency(gmvMl)}</div>
+            <div className="text-[11px] text-yellow-800/70 mt-1">
+              {formatNumber(v.ventas_pagadas)} órdenes pagadas
+              {v.profit_unidrop > 0 && ` · Margen Unidrop ${formatCurrency(v.profit_unidrop)}`}
+            </div>
+          </div>
+          <div className="bg-cyan-50/40 border border-cyan-200 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-900 flex items-center gap-1.5">
+                <ShoppingBag size={11} /> Canal Tienda Nube
+              </div>
+              {hasTn ? (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700 border border-emerald-200">ACTIVO</span>
+              ) : (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-zinc-100 text-zinc-500 border border-zinc-200">SIN VENTAS</span>
+              )}
+            </div>
+            <div className="text-2xl font-extrabold text-cyan-900 tabular-nums">{formatCurrency(gmvTn)}</div>
+            <div className="text-[11px] text-cyan-800/70 mt-1">
+              {formatNumber(data?.ventas_tn?.ventas_pagadas ?? 0)} órdenes pagadas
+              {(() => {
+                const tConn = data?.ventas_tn?.tiendas_conectadas ?? 0;
+                if (tConn <= 0) return null;
+                return ` · ${tConn} tienda${tConn === 1 ? "" : "s"} conectada${tConn === 1 ? "" : "s"}`;
+              })()}
+            </div>
+          </div>
         </div>;
         })()}
 
