@@ -519,6 +519,10 @@ def dropshipper_detail(
     # Detalle desde OrderMercadoLibre - linkage triple: por mlAccount.userId,
     # por sellerId, o por number prefix DROP-{dni}-. Asi capturamos a dropshippers
     # cuyas ventas no estan linkeadas via mla.userId pero si tienen number.
+    # IMPORTANTE: MercadoLibreUserAccount NO tiene columna "userId" — el link a
+    # User es via User.mercadoLibreAccountId = MLA.id. Pero OML.userId YA linkea
+    # directo al dropshipper, asi que matcheamos por eso (+ fallback al
+    # number prefix DROP-{dni}-).
     ventas = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
@@ -526,21 +530,15 @@ def dropshipper_detail(
             COUNT(*) FILTER (WHERE o."status"='cancelled')::int AS canceladas,
             MAX(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS ultima_venta,
             MIN(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS primera_venta,
-            -- GMV directo de OML.totalAmount (siempre populated per-order).
-            -- Sin LEFT JOIN PaymentMercadoLibre — la columna que usaba (totalAmount)
-            -- no existe en esa tabla (es transaction_amount), por eso la query
-            -- entera fallaba en silencio y devolvia 0.
             COALESCE(SUM(o."totalAmount") FILTER (WHERE o."status"='paid'),0)::float AS gmv,
             COALESCE(SUM(o."merchandise_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_mercaderia,
             COALESCE(SUM(o."shipping_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_envio,
             COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
             COALESCE(AVG(o."totalAmount") FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
         FROM mercado_libre_dev."OrderMercadoLibre" o
-        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         WHERE (
-              mla."userId" = :uid
+              o."userId" = :uid
            OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix)
-              OR o."userId" = :uid
         )
           AND o."dateCreated" >= NOW() - make_interval(days => :d)
     """, {"uid": int(user_id), "d": int(days), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
