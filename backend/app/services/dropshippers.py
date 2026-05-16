@@ -520,9 +520,11 @@ def dropshipper_detail(
     # por sellerId, o por number prefix DROP-{dni}-. Asi capturamos a dropshippers
     # cuyas ventas no estan linkeadas via mla.userId pero si tienen number.
     # IMPORTANTE: MercadoLibreUserAccount NO tiene columna "userId" — el link a
-    # User es via User.mercadoLibreAccountId = MLA.id. Pero OML.userId YA linkea
-    # directo al dropshipper, asi que matcheamos por eso (+ fallback al
-    # number prefix DROP-{dni}-).
+    # User es via User.mercadoLibreAccountId = MLA.id. Para no perder dropshippers
+    # cubrimos 3 paths:
+    # 1) o.userId = uid (link directo nuevo)
+    # 2) o.sellerId = MLA.mlUserId via User.mercadoLibreAccountId (link via MELI account)
+    # 3) o.number LIKE 'DROP-{dni}-%' (fallback por DNI)
     ventas = q(eng, """
         SELECT
             COUNT(*) FILTER (WHERE o."status"='paid')::int AS ventas_pagadas,
@@ -539,6 +541,12 @@ def dropshipper_detail(
         WHERE (
               o."userId" = :uid
            OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix)
+           OR o."sellerId"::text IN (
+                SELECT mla."mlUserId"::text
+                FROM mercado_libre_dev."MercadoLibreUserAccount" mla
+                INNER JOIN public."User" u ON u."mercadoLibreAccountId" = mla.id
+                WHERE u.id = :uid
+              )
         )
           AND o."dateCreated" >= NOW() - make_interval(days => :d)
     """, {"uid": int(user_id), "d": int(days), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
