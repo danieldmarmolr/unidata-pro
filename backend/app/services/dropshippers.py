@@ -526,24 +526,21 @@ def dropshipper_detail(
             COUNT(*) FILTER (WHERE o."status"='cancelled')::int AS canceladas,
             MAX(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS ultima_venta,
             MIN(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS primera_venta,
-            -- GMV: usar OML.totalAmount per-order (siempre populated) en vez de
-            -- SUM(p.gmv) del LEFT JOIN PaymentMercadoLibre que retorna null para
-            -- muchas ordenes. Fallback a p.gmv si totalAmount es null.
-            COALESCE(SUM(COALESCE(NULLIF(o."totalAmount", 0), p.gmv, 0)) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
+            -- GMV directo de OML.totalAmount (siempre populated per-order).
+            -- Sin LEFT JOIN PaymentMercadoLibre — la columna que usaba (totalAmount)
+            -- no existe en esa tabla (es transaction_amount), por eso la query
+            -- entera fallaba en silencio y devolvia 0.
+            COALESCE(SUM(o."totalAmount") FILTER (WHERE o."status"='paid'),0)::float AS gmv,
             COALESCE(SUM(o."merchandise_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_mercaderia,
             COALESCE(SUM(o."shipping_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_envio,
             COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
-            COALESCE(AVG(COALESCE(NULLIF(o."totalAmount", 0), p.gmv, 0)) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
+            COALESCE(AVG(o."totalAmount") FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
         FROM mercado_libre_dev."OrderMercadoLibre" o
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
-        LEFT JOIN (
-            SELECT "orderId", SUM("totalAmount")::float AS gmv
-            FROM mercado_libre_dev."PaymentMercadoLibre"
-            GROUP BY 1
-        ) p ON p."orderId" = o.id
         WHERE (
               mla."userId" = :uid
            OR (:dni IS NOT NULL AND o."number" LIKE :num_prefix)
+              OR o."userId" = :uid
         )
           AND o."dateCreated" >= NOW() - make_interval(days => :d)
     """, {"uid": int(user_id), "d": int(days), "dni": drop_dni or None, "num_prefix": drop_number_prefix or ""}) or [(0, 0, 0, None, None, 0, 0, 0, 0, 0)]
@@ -901,7 +898,7 @@ def dropshipper_detail(
         FROM mercado_libre_dev."OrderMercadoLibre" o
         INNER JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
-            SELECT "orderId", SUM("totalAmount")::float AS gmv
+            SELECT "orderId", SUM(transaction_amount)::float AS gmv
             FROM mercado_libre_dev."PaymentMercadoLibre"
             GROUP BY 1
         ) p ON p."orderId" = o.id
@@ -1024,7 +1021,7 @@ def dropshipper_detail(
                            o."number" AS number
                     FROM mercado_libre_dev."OrderMercadoLibre" o
                     LEFT JOIN (
-                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        SELECT "orderId", SUM(transaction_amount)::float AS gmv
                         FROM mercado_libre_dev."PaymentMercadoLibre"
                         GROUP BY 1
                     ) p ON p."orderId" = o.id
@@ -1319,7 +1316,7 @@ def dropshipper_unified_orders(
                            o."shipping_type"
                     FROM {sch}."OrderMercadoLibre" o
                     LEFT JOIN (
-                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        SELECT "orderId", SUM(transaction_amount)::float AS gmv
                         FROM {sch}."PaymentMercadoLibre"
                         GROUP BY 1
                     ) p ON p."orderId" = o.id
@@ -1416,7 +1413,7 @@ def dropshipper_unified_orders(
                        o."shipping_type"
                 FROM mercado_libre_dev."OrderMercadoLibre" o
                 LEFT JOIN (
-                    SELECT "orderId", SUM("totalAmount")::float AS gmv
+                    SELECT "orderId", SUM(transaction_amount)::float AS gmv
                     FROM mercado_libre_dev."PaymentMercadoLibre"
                     GROUP BY 1
                 ) p ON p."orderId" = o.id
@@ -1518,7 +1515,7 @@ def dropshipper_unified_orders(
                     FROM mercado_libre_dev."_OrderMercadoLibreToPaymentIntent" jt
                     JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = jt."{_jt_a}"
                     LEFT JOIN (
-                        SELECT "orderId", SUM("totalAmount")::float AS gmv
+                        SELECT "orderId", SUM(transaction_amount)::float AS gmv
                         FROM mercado_libre_dev."PaymentMercadoLibre"
                         GROUP BY 1
                     ) p ON p."orderId" = o.id
