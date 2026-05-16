@@ -526,11 +526,14 @@ def dropshipper_detail(
             COUNT(*) FILTER (WHERE o."status"='cancelled')::int AS canceladas,
             MAX(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS ultima_venta,
             MIN(o."dateCreated") FILTER (WHERE o."status"='paid')::text AS primera_venta,
-            COALESCE(SUM(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
+            -- GMV: usar OML.totalAmount per-order (siempre populated) en vez de
+            -- SUM(p.gmv) del LEFT JOIN PaymentMercadoLibre que retorna null para
+            -- muchas ordenes. Fallback a p.gmv si totalAmount es null.
+            COALESCE(SUM(COALESCE(NULLIF(o."totalAmount", 0), p.gmv, 0)) FILTER (WHERE o."status"='paid'),0)::float AS gmv,
             COALESCE(SUM(o."merchandise_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_mercaderia,
             COALESCE(SUM(o."shipping_cost") FILTER (WHERE o."status"='paid'),0)::float AS costo_envio,
             COALESCE(SUM(o."profit_for_subscription") FILTER (WHERE o."status"='paid'),0)::float AS profit_unidrop,
-            COALESCE(AVG(p.gmv) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
+            COALESCE(AVG(COALESCE(NULLIF(o."totalAmount", 0), p.gmv, 0)) FILTER (WHERE o."status"='paid'),0)::float AS ticket_promedio
         FROM mercado_libre_dev."OrderMercadoLibre" o
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."mlUserId"::text = o."sellerId"::text
         LEFT JOIN (
