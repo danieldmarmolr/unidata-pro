@@ -2279,6 +2279,91 @@ def dropshipper_unified_orders(
             except Exception as _disc_err:
                 log.warning("ML stub enrichment fail uid=%s: %s", user_id, str(_disc_err)[:150])
 
+    # 4.4) Enrich con Contabilium invoice — number, tipo, linkPublico, fecha, total.
+    # ContabilliumInvoice.idVentaIntegracion = ML order.id O tienda_nube_id.
+    # Para ML usamos external_id (que es OML.id). Para TN usamos external_id
+    # (que es tienda_nube_id::text). Ambos castean a bigint OK.
+    all_ext_ids = [r["external_id"] for r in ml_rows + tn_rows if r.get("external_id")]
+    if all_ext_ids:
+        try:
+            _ext_lit = "ARRAY[" + ",".join("'" + i + "'" for i in all_ext_ids) + "]::text[]"
+            inv_rows = q(eng, f"""
+                SELECT "idVentaIntegracion"::text         AS ext_id,
+                       id                                  AS inv_id,
+                       COALESCE("tipoFc", '')              AS tipo,
+                       COALESCE("numeroComprobante", '')   AS numero,
+                       COALESCE("linkPublico", '')         AS link,
+                       "fechaEmision"::text                AS fecha,
+                       COALESCE(total, 0)::float           AS total,
+                       COALESCE(cae, '')                   AS cae,
+                       "puntoVenta"::text                  AS pv
+                FROM contabillium_dev."ContabilliumInvoice"
+                WHERE "idVentaIntegracion"::text = ANY({_ext_lit})
+            """) or []
+            if inv_rows:
+                inv_map = {r[0]: r for r in inv_rows if r[0]}
+                _patched_inv = 0
+                for r in ml_rows + tn_rows:
+                    ext = r.get("external_id")
+                    if ext and ext in inv_map:
+                        i = inv_map[ext]
+                        r["invoice"] = {
+                            "id": int(i[1]) if i[1] else None,
+                            "tipo": i[2] or "",
+                            "numero": i[3] or "",
+                            "link": i[4] or "",
+                            "fecha": i[5],
+                            "total": round(float(i[6]), 2),
+                            "cae": i[7] or "",
+                            "punto_venta": i[8] or "",
+                        }
+                        _patched_inv += 1
+                log.info("Invoice enrich uid=%s inv_rows=%d patched=%d", user_id, len(inv_rows), _patched_inv)
+        except Exception as _inv_err:
+            log.warning("Invoice enrich fail uid=%s: %s", user_id, str(_inv_err)[:200])
+
+    # 4.4b) Enrich con MercadoLibreReturn detalle (ML only — orderId es el bigint externo)
+    if ml_rows:
+        ml_ext_for_ret = [r["external_id"] for r in ml_rows if r.get("external_id")]
+        if ml_ext_for_ret:
+            try:
+                _ret_lit = "ARRAY[" + ",".join("'" + i + "'" for i in ml_ext_for_ret) + "]::text[]"
+                ret_rows = q(eng, f"""
+                    SELECT "orderId"::text                  AS ext_id,
+                           COALESCE(status, '')             AS status,
+                           COALESCE(reason, '')             AS reason,
+                           COALESCE("amountToRefund", 0)::float AS amount,
+                           COALESCE("returnTrackingCode", '') AS tracking,
+                           COALESCE(carrier, '')            AS carrier,
+                           COALESCE("discrepancyType", '')  AS disc_type,
+                           COALESCE("discrepancyNote", '')  AS disc_note,
+                           COALESCE("discrepancyPhotoUrl",'') AS disc_photo,
+                           "receivedAt"::text               AS received,
+                           "createdAt"::text                AS created
+                    FROM mercado_libre_dev."MercadoLibreReturn"
+                    WHERE "orderId"::text = ANY({_ret_lit})
+                    ORDER BY "createdAt" DESC
+                """) or []
+                if ret_rows:
+                    rets_by_ext: dict[str, list] = {}
+                    for rr in ret_rows:
+                        rets_by_ext.setdefault(rr[0], []).append({
+                            "status": rr[1], "reason": rr[2],
+                            "amount_to_refund": round(float(rr[3]), 2),
+                            "tracking_code": rr[4], "carrier": rr[5],
+                            "discrepancy_type": rr[6], "discrepancy_note": rr[7],
+                            "discrepancy_photo": rr[8],
+                            "received_at": rr[9], "created_at": rr[10],
+                        })
+                    for r in ml_rows:
+                        ext = r.get("external_id")
+                        if ext and ext in rets_by_ext:
+                            r["returns"] = rets_by_ext[ext]
+                            r["returns_count"] = len(rets_by_ext[ext])
+                    log.info("ML returns enrich uid=%s ret_rows=%d", user_id, len(ret_rows))
+            except Exception as _ret_err:
+                log.warning("ML returns enrich fail uid=%s: %s", user_id, str(_ret_err)[:200])
+
     # 4.5) Enrich items con image_url via SKU → Variant → Image (catálogo Unidrop)
     all_item_skus = list({
         item["sku"]
@@ -2311,6 +2396,44 @@ def dropshipper_unified_orders(
                 log.info("SKU images uid=%s skus=%d imgs=%d", user_id, len(all_item_skus), len(sku_img_map))
         except Exception as _img_err:
             log.warning("SKU image enrichment fail uid=%s: %s", user_id, str(_img_err)[:100])
+
+    # 4.4c) Flag has_label — saber si el modal puede ofrecer descarga de etiqueta.
+    # Para ML: hay PDF si OML.etiqueta_pdf_base64 IS NOT NULL.
+    # Para TN: hay PDF si oca_shipments o lightdata_shipments tiene base64.
+    if ml_rows:
+        ml_ext_for_lbl = [r["external_id"] for r in ml_rows if r.get("external_id")]
+        if ml_ext_for_lbl:
+            try:
+                _lbl_lit = "ARRAY[" + ",".join("'" + i + "'" for i in ml_ext_for_lbl) + "]::text[]"
+                lbl_rows = q(eng, f"""
+                    SELECT id::text FROM mercado_libre_dev."OrderMercadoLibre"
+                    WHERE id::text = ANY({_lbl_lit}) AND etiqueta_pdf_base64 IS NOT NULL
+                """) or []
+                _with_lbl = {r[0] for r in lbl_rows}
+                for r in ml_rows:
+                    if r.get("external_id") in _with_lbl:
+                        r["has_label"] = True
+            except Exception:
+                pass
+    if tn_rows:
+        tn_int_for_lbl = [str(r["internal_id"]) for r in tn_rows if r.get("internal_id")]
+        if tn_int_for_lbl:
+            try:
+                _tn_lbl_lit = ",".join("'" + i + "'" for i in tn_int_for_lbl)
+                oca_lbl = q(eng, f"""
+                    SELECT order_tienda_nube_id::text FROM public.oca_shipments
+                    WHERE order_tienda_nube_id::text IN ({_tn_lbl_lit}) AND etiqueta_pdf_base64 IS NOT NULL
+                """) or []
+                ld_lbl = q(eng, f"""
+                    SELECT orden_tn_id::text FROM public.lightdata_shipments
+                    WHERE orden_tn_id::text IN ({_tn_lbl_lit}) AND etiqueta_pdf_base64 IS NOT NULL
+                """) or []
+                _with = {r[0] for r in (oca_lbl + ld_lbl)}
+                for r in tn_rows:
+                    if str(r.get("internal_id") or "") in _with:
+                        r["has_label"] = True
+            except Exception:
+                pass
 
     # 4.6) Combo pricing redistribution + is_combo flag.
     # OML guarda unitPrice = precio completo del combo en CADA item → inflación Nx.

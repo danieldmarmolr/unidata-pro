@@ -29,6 +29,8 @@ import {
   StickyNote,
   Archive,
   Send,
+  FileText,
+  Download,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
@@ -239,6 +241,32 @@ type UnifiedOrder = {
   manual_payment_at?: string;
   note?: string;
   owner_note?: string;
+  // Contabilium invoice
+  invoice?: {
+    id: number | null;
+    tipo: string;
+    numero: string;
+    link: string;
+    fecha: string | null;
+    total: number;
+    cae: string;
+    punto_venta: string;
+  };
+  // ML returns
+  returns?: {
+    status: string;
+    reason: string;
+    amount_to_refund: number;
+    tracking_code: string;
+    carrier: string;
+    discrepancy_type: string;
+    discrepancy_note: string;
+    discrepancy_photo: string;
+    received_at: string | null;
+    created_at: string | null;
+  }[];
+  // Label PDF disponible?
+  has_label?: boolean;
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -964,12 +992,53 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                  {modalOrder.invoice?.link && (
+                    <a href={modalOrder.invoice.link}
+                       target="_blank" rel="noopener noreferrer"
+                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100"
+                       title={`Factura ${modalOrder.invoice.tipo} ${modalOrder.invoice.numero}`}>
+                      <FileText size={11} /> Ver Factura
+                    </a>
+                  )}
+                  {modalOrder.has_label && (
+                    <button
+                      onClick={async () => {
+                        const path = modalOrder.origen === "ml"
+                          ? `/api/dashboards/orders/ml/${encodeURIComponent(modalOrder.external_id)}/label`
+                          : `/api/dashboards/orders/tn/${encodeURIComponent(String(modalOrder.internal_id ?? ''))}/label`;
+                        const token = typeof window !== "undefined" ? window.localStorage.getItem("unidata.token") : null;
+                        const apiBase = process.env.NEXT_PUBLIC_API_URL || "https://api.unidatacenter.com.ar";
+                        try {
+                          const res = await fetch(`${apiBase}${path}`, {
+                            headers: token ? { Authorization: `Bearer ${token}` } : {},
+                          });
+                          if (!res.ok) {
+                            alert(`No se pudo descargar la etiqueta (${res.status})`);
+                            return;
+                          }
+                          const blob = await res.blob();
+                          const url = window.URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `${modalOrder.number || modalOrder.external_id}-etiqueta.pdf`;
+                          document.body.appendChild(a);
+                          a.click();
+                          a.remove();
+                          window.URL.revokeObjectURL(url);
+                        } catch (e) {
+                          alert("Error descargando etiqueta: " + (e instanceof Error ? e.message : String(e)));
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 text-xs font-semibold hover:bg-blue-100">
+                      <Download size={11} /> Etiqueta
+                    </button>
+                  )}
                   {(modalOrder.number || modalOrder.external_id) && (
                     <a href={`https://www.unidrop.com.ar/panel/unified-orders?page=1&search=${encodeURIComponent(modalOrder.number || modalOrder.external_id || '')}`}
                        target="_blank" rel="noopener noreferrer"
                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5">
-                      <ExternalLink size={11} /> Abrir en Unidrop
+                      <ExternalLink size={11} /> Unidrop
                     </a>
                   )}
                   <button onClick={() => setModalOrder(null)}
@@ -1278,6 +1347,117 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                         <div className="text-text">{modalOrder.owner_note}</div>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Factura Contabilium */}
+                {modalOrder.invoice && (
+                  <div className="bg-emerald-50/40 border border-emerald-200 rounded-lg p-3">
+                    <div className="text-emerald-900 text-[10px] uppercase tracking-wider font-bold mb-2 flex items-center gap-1.5">
+                      <FileText size={12} /> Factura emitida (Contabilium)
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-y-1.5 gap-x-4 text-xs">
+                      <div>
+                        <div className="text-text-muted text-[10px]">Tipo</div>
+                        <div className="font-bold">{modalOrder.invoice.tipo}</div>
+                      </div>
+                      <div>
+                        <div className="text-text-muted text-[10px]">Número</div>
+                        <div className="font-mono font-bold">{modalOrder.invoice.numero}</div>
+                      </div>
+                      <div>
+                        <div className="text-text-muted text-[10px]">Fecha emisión</div>
+                        <div>{modalOrder.invoice.fecha ? fmtArDateTime(modalOrder.invoice.fecha) : "—"}</div>
+                      </div>
+                      <div>
+                        <div className="text-text-muted text-[10px]">Total facturado</div>
+                        <div className="tabular-nums font-bold">{formatCurrency(modalOrder.invoice.total)}</div>
+                      </div>
+                      {modalOrder.invoice.cae && (
+                        <div className="col-span-2">
+                          <div className="text-text-muted text-[10px]">CAE</div>
+                          <div className="font-mono text-[11px]">{modalOrder.invoice.cae}</div>
+                        </div>
+                      )}
+                      {modalOrder.invoice.link && (
+                        <div className="col-span-2 md:col-span-4">
+                          <a href={modalOrder.invoice.link} target="_blank" rel="noopener noreferrer"
+                             className="inline-flex items-center gap-1 text-primary hover:underline font-semibold text-xs">
+                            <ExternalLink size={11} /> Abrir factura en Contabilium
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Devoluciones ML */}
+                {modalOrder.returns && modalOrder.returns.length > 0 && (
+                  <div className="bg-rose-50/40 border border-rose-200 rounded-lg p-3">
+                    <div className="text-rose-900 text-[10px] uppercase tracking-wider font-bold mb-2 flex items-center gap-1.5">
+                      <RotateCcw size={12} /> Devoluciones MELI · {modalOrder.returns.length}
+                    </div>
+                    <div className="space-y-3">
+                      {modalOrder.returns.map((ret, ri) => (
+                        <div key={ri} className="bg-surface border border-rose-200/50 rounded-md p-2.5 text-xs">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-y-1 gap-x-3">
+                            <div>
+                              <div className="text-text-muted text-[10px]">Estado</div>
+                              <span className="inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold bg-rose-50 text-rose-700 border-rose-200">{ret.status || "—"}</span>
+                            </div>
+                            {ret.reason && (
+                              <div className="col-span-2 md:col-span-3">
+                                <div className="text-text-muted text-[10px]">Motivo</div>
+                                <div className="text-text">{ret.reason}</div>
+                              </div>
+                            )}
+                            {ret.amount_to_refund > 0 && (
+                              <div>
+                                <div className="text-text-muted text-[10px]">Monto a reintegrar</div>
+                                <div className="tabular-nums font-bold text-rose-700">{formatCurrency(ret.amount_to_refund)}</div>
+                              </div>
+                            )}
+                            {ret.tracking_code && (
+                              <div>
+                                <div className="text-text-muted text-[10px]">Tracking devolución</div>
+                                <div className="font-mono text-[11px]">{ret.tracking_code}</div>
+                              </div>
+                            )}
+                            {ret.carrier && (
+                              <div>
+                                <div className="text-text-muted text-[10px]">Carrier</div>
+                                <div>{ret.carrier}</div>
+                              </div>
+                            )}
+                            {ret.created_at && (
+                              <div>
+                                <div className="text-text-muted text-[10px]">Iniciada</div>
+                                <div className="text-text-muted">{fmtArDateTime(ret.created_at)}</div>
+                              </div>
+                            )}
+                            {ret.received_at && (
+                              <div>
+                                <div className="text-text-muted text-[10px]">Recibida</div>
+                                <div className="text-emerald-700 font-semibold">{fmtArDateTime(ret.received_at)}</div>
+                              </div>
+                            )}
+                            {ret.discrepancy_type && (
+                              <div className="col-span-2">
+                                <div className="text-text-muted text-[10px]">Discrepancia</div>
+                                <div>{ret.discrepancy_type}{ret.discrepancy_note ? ` — ${ret.discrepancy_note}` : ""}</div>
+                              </div>
+                            )}
+                            {ret.discrepancy_photo && (
+                              <div className="col-span-2 md:col-span-4">
+                                <a href={ret.discrepancy_photo} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1">
+                                  <ExternalLink size={9} /> Ver foto de discrepancia
+                                </a>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
