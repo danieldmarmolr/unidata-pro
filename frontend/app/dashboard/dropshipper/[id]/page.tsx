@@ -1640,17 +1640,18 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     <th className="text-left px-2 py-2.5"><SortHeader col="number" label="# Orden" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2.5">Estado</th>
+                    <th className="text-left px-2 py-2.5">Estado del pedido</th>
                     <th className="text-left px-2 py-2.5">Método envío</th>
-                    <th className="text-right px-2 py-2.5"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2.5">Ganancia</th>
+                    <th className="text-right px-2 py-2.5" title="Costo Unidrop = lo facturado en Contabilium (mercadería + envío)">Costo</th>
+                    <th className="text-right px-2 py-2.5" title="Ingreso del dropshipper (lo que cobró al cliente final)"><SortHeader col="total" label="Ingreso" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2.5" title="Ganancia = Ingreso − Costo">Ganancia</th>
                     <th className="w-8 px-1 py-2.5"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {unifiedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="text-center text-text-muted py-8">
+                      <td colSpan={10} className="text-center text-text-muted py-8">
                         {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
                       </td>
                     </tr>
@@ -1662,15 +1663,15 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       const hasReturns = (o.returns_count ?? 0) > 0;
                       const isExpandable = hasItems || hasShip || hasReturns;
                       const isExpanded = expandedOrders.has(rowKey);
-                      // Método de envío: ML → shipping_type (FLEXI/PR/FULL); TN → carrier (OCA/Lightdata)
-                      const metodoEnvio = o.origen === "ml"
-                        ? (o.shipping_type || o.shipping_carrier || "")
-                        : (o.shipping_carrier || (o.shipment ? carrierLabel(o.shipment.carrier) : ""));
-                      // Ganancia: ingreso − total facturado a Unidrop (preferir invoice.total)
-                      const totalUnidrop = o.invoice?.total && o.invoice.total > 0
+                      // Método de envío: solo carriers válidos (filtramos cualquier status como EMPAQUETADO).
+                      const metodoEnvio = methodEnvioDisplay(o);
+                      // Costo Unidrop = lo facturado a Unidrop via Contabilium (mercaderia + envio).
+                      // Es lo que importa para nuestras finanzas (alineado con Contabilium).
+                      const costoUnidrop = o.invoice?.total && o.invoice.total > 0
                         ? o.invoice.total
                         : (o.merch_cost || 0) + (o.shipping_cost || 0);
-                      const ganancia = o.total - totalUnidrop;
+                      // Ganancia dropshipper = ingreso (lo que cobró al cliente final) − costo Unidrop.
+                      const ganancia = o.total - costoUnidrop;
                       return (
                         <>
                         <tr key={rowKey}
@@ -1714,11 +1715,16 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                               </span>
                             ) : <span className="text-text-muted text-[10px]">—</span>}
                           </td>
-                          {/* Total */}
+                          {/* Costo Unidrop (Contabilium) */}
+                          <td className="px-2 py-2 text-right tabular-nums text-text"
+                              title={o.invoice ? `Factura ${o.invoice.tipo} ${o.invoice.numero} — Contabilium` : "Sin factura registrada"}>
+                            {costoUnidrop > 0 ? formatCurrency(costoUnidrop) : <span className="text-text-muted text-[10px] font-normal">—</span>}
+                          </td>
+                          {/* Ingreso (lo que cobró el dropshipper al cliente) */}
                           <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
-                          {/* Ganancia */}
+                          {/* Ganancia = Ingreso − Costo */}
                           <td className={`px-2 py-2 text-right tabular-nums font-bold ${ganancia >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                            {totalUnidrop > 0 ? formatCurrency(ganancia) : <span className="text-text-muted text-[10px] font-normal">—</span>}
+                            {costoUnidrop > 0 ? formatCurrency(ganancia) : <span className="text-text-muted text-[10px] font-normal">—</span>}
                           </td>
                           {/* Abrir modal */}
                           <td className="px-1 py-2 text-center">
@@ -1732,7 +1738,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                         {/* Fila expandible — items inline */}
                         {isExpanded && (
                           <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
-                            <td colSpan={9} className="px-4 py-3">
+                            <td colSpan={10} className="px-4 py-3">
                               <div className="flex flex-wrap gap-5">
                                 {hasItems && (
                                   <div className="flex-1 min-w-[220px]">
@@ -1970,22 +1976,83 @@ function pipelineStep(
   );
 }
 
+// Etiqueta normalizada del método de envío. Reconoce FLEXI / ML FLEX / FULL /
+// PR (Punto de Retiro) / OCA / Lightdata / Andreani / Siempre Logistica.
+// Filtra valores que parezcan ESTADOS (empaquetado, pendiente, en_camino, etc.)
+// porque eso va en el pipeline, no en la columna "Método envío".
+function methodEnvioDisplay(o: UnifiedOrder): string {
+  const candidatos = [
+    o.shipping_carrier,
+    o.shipping_type,
+    o.shipping_option,
+    o.shipment?.carrier,
+  ].filter(Boolean) as string[];
+  const STATUS_WORDS = ["empaquet", "pendient", "en_camino", "en camino", "entregad", "transit", "creada", "pagad", "fallid", "retira"];
+  for (const raw of candidatos) {
+    const v = String(raw).trim();
+    if (!v) continue;
+    const low = v.toLowerCase();
+    // Skip si parece un status, no un método
+    if (STATUS_WORDS.some((s) => low.includes(s))) continue;
+    // Normalizar conocidos
+    if (low.includes("punto") || low.includes("drop_off") || low === "pr") return "PR";
+    if (low.includes("self") || low.includes("flexi") || low === "flex") return "FLEXI";
+    if (low.includes("ml flex") || low.includes("ml_flex") || low.includes("xd_drop_off")) return "ML FLEX";
+    if (low.includes("full") || low === "fulfillment") return "FULL";
+    if (low.includes("oca")) return "OCA";
+    if (low.includes("lightdata")) return "Lightdata";
+    if (low.includes("andreani")) return "Andreani";
+    if (low.includes("siempre") || low.includes("unifast")) return "UNIFAST";
+    if (low.includes("retiro") && !low.includes("punto")) continue;  // 'En proceso de retiro' es status
+    // Si nada match pero es un carrier "limpio" (sin guiones bajos sospechosos), devolverlo en mayusculas
+    if (v.length <= 18 && !low.includes("_")) return v.toUpperCase();
+  }
+  return "";
+}
+
+function pipelineDateLabel(iso?: string | null): string | null {
+  if (!iso) return null;
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" });
+  } catch {
+    return null;
+  }
+}
+
 function OrderPipeline({ o }: { o: UnifiedOrder }) {
   const ps = (o.payment_status || o.status || "").toLowerCase();
-  const ss = (o.shipping_status || "").toLowerCase();
   const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
-  const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
-  const isShipped = ["shipped", "transit", "en_camino", "en camino"].some((v) => ss.includes(v)) || !!o.shipment || isDelivered;
-  const connector = (on: boolean) => (
-    <div className={`h-px w-3 flex-shrink-0 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
-  );
+  const isPacked = !!o.packed_at || !!o.label_downloaded;
+  const isDelivered = !!o.delivered_at || !!o.shipment?.entregado || ["delivered", "entregado"].some((v) => (o.shipping_status || "").toLowerCase().includes(v));
+  const isShipped = !!o.shipped_at || isDelivered || ["shipped", "transit", "en_camino"].some((v) => (o.shipping_status || "").toLowerCase().includes(v));
+
+  const steps: { active: boolean; label: string; icon: string; iso?: string | null }[] = [
+    { active: true, label: "Creada", icon: "📋", iso: o.fecha },
+    { active: isPaid, label: "Pagada", icon: "💲", iso: o.paid_at },
+    { active: isPacked, label: "Empaquetado", icon: "📦", iso: o.packed_at || o.label_downloaded_at },
+    { active: isShipped, label: "En camino", icon: "🚚", iso: o.shipped_at },
+    { active: isDelivered, label: "Entregada", icon: "✅", iso: o.delivered_at || o.shipment?.entregado },
+  ];
+
   return (
-    <div className="flex items-center gap-0.5">
-      {pipelineStep(isPaid, !isPaid && ps !== "", "$")}
-      {connector(isShipped)}
-      {pipelineStep(isShipped, false, "▸")}
-      {connector(isDelivered)}
-      {pipelineStep(isDelivered, false, "✓")}
+    <div className="flex items-center gap-0">
+      {steps.map((s, i) => (
+        <div key={s.label} className="flex items-center">
+          {i > 0 && <div className={`h-0.5 w-2 ${s.active && steps[i - 1].active ? "bg-emerald-400" : "bg-zinc-200"}`} />}
+          <div
+            title={s.iso ? `${s.label} · ${pipelineDateLabel(s.iso)}` : `${s.label} · sin fecha`}
+            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] border ${
+              s.active
+                ? "bg-emerald-500 text-white border-emerald-500"
+                : "bg-zinc-100 text-zinc-400 border-zinc-200"
+            }`}
+          >
+            {s.icon}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
