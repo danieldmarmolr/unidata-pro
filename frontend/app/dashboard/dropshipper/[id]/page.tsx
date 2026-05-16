@@ -1781,68 +1781,125 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                             </button>
                           </td>
                         </tr>
-                        {/* Fila expandible — items inline */}
+                        {/* Fila expandible — tabla completa de productos al estilo del modal */}
                         {isExpanded && (
                           <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
                             <td colSpan={10} className="px-4 py-3">
-                              <div className="flex flex-wrap gap-5">
-                                {hasItems && (
-                                  <div className="flex-1 min-w-[220px]">
-                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-                                      <Package size={10} /> Productos · {o.items!.length} líneas
+                              {hasItems && (() => {
+                                const sumCost = o.items!.reduce((s, i) => s + (i.cost ?? 0) * i.qty, 0);
+                                const sumPrice = o.items!.reduce((s, i) => s + i.price * i.qty, 0);
+                                const sumGan = sumPrice - sumCost;
+                                return (
+                                  <div>
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                      <Package size={11} /> Productos · {o.items!.length} {o.items!.length === 1 ? "línea" : "líneas"}
                                     </div>
-                                    <div className="space-y-1">
-                                      {o.items!.map((item, ii) => (
-                                        <div key={ii} className="flex items-baseline justify-between text-[11px] border-b border-border/30 pb-0.5 last:border-0">
-                                          <div className="flex-1 min-w-0">
-                                            {item.sku ? (
-                                              <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
-                                                    onClick={(e) => e.stopPropagation()}
-                                                    className="font-mono text-[9px] text-primary hover:underline mr-1.5">{item.sku}</Link>
-                                            ) : <span className="font-mono text-[9px] text-text-muted mr-1.5">—</span>}
-                                            {item.item_type?.toUpperCase() === "COMBO" && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 mr-1">C</span>}
-                                            <span className="truncate">{item.name || "—"}</span>
-                                            <span className="text-text-muted ml-1.5">{item.qty}×{item.price > 0 ? ` ${formatCurrency(item.price)}` : ""}</span>
+                                    <div className="border border-border rounded-lg overflow-hidden bg-surface">
+                                      <table className="w-full text-xs">
+                                        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+                                          <tr>
+                                            <th className="text-left px-3 py-2">Producto</th>
+                                            <th className="text-center px-2 py-2 w-12">Uds</th>
+                                            <th className="text-right px-2 py-2 w-24">Costo Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Precio Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Ganancia Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Costo Total</th>
+                                            <th className="text-right px-2 py-2 w-24">Precio Total</th>
+                                            <th className="text-right px-3 py-2 w-24">Ganancia Total</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {o.items!.map((item, ii) => {
+                                            const isCombo = item.item_type?.toUpperCase() === "COMBO";
+                                            const ganUd = item.price - (item.cost ?? 0);
+                                            const costTot = (item.cost ?? 0) * item.qty;
+                                            const priceTot = item.price * item.qty;
+                                            const ganTot = priceTot - costTot;
+                                            return (
+                                              <tr key={ii} className="border-t border-border align-top">
+                                                <td className="px-3 py-2">
+                                                  <div className="flex items-start gap-2">
+                                                    {item.image_url ? (
+                                                      <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
+                                                    ) : (
+                                                      <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                                        <Package size={12} className="text-text-muted" />
+                                                      </div>
+                                                    )}
+                                                    <div className="min-w-0">
+                                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="font-semibold text-text truncate">{item.name || "—"}</span>
+                                                        {isCombo && <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">C</span>}
+                                                      </div>
+                                                      {item.sku ? (
+                                                        <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
+                                                              onClick={(e) => e.stopPropagation()}
+                                                              className="text-[10px] text-primary font-mono hover:underline inline-flex items-center gap-0.5"
+                                                              title={`Abrir Producto 360 de ${item.sku}`}>
+                                                          SKU {item.sku} <ExternalLink size={8} />
+                                                        </Link>
+                                                      ) : <div className="text-[10px] text-text-muted font-mono">SKU —</div>}
+                                                    </div>
+                                                  </div>
+                                                </td>
+                                                <td className="text-center px-2 py-2 tabular-nums">{item.qty}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(item.cost) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(item.price)}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-primary font-semibold">{item.cost ? formatCurrency(ganUd) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(costTot) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums font-semibold">{formatCurrency(priceTot)}</td>
+                                                <td className="text-right px-3 py-2 tabular-nums text-primary font-bold">{item.cost ? formatCurrency(ganTot) : "—"}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                          <tr className="border-t-2 border-border bg-soft/50 font-bold">
+                                            <td className="px-3 py-2 text-text-muted text-[10px] uppercase tracking-wider" colSpan={5}>Totales</td>
+                                            <td className="text-right px-2 py-2 tabular-nums">{sumCost > 0 ? formatCurrency(sumCost) : "—"}</td>
+                                            <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(sumPrice)}</td>
+                                            <td className="text-right px-3 py-2 tabular-nums text-primary">{sumCost > 0 ? formatCurrency(sumGan) : "—"}</td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                    {/* Bloque resumido de envío + devoluciones a la derecha */}
+                                    {(hasShip || hasReturns) && (
+                                      <div className="flex flex-wrap gap-3 mt-2.5 text-[11px]">
+                                        {hasShip && (
+                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-soft border border-border rounded">
+                                            <Truck size={10} className="text-text-muted" />
+                                            <span className="text-text-muted">{carrierLabel(o.shipment!.carrier)}:</span>
+                                            <span className="font-semibold">{o.shipment!.status || "—"}</span>
+                                            {o.shipment!.entregado && (
+                                              <span className="text-emerald-700">· entregado {o.shipment!.entregado.slice(0, 10)}</span>
+                                            )}
                                           </div>
-                                          <span className="font-semibold tabular-nums ml-2 flex-shrink-0">{item.price > 0 ? formatCurrency(item.price * item.qty) : "—"}</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <div className="mt-1.5 flex justify-between text-xs border-t border-border/50 pt-1 font-semibold">
-                                      <span className="text-text-muted">Subtotal</span>
-                                      <span>{formatCurrency(o.items!.reduce((s, i) => s + i.price * i.qty, 0))}</span>
-                                    </div>
+                                        )}
+                                        {hasReturns && (
+                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-rose-50 border border-rose-200 rounded">
+                                            <RotateCcw size={10} className="text-rose-600" />
+                                            <span className="text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</span>
+                                          </div>
+                                        )}
+                                        <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                          className="ml-auto text-[11px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                          <ExternalLink size={10} /> Ver detalle completo
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                                {hasShip && (
-                                  <div className="min-w-[160px]">
-                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1">
-                                      <Truck size={10} /> {carrierLabel(o.shipment!.carrier)}
-                                    </div>
-                                    <div className="text-[11px] space-y-0.5">
-                                      <div><span className="text-text-muted">Estado:</span> <span className="font-semibold ml-1">{o.shipment!.status || "—"}</span></div>
-                                      {o.shipment!.entregado && (
-                                        <div><span className="text-text-muted">Entregado:</span> <span className="text-emerald-700 font-semibold ml-1">{o.shipment!.entregado.slice(0, 10)}</span></div>
-                                      )}
-                                      {(o.shipment!.costo > 0 || o.shipping_cost > 0) && (
-                                        <div><span className="text-text-muted">Costo:</span> <span className="tabular-nums ml-1">{formatCurrency(o.shipment!.costo || o.shipping_cost)}</span></div>
-                                      )}
-                                    </div>
-                                  </div>
-                                )}
-                                {hasReturns && (
-                                  <div className="min-w-[120px]">
-                                    <div className="text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-2 flex items-center gap-1">
-                                      <RotateCcw size={10} /> Devoluciones
-                                    </div>
-                                    <div className="text-[11px] text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</div>
-                                  </div>
-                                )}
-                                <button onClick={() => setModalOrder(o)}
-                                  className="self-start mt-4 text-[10px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
-                                  <ExternalLink size={9} /> Ver detalle completo
-                                </button>
-                              </div>
+                                );
+                              })()}
+                              {!hasItems && (
+                                <div className="text-text-muted text-xs italic py-2">
+                                  Sin productos detallados.
+                                  {(hasShip || hasReturns) && (
+                                    <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                            className="ml-2 text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                      <ExternalLink size={10} /> Ver detalle completo
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </td>
                           </tr>
                         )}
