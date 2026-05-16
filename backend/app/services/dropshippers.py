@@ -1127,6 +1127,49 @@ def dropshipper_detail(
         log.warning("dropshipper unified_orders fail uid=%s: %s", user_id, e)
         unified_orders = []
 
+    # Analitica combos vs individuales + top SKUs (basado en unified_orders)
+    try:
+        combo_count = sum(1 for o in unified_orders if o.get("is_combo"))
+        ind_count = len(unified_orders) - combo_count
+        combo_revenue = sum(float(o.get("total", 0)) for o in unified_orders if o.get("is_combo"))
+        ind_revenue = sum(float(o.get("total", 0)) for o in unified_orders if not o.get("is_combo"))
+        # Top SKUs: agregamos por sku sumando qty + revenue (precio_unit*qty)
+        sku_agg: dict[str, dict] = {}
+        for o in unified_orders:
+            for it in (o.get("items") or []):
+                sku = (it.get("sku") or "").strip()
+                if not sku:
+                    continue
+                qty = int(it.get("qty") or 0)
+                line_rev = float(it.get("price", 0)) * qty
+                if sku not in sku_agg:
+                    sku_agg[sku] = {"sku": sku, "name": it.get("name") or "", "qty": 0, "revenue": 0.0,
+                                    "image_url": it.get("image_url") or "", "in_combos": 0, "in_individual": 0}
+                sku_agg[sku]["qty"] += qty
+                sku_agg[sku]["revenue"] += line_rev
+                if o.get("is_combo"):
+                    sku_agg[sku]["in_combos"] += 1
+                else:
+                    sku_agg[sku]["in_individual"] += 1
+                if not sku_agg[sku]["name"] and it.get("name"):
+                    sku_agg[sku]["name"] = it["name"]
+                if not sku_agg[sku]["image_url"] and it.get("image_url"):
+                    sku_agg[sku]["image_url"] = it["image_url"]
+        top_skus = sorted(sku_agg.values(), key=lambda x: x["qty"], reverse=True)[:15]
+        for s in top_skus:
+            s["revenue"] = round(s["revenue"], 2)
+        combo_analytics = {
+            "combo_count": combo_count,
+            "individual_count": ind_count,
+            "combo_revenue": round(combo_revenue, 2),
+            "individual_revenue": round(ind_revenue, 2),
+            "combo_pct": round(combo_count / len(unified_orders) * 100, 1) if unified_orders else 0,
+            "top_skus": top_skus,
+        }
+    except Exception as e:
+        log.warning("combo analytics fail uid=%s: %s", user_id, e)
+        combo_analytics = None
+
     return {
         "user": user,
         "ventas": ventas_kpi,  # MELI
@@ -1138,6 +1181,7 @@ def dropshipper_detail(
         "ultimas_ventas_tn": tn_orders_list,
         "ultimos_pagos": pagos_list,
         "unified_orders": unified_orders,
+        "combo_analytics": combo_analytics,
         "top_clientes_finales": top_clientes_finales,
         "suscripciones": {
             "total_pagado": suscripciones_total,
@@ -1659,6 +1703,14 @@ def dropshipper_unified_orders(
                         r["shipping_id"] = o[22]
                     if o[23]:
                         r["contabilium_client_id"] = o[23]
+                    # Pipeline timestamps inferidos para ML
+                    tags_list = list(o[20] or [])
+                    if o[16]:  # label_dl_at
+                        r["packed_at"] = o[16]
+                        # Una vez etiqueta descargada, ML lo deriva al carrier inmediatamente
+                        r["shipped_at"] = o[16]
+                    if "delivered" in tags_list:
+                        r["delivered_at"] = o[14] or o[13]  # dateClosed o dateCreated como fallback
                     # shipping_address_detail JSONB: parseamos a campos planos
                     addr = o[24] if isinstance(o[24], dict) else {}
                     if addr:
@@ -2003,7 +2055,7 @@ def dropshipper_unified_orders(
                 })
             log.info("unified_orders TN items uid=%s orders=%d items=%d",
                      user_id, len(tn_internal), len(tni_rows))
-            # oca_shipments — incluye tracking + direccion destino
+            # oca_shipments — incluye tracking + direccion destino + ultima_actualizacion
             oca_ship: dict[str, dict] = {}
             oca_rows = q(eng, f"""
                 SELECT order_tienda_nube_id::text,
@@ -2017,15 +2069,27 @@ def dropshipper_unified_orders(
                        COALESCE(destinatario_numero, '')                     AS calle_full,
                        COALESCE(destinatario_localidad, '')                  AS localidad,
                        COALESCE(destinatario_provincia, '')                  AS provincia,
-                       COALESCE(destinatario_cp, '')                         AS cp
+                       COALESCE(destinatario_cp, '')                         AS cp,
+                       ultima_actualizacion::text                            AS ultima_act,
+                       created_at::text                                      AS creado
                 FROM public.oca_shipments
                 WHERE order_tienda_nube_id::text IN ({tn_ids_bulk})
             """) or []
             for sr in oca_rows:
                 k = sr[0] or ""
+                estado = sr[1] or ""
+                estado_low = estado.lower()
+                # Inferir shipped_at / delivered_at desde el ultimo_estado_oca
+                delivered_at = None
+                shipped_at = None
+                if "entregado" in estado_low:
+                    delivered_at = sr[2] or sr[11]  # fecha_entrega o ultima_act
+                    shipped_at = sr[11] or sr[12]   # asumimos que también pasó por en-camino
+                elif any(k in estado_low for k in ("viaje", "arribado", "proceso de retiro", "retirado")):
+                    shipped_at = sr[11] or sr[12]
                 oca_ship[k] = {
                     "carrier": "OCA",
-                    "status": sr[1] or "",
+                    "status": estado,
                     "entregado": sr[2],
                     "costo": float(sr[3] or 0),
                     "tracking_number": sr[4] or "",
@@ -2035,6 +2099,9 @@ def dropshipper_unified_orders(
                     "city": sr[8] or "",
                     "province": sr[9] or "",
                     "zipcode": sr[10] or "",
+                    "last_update": sr[11],
+                    "shipped_at": shipped_at,
+                    "delivered_at": delivered_at,
                 }
             # lightdata_shipments — incluye tracking_url + numero_envio
             ld_ship: dict[str, dict] = {}
@@ -2058,10 +2125,21 @@ def dropshipper_unified_orders(
             """) or []
             for sr in ld_rows:
                 k = sr[0] or ""
+                estado_ld = sr[1] or ""
+                estado_ld_up = estado_ld.upper()
+                delivered_ld = None
+                shipped_ld = None
+                # Lightdata estados: A_RETIRAR (pending), EN_CAMINO (shipped),
+                # NADIE/FALLIDO (intento fallido), ENTREGADO (delivered)
+                if estado_ld_up == "ENTREGADO":
+                    delivered_ld = sr[12]
+                    shipped_ld = sr[12]
+                elif estado_ld_up in ("EN_CAMINO", "NADIE", "FALLIDO"):
+                    shipped_ld = sr[12]
                 ld_ship[k] = {
                     "carrier": "Lightdata",
-                    "status": sr[1] or "",
-                    "entregado": None,
+                    "status": estado_ld,
+                    "entregado": delivered_ld,
                     "costo": float(sr[2] or 0),
                     "tracking_number": sr[3] or "",
                     "tracking_url": sr[4] or "",
@@ -2073,6 +2151,8 @@ def dropshipper_unified_orders(
                     "province": sr[10] or "",
                     "zipcode": sr[11] or "",
                     "last_update": sr[12],
+                    "shipped_at": shipped_ld,
+                    "delivered_at": delivered_ld,
                 }
             # Apply to rows
             for r in tn_rows:
@@ -2092,6 +2172,14 @@ def dropshipper_unified_orders(
                         r["billing_province"] = ship["province"]
                     if not r.get("shipping_zipcode") and ship.get("zipcode"):
                         r["shipping_zipcode"] = ship["zipcode"]
+                    # Propagar pipeline timestamps al row
+                    if ship.get("shipped_at") and not r.get("shipped_at"):
+                        r["shipped_at"] = ship["shipped_at"]
+                    if ship.get("delivered_at") and not r.get("delivered_at"):
+                        r["delivered_at"] = ship["delivered_at"]
+                # Si TN tiene label_downloaded_at pero no shipped_at, usar como aproximacion
+                if r.get("label_downloaded_at") and not r.get("packed_at"):
+                    r["packed_at"] = r["label_downloaded_at"]
 
     # 4b) Items ML — OrderItemMercadoLibre.orderId ES el mlOrderId externo (no el id interno).
     # Usamos external_id para el join. sellerSKU contiene nuestro SKU de catálogo.
@@ -2114,6 +2202,8 @@ def dropshipper_unified_orders(
                 oi_title = f'COALESCE(oi."{title_col}"::text, \'\')' if title_col else "''"
                 oi_type = f'COALESCE(oi."{type_col}"::text, \'\')' if type_col else "''"
                 oi_cost = f'COALESCE(oi."{cost_col}", 0)::float' if cost_col else "0::float"
+                has_imgs = "imagesUrls" in oi_cols
+                oi_imgs = 'oi."imagesUrls"' if has_imgs else "'[]'::jsonb"
                 ml_item_rows = q(eng, f"""
                     SELECT oi."{oid_col}"::text,
                            COALESCE(oi."{sku_col}"::text, '') AS sku,
@@ -2121,7 +2211,8 @@ def dropshipper_unified_orders(
                            COALESCE(oi."{qty_col}", 0)::int AS qty,
                            {oi_price} AS unit_price,
                            {oi_type} AS item_type,
-                           {oi_cost} AS cost
+                           {oi_cost} AS cost,
+                           {oi_imgs} AS images
                     FROM mercado_libre_dev."OrderItemMercadoLibre" oi
                     WHERE oi."{oid_col}"::text IN ({ml_ext_bulk})
                     ORDER BY oi.id ASC
@@ -2129,6 +2220,15 @@ def dropshipper_unified_orders(
                 items_by_ml_ext: dict[str, list] = {}
                 for ir in ml_item_rows:
                     k = ir[0] or ""
+                    # imagesUrls de ML: array de URLs, agarrar la primera como image_url
+                    imgs = ir[7] if len(ir) > 7 else None
+                    img_url = ""
+                    if isinstance(imgs, list) and imgs:
+                        first = imgs[0]
+                        if isinstance(first, str):
+                            img_url = first
+                        elif isinstance(first, dict):
+                            img_url = first.get("url") or first.get("src") or ""
                     items_by_ml_ext.setdefault(k, []).append({
                         "sku":       ir[1] or "",
                         "name":      ir[2] or "",
@@ -2136,6 +2236,7 @@ def dropshipper_unified_orders(
                         "price":     round(float(ir[4] or 0), 2),
                         "item_type": ir[5] or "",   # "COMBO" o "item"
                         "cost":      round(float(ir[6] or 0), 2),
+                        "image_url": img_url,
                     })
                 log.info("unified_orders ML items uid=%s sku_col=%s orders=%d items=%d",
                          user_id, sku_col, len(ml_ext_for_items), len(ml_item_rows))
@@ -2391,7 +2492,8 @@ def dropshipper_unified_orders(
             if sku_img_map:
                 for r in ml_rows + tn_rows:
                     for item in (r.get("items") or []):
-                        if item.get("sku") in sku_img_map:
+                        # Solo completar si todavía no hay imagen del propio order item
+                        if not item.get("image_url") and item.get("sku") in sku_img_map:
                             item["image_url"] = sku_img_map[item["sku"]]
                 log.info("SKU images uid=%s skus=%d imgs=%d", user_id, len(all_item_skus), len(sku_img_map))
         except Exception as _img_err:

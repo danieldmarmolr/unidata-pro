@@ -142,6 +142,7 @@ type DropshipperDetail = {
     tn_orders: number;
   }[];
   unified_orders?: UnifiedOrder[];
+  combo_analytics?: ComboAnalytics | null;
   top_clientes_finales?: {
     category: string;
     value: number;
@@ -267,6 +268,27 @@ type UnifiedOrder = {
   }[];
   // Label PDF disponible?
   has_label?: boolean;
+  // Pipeline timestamps
+  packed_at?: string;
+  shipped_at?: string;
+  delivered_at?: string;
+};
+
+type ComboAnalytics = {
+  combo_count: number;
+  individual_count: number;
+  combo_revenue: number;
+  individual_revenue: number;
+  combo_pct: number;
+  top_skus: {
+    sku: string;
+    name: string;
+    qty: number;
+    revenue: number;
+    image_url: string;
+    in_combos: number;
+    in_individual: number;
+  }[];
 };
 
 function recencyDays(iso?: string | null): number | null {
@@ -960,8 +982,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           const sumCost = (modalOrder.items ?? []).reduce((s, i) => s + (i.cost ?? 0) * i.qty, 0);
           const sumProfit = sumPrice - sumCost;
           const merchCost = modalOrder.merch_cost > 0 ? modalOrder.merch_cost : sumCost;
-          const totalPagar = merchCost + modalOrder.shipping_cost;
-          const profit = modalOrder.profit_unidrop > 0 ? modalOrder.profit_unidrop : (modalOrder.total - totalPagar);
+          // Total Unidrop: prefer invoice.total (lo facturado a Unidrop = cobro mercaderia + envio si aplica)
+          // Si no hay factura, fallback al cálculo (merch + envío).
+          const totalPagar = modalOrder.invoice?.total && modalOrder.invoice.total > 0
+            ? modalOrder.invoice.total
+            : merchCost + modalOrder.shipping_cost;
+          // Net revenue = Ingreso (cobro al cliente) − Total facturado a Unidrop
+          const profit = modalOrder.total - totalPagar;
           const fullAddress = [
             modalOrder.shipping_address || modalOrder.billing_address,
             modalOrder.shipping_city || modalOrder.billing_city,
@@ -1094,7 +1121,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                                         <span className="font-semibold text-text truncate">{item.name || "—"}</span>
                                         {isCombo && <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">C</span>}
                                       </div>
-                                      <div className="text-[10px] text-text-muted font-mono">SKU {item.sku || "—"}</div>
+                                      {item.sku ? (
+                                        <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
+                                              className="text-[10px] text-primary font-mono hover:underline inline-flex items-center gap-0.5"
+                                              title={`Abrir Producto 360 de ${item.sku}`}>
+                                          SKU {item.sku} <ExternalLink size={8} />
+                                        </Link>
+                                      ) : <div className="text-[10px] text-text-muted font-mono">SKU —</div>}
                                     </div>
                                   </div>
                                 </td>
@@ -1480,6 +1513,79 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           );
         })()}
 
+        {/* Analítica de productos del dropshipper — Combo vs Individual + Top SKUs */}
+        {data.combo_analytics && (data.combo_analytics.combo_count + data.combo_analytics.individual_count) > 0 && (
+          <div className="bg-surface border border-border rounded-xl p-4 mb-4">
+            <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Analítica de productos del dropshipper</h3>
+                <p className="text-[11px] text-text-muted">
+                  Distribución combo vs individual + SKUs más vendidos sobre las últimas {data.combo_analytics.combo_count + data.combo_analytics.individual_count} órdenes
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Combo vs Individual */}
+              <div className="bg-soft/40 border border-border rounded-lg p-3">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-3">Combo vs Individual</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-text font-semibold">Combo</span>
+                      <span className="tabular-nums">{data.combo_analytics.combo_count} órd · {formatCurrency(data.combo_analytics.combo_revenue)}</span>
+                    </div>
+                    <div className="h-2 bg-soft rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${data.combo_analytics.combo_pct}%` }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-text font-semibold">Individual</span>
+                      <span className="tabular-nums">{data.combo_analytics.individual_count} órd · {formatCurrency(data.combo_analytics.individual_revenue)}</span>
+                    </div>
+                    <div className="h-2 bg-soft rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-400" style={{ width: `${100 - data.combo_analytics.combo_pct}%` }} />
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-border/50 text-[11px] text-text-muted">
+                    {data.combo_analytics.combo_pct >= 50 ? (
+                      <>Vende <strong className="text-primary">más en combo</strong> ({data.combo_analytics.combo_pct.toFixed(0)}%)</>
+                    ) : (
+                      <>Vende <strong className="text-emerald-600">más individual</strong> ({(100 - data.combo_analytics.combo_pct).toFixed(0)}%)</>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Top SKUs */}
+              <div className="bg-soft/40 border border-border rounded-lg p-3">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Top SKUs vendidos</div>
+                <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
+                  {data.combo_analytics.top_skus.slice(0, 10).map((s) => (
+                    <Link key={s.sku} href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
+                          className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-soft transition group">
+                      {s.image_url ? (
+                        <img src={s.image_url} alt={s.sku} className="w-8 h-8 rounded object-cover border border-border flex-shrink-0" loading="lazy" />
+                      ) : (
+                        <div className="w-8 h-8 rounded bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                          <Package size={12} className="text-text-muted" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-text truncate group-hover:text-primary">{s.name || s.sku}</div>
+                        <div className="text-[10px] text-text-muted font-mono">{s.sku} · {s.in_combos > 0 && <span className="text-primary">combo×{s.in_combos}</span>}{s.in_combos > 0 && s.in_individual > 0 && " · "}{s.in_individual > 0 && <span className="text-emerald-600">ind×{s.in_individual}</span>}</div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-xs font-bold tabular-nums">{s.qty}</div>
+                        <div className="text-[9px] text-text-muted tabular-nums">{formatCurrency(s.revenue)}</div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
           {/* Vista unificada estilo Unidrop panel */}
           <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -1535,15 +1641,16 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                     <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
                     <th className="text-left px-2 py-2.5">Estado</th>
-                    <th className="text-left px-2 py-2.5">Envío</th>
+                    <th className="text-left px-2 py-2.5">Método envío</th>
                     <th className="text-right px-2 py-2.5"><SortHeader col="total" label="Total" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2.5">Ganancia</th>
                     <th className="w-8 px-1 py-2.5"></th>
                   </tr>
                 </thead>
                 <tbody>
                   {unifiedOrders.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="text-center text-text-muted py-8">
+                      <td colSpan={9} className="text-center text-text-muted py-8">
                         {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
                       </td>
                     </tr>
@@ -1555,7 +1662,15 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       const hasReturns = (o.returns_count ?? 0) > 0;
                       const isExpandable = hasItems || hasShip || hasReturns;
                       const isExpanded = expandedOrders.has(rowKey);
-                      const carrier = o.shipment ? carrierLabel(o.shipment.carrier) : null;
+                      // Método de envío: ML → shipping_type (FLEXI/PR/FULL); TN → carrier (OCA/Lightdata)
+                      const metodoEnvio = o.origen === "ml"
+                        ? (o.shipping_type || o.shipping_carrier || "")
+                        : (o.shipping_carrier || (o.shipment ? carrierLabel(o.shipment.carrier) : ""));
+                      // Ganancia: ingreso − total facturado a Unidrop (preferir invoice.total)
+                      const totalUnidrop = o.invoice?.total && o.invoice.total > 0
+                        ? o.invoice.total
+                        : (o.merch_cost || 0) + (o.shipping_cost || 0);
+                      const ganancia = o.total - totalUnidrop;
                       return (
                         <>
                         <tr key={rowKey}
@@ -1591,16 +1706,20 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                           <td className="px-2 py-2">
                             <OrderPipeline o={o} />
                           </td>
-                          {/* Carrier */}
+                          {/* Método envío */}
                           <td className="px-2 py-2">
-                            {carrier ? (
+                            {metodoEnvio ? (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold bg-blue-50 text-blue-700 border-blue-200">
-                                <Truck size={8} />{carrier}
+                                <Truck size={8} />{metodoEnvio}
                               </span>
                             ) : <span className="text-text-muted text-[10px]">—</span>}
                           </td>
                           {/* Total */}
                           <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
+                          {/* Ganancia */}
+                          <td className={`px-2 py-2 text-right tabular-nums font-bold ${ganancia >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                            {totalUnidrop > 0 ? formatCurrency(ganancia) : <span className="text-text-muted text-[10px] font-normal">—</span>}
+                          </td>
                           {/* Abrir modal */}
                           <td className="px-1 py-2 text-center">
                             <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
@@ -1613,7 +1732,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                         {/* Fila expandible — items inline */}
                         {isExpanded && (
                           <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
-                            <td colSpan={8} className="px-4 py-3">
+                            <td colSpan={9} className="px-4 py-3">
                               <div className="flex flex-wrap gap-5">
                                 {hasItems && (
                                   <div className="flex-1 min-w-[220px]">
@@ -1624,7 +1743,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                                       {o.items!.map((item, ii) => (
                                         <div key={ii} className="flex items-baseline justify-between text-[11px] border-b border-border/30 pb-0.5 last:border-0">
                                           <div className="flex-1 min-w-0">
-                                            <span className="font-mono text-[9px] text-text-muted mr-1.5">{item.sku || "—"}</span>
+                                            {item.sku ? (
+                                              <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="font-mono text-[9px] text-primary hover:underline mr-1.5">{item.sku}</Link>
+                                            ) : <span className="font-mono text-[9px] text-text-muted mr-1.5">—</span>}
                                             {item.item_type?.toUpperCase() === "COMBO" && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 mr-1">C</span>}
                                             <span className="truncate">{item.name || "—"}</span>
                                             <span className="text-text-muted ml-1.5">{item.qty}×{item.price > 0 ? ` ${formatCurrency(item.price)}` : ""}</span>
@@ -1873,29 +1996,44 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
   const ps = (o.payment_status || o.status || "").toLowerCase();
   const ss = (o.shipping_status || "").toLowerCase();
   const isPaid = ["paid", "processed", "approved"].some((v) => ps.includes(v));
-  const isDelivered = ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
-  const isShipped = ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || !!o.shipment || isDelivered;
+  const isPacked = !!o.packed_at || !!o.label_downloaded;
+  const isDelivered = !!o.delivered_at || ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
+  const isShipped = !!o.shipped_at || ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || isDelivered;
 
-  const step = (done: boolean, label: string, icon: string) => (
-    <div className="flex flex-col items-center gap-1">
+  const stepDate = (iso?: string) => {
+    if (!iso) return null;
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return null;
+      return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    } catch {
+      return null;
+    }
+  };
+
+  const step = (done: boolean, label: string, icon: string, date?: string | null) => (
+    <div className="flex flex-col items-center gap-1 min-w-[58px]">
       <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 ${
         done ? "bg-emerald-500 text-white border-emerald-500" : "bg-zinc-100 text-zinc-400 border-zinc-200"
       }`}>{icon}</div>
       <span className={`text-[10px] leading-none text-center ${done ? "text-emerald-700 font-semibold" : "text-zinc-400"}`}>{label}</span>
+      {date && <span className="text-[9px] leading-none text-text-muted tabular-nums">{date}</span>}
     </div>
   );
   const line = (on: boolean) => (
-    <div className={`flex-1 h-0.5 mb-4 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
+    <div className={`flex-1 h-0.5 mb-6 ${on ? "bg-emerald-400" : "bg-zinc-200"}`} />
   );
   return (
-    <div className="flex items-center gap-2">
-      {step(true, "Creada", "📋")}
+    <div className="flex items-start gap-1.5">
+      {step(true, "Creada", "📋", stepDate(o.fecha))}
       {line(isPaid)}
-      {step(isPaid, "Pagada", "💲")}
+      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at))}
+      {line(isPacked)}
+      {step(isPacked, "Empaquetado", "📦", stepDate(o.packed_at || o.label_downloaded_at))}
       {line(isShipped)}
-      {step(isShipped, "En camino", "🚚")}
+      {step(isShipped, "En camino", "🚚", stepDate(o.shipped_at))}
       {line(isDelivered)}
-      {step(isDelivered, "Entregada", "✅")}
+      {step(isDelivered, "Entregada", "✅", stepDate(o.delivered_at || o.shipment?.entregado || undefined))}
     </div>
   );
 }
