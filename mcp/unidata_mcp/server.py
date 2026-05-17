@@ -553,3 +553,82 @@ async def complete_reminder(
         return await get_client().post(f"/api/reminders/{int(reminder_id)}/complete", json={"note": note})
     except UnidataError as e:
         return _err(e)
+
+
+# ─── Meta Ads (Facebook Marketing) ────────────────────────────────────────────
+
+
+@mcp.tool()
+async def get_meta_spend(
+    period: Annotated[Period, Field(description="Ventana temporal para los KPIs.")] = "30d",
+    unit: Annotated[Unit | None, Field(description="Filtra por unidad. None = todas.")] = None,
+) -> dict[str, Any]:
+    """Devuelve KPIs agregados de Meta Ads: spend, impressions, clicks, reach,
+    CPM, CPC, CTR + daily series + breakdown por cuenta publicitaria.
+
+    Usar para: '¿cuánto gastamos en pautas el último mes?', 'evolución del CPC',
+    'comparar Unidrop vs Unistore en Meta'.
+    """
+    params: dict[str, Any] = {"period": period}
+    if unit:
+        params["unit"] = unit
+    try:
+        return await get_client().get("/api/marketing/meta/overview", params=params)
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def list_meta_campaigns(
+    period: Annotated[Period, Field()] = "30d",
+    unit: Annotated[Unit | None, Field()] = None,
+    limit: Annotated[int, Field(ge=1, le=500)] = 50,
+) -> dict[str, Any]:
+    """Lista campañas Meta Ads con spend, impressions, clicks, CPM, CPC, CTR.
+    Ordenado por spend descendente. Útil para identificar campañas de bajo ROAS
+    o las que más están gastando.
+    """
+    params: dict[str, Any] = {"period": period, "limit": limit}
+    if unit:
+        params["unit"] = unit
+    try:
+        return await get_client().get("/api/marketing/meta/campaigns", params=params)
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def get_meta_ad_performance(
+    adset_id: Annotated[str, Field(description="ID del ad set. Devuelve los ads dentro.")],
+    period: Annotated[Period, Field()] = "30d",
+    limit: Annotated[int, Field(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Devuelve performance per-ad dentro de un ad set: spend, impressions, clicks,
+    creative summary + preview URL. Para drill-down y comparar creatives.
+    """
+    try:
+        return await get_client().get(
+            "/api/marketing/meta/ads",
+            params={"adset_id": adset_id, "period": period, "limit": limit},
+        )
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def trigger_meta_sync(
+    historical_days: Annotated[int, Field(ge=1, le=730, description="Días hacia atrás a sincronizar. 365 = año entero. 30 cubre re-statements normales.")] = 30,
+) -> dict[str, Any]:
+    """Dispara sync manual de Meta Ads (refresca insights desde Meta API).
+
+    Requiere rol admin. El cron diario ya corre a las 1am ART; usar esta tool
+    solo para forzar refresh inmediato o para el pull inicial histórico de
+    12 meses (historical_days=365).
+    """
+    try:
+        return await get_client().post(
+            "/api/marketing/meta/sync",
+            params={"historical_days": int(historical_days)},
+        )
+    except UnidataError as e:
+        return _err(e)

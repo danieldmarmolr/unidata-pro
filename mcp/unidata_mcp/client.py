@@ -42,10 +42,15 @@ class UnidataClient:
             raise UnidataError(f"No se pudo conectar a {self._cfg.api_url}{path}: {e}") from e
         return _parse(r, path)
 
-    async def post(self, path: str, json: dict[str, Any] | None = None) -> Any:
+    async def post(
+        self,
+        path: str,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         client = await self._ensure()
         try:
-            r = await client.post(path, json=json or {})
+            r = await client.post(path, json=json or {}, params=params or {})
         except httpx.HTTPError as e:
             raise UnidataError(f"No se pudo conectar a {self._cfg.api_url}{path}: {e}") from e
         return _parse(r, path)

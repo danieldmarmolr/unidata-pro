@@ -138,6 +138,9 @@ app.include_router(dropshipper_notes_api.router)
 from app.api import reminders as reminders_api
 app.include_router(reminders_api.router)
 
+from app.api import meta_ads as meta_ads_api
+app.include_router(meta_ads_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:
