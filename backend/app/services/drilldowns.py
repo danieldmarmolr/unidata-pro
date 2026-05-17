@@ -421,20 +421,21 @@ def saas_users_active(segment: str = "all") -> dict:
 
 def saas_users_new(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'u."createdAt" >= NOW() - make_interval(days => :d)' + _seg_clause(segment)
+    win = resolve_window(period, from_iso, to_iso)
+    where = 'u."createdAt" >= :from_ts AND u."createdAt" < :to_ts' + _seg_clause(segment)
     sql_built = _build_user_sql(eng).format(where=where, order='u."createdAt" DESC')
-    rows = q(eng, sql_built, {"d": days}) or []
+    rows = q(eng, sql_built, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
 
 
 def saas_users_churned(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     where = """u.end_date_subscription IS NOT NULL
-               AND u.end_date_subscription >= NOW() - make_interval(days => :d)
-               AND u.end_date_subscription <= NOW()""" + _seg_clause(segment)
-    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription DESC"), {"d": days}) or []
+               AND u.end_date_subscription >= :from_ts
+               AND u.end_date_subscription < :to_ts""" + _seg_clause(segment)
+    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription DESC"),
+             {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
 
 
@@ -495,25 +496,25 @@ def _build_order_select(eng) -> str:
 
 def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
 def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'o."createdAt" >= NOW() - make_interval(days => :d)'
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = 'o."createdAt" >= :from_ts AND o."createdAt" < :to_ts'
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
 def tn_orders_cancelled(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = "o.status = 'cancelled' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = "o.status = 'cancelled' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
@@ -534,7 +535,7 @@ def unidrop_orders_tn_paid(period: str = "30d", from_iso: str | None = None, to_
     NUNCA mezclar con tienda_nube de Unistore (que es Fox Electronics).
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     rows = q(eng, """
         SELECT tno.tienda_nube_id::text AS id,
                tno."number",
@@ -546,10 +547,10 @@ def unidrop_orders_tn_paid(period: str = "30d", from_iso: str | None = None, to_
                tno.user_id AS dropshipper_id
         FROM public.tienda_nube_orders tno
         WHERE tno.payment_status::text = 'paid'
-          AND tno.created_at >= NOW() - make_interval(days => :d)
+          AND tno.created_at >= :from_ts AND tno.created_at < :to_ts
         ORDER BY tno.created_at DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "number", "fecha", "estado_pago", "total", "cliente", "provincia", "dropshipper_id",
     ])
@@ -560,7 +561,7 @@ def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_
     Source: unidrop.mercado_libre_dev.OrderMercadoLibre.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     rows = q(eng, """
         SELECT o.id::text AS id,
                o."number",
@@ -572,10 +573,10 @@ def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_
                COALESCE(o."shipping_cost", 0)::float AS shipping_cost
         FROM mercado_libre_dev."OrderMercadoLibre" o
         WHERE o.status IN ('paid','confirmed','shipped','delivered')
-          AND o."dateCreated" >= NOW() - make_interval(days => :d)
+          AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
         ORDER BY o."dateCreated" DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "number", "ml_order_id", "fecha", "estado", "total", "profit_unidrop", "shipping_cost",
     ])
@@ -586,7 +587,7 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
     Ground truth de lo que efectivamente facturamos.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     rows = q(eng, """
         SELECT pi.id::text AS intent_id,
                pi."createdAt"::text AS fecha,
@@ -600,10 +601,10 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
         LEFT JOIN public."User" u ON u.id = cpa."userId"
         WHERE pi."status" = 'PROCESSED'
-          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+          AND pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
         ORDER BY pi."createdAt" DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "intent_id", "fecha", "pagado", "ml_orders_count", "tn_orders_count",
         "dropshipper", "dni", "dropshipper_id",
@@ -719,8 +720,8 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
     lugar de mostrarlo como una transaccion plana sin contexto.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'pt."createdAt" >= NOW() - make_interval(days => :d)'
+    win = resolve_window(period, from_iso, to_iso)
+    where = 'pt."createdAt" >= :from_ts AND pt."createdAt" < :to_ts'
     if status == "paid":
         where += " AND pt.status::text = 'PROCESSED' "
     elif status == "pending":
@@ -832,7 +833,7 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
         FROM public."PaymentTransaction" pt
         WHERE {where}
         ORDER BY pt."createdAt" DESC LIMIT 1000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "fecha", "status", "monto", "comision", "acreditado",
         "talo_id", "tipo", "orden_numero", "meli_orden_id",

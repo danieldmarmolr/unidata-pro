@@ -10,6 +10,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, DBAPIError
 
 from app.db import engines as db_engines
+from app.utils.tz import now_ar
 
 
 PERIOD_DAYS_DEFAULT = {"today": 1, "yesterday": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
@@ -22,13 +23,14 @@ def resolve_window(
 ) -> dict:
     """
     Devuelve {days, from_ts, to_ts, label} a partir del filtro.
-    - period='today' → desde inicio del día actual hasta ahora
-    - period='yesterday' → desde inicio del día previo hasta inicio del actual
+    - period='today'     → desde medianoche Argentina hasta ahora
+    - period='yesterday' → desde medianoche anterior hasta medianoche de hoy
     - period='custom' + from_iso/to_iso → esas fechas
-    - cualquier otro → últimos N días rolling desde NOW()
-    Garantiza from_ts < to_ts.
+    - cualquier otro     → últimos N días rolling desde ahora
+    Garantiza from_ts < to_ts. Siempre usa zona horaria Argentina (UTC-3)
+    para que 'today' coincida con el dia que ve el usuario, no con UTC.
     """
-    now = dt.datetime.now(dt.timezone.utc)
+    now = now_ar()
     if period == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return {"days": 1, "from_ts": start, "to_ts": now, "label": "today"}
@@ -38,8 +40,8 @@ def resolve_window(
         return {"days": 1, "from_ts": yesterday_start, "to_ts": today_start, "label": "yesterday"}
     if period == "custom" and from_iso and to_iso:
         try:
-            f = dt.datetime.fromisoformat(from_iso).replace(tzinfo=dt.timezone.utc)
-            t = dt.datetime.fromisoformat(to_iso).replace(tzinfo=dt.timezone.utc) + dt.timedelta(days=1)
+            f = dt.datetime.fromisoformat(from_iso).replace(tzinfo=now.tzinfo)
+            t = dt.datetime.fromisoformat(to_iso).replace(tzinfo=now.tzinfo) + dt.timedelta(days=1)
             if t <= f:
                 t = f + dt.timedelta(days=1)
             days = max(1, (t - f).days)
