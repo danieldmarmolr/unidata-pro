@@ -144,9 +144,10 @@ def orders_by_province(unit: str, province: str, period: str = "30d", from_iso: 
     )
 
 
-def orders_by_customer_unistore(customer_id: int) -> dict:
-    """Historial de orders de un customer."""
+def orders_by_customer_unistore(customer_id: int, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Historial de orders de un customer, filtrado por periodo."""
     eng = get_engine("unistore")
+    win = resolve_window(period, from_iso, to_iso)
     method_expr = _shipping_method_expr(eng)
     canal_sql = _classify_channel_sql("m.metodo_envio")
     rows = q(eng, f"""
@@ -164,6 +165,7 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
           LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
           LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
           WHERE o."customerId" = :cid
+            AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
         )
         SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus",
                m.total, m.provincia,
@@ -173,7 +175,7 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
         FROM base m
         ORDER BY m.fecha DESC
         LIMIT 200
-    """, {"cid": int(customer_id)}) or []
+    """, {"cid": int(customer_id), "from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(
         rows,
         ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia", "metodo_envio", "canal", "empaquetada"],
@@ -609,6 +611,41 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
         "intent_id", "fecha", "pagado", "ml_orders_count", "tn_orders_count",
         "dropshipper", "dni", "dropshipper_id",
     ])
+
+
+def unidrop_orders_combined_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes TN + ML combinadas de Unidrop para el periodo. Fuente de verdad para el popup del blurb."""
+    eng = get_engine("unidrop")
+    win = resolve_window(period, from_iso, to_iso)
+    rows = q(eng, """
+        SELECT 'TN'::text AS canal,
+               tno.tienda_nube_id::text AS id,
+               tno."number",
+               tno.created_at::text AS fecha,
+               COALESCE(tno.total, 0)::float AS total,
+               COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
+               COALESCE(tno."billingProvince", tno."shippingProvince", '') AS provincia,
+               tno.user_id::text AS dropshipper_id
+        FROM public.tienda_nube_orders tno
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= :from_ts AND tno.created_at < :to_ts
+        UNION ALL
+        SELECT 'ML'::text AS canal,
+               o.id::text AS id,
+               o."number",
+               o."dateCreated"::text AS fecha,
+               COALESCE(o."totalAmount", 0)::float AS total,
+               ''::text AS cliente,
+               ''::text AS provincia,
+               (SELECT mla."userId"::text FROM mercado_libre_dev."MercadoLibreUserAccount" mla
+                WHERE mla."mlUserId"::text = o."sellerId"::text LIMIT 1) AS dropshipper_id
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        WHERE o.status IN ('paid','confirmed','shipped','delivered')
+          AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
+        ORDER BY fecha DESC
+        LIMIT 2000
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
+    return _serialize(rows, ["canal", "id", "number", "fecha", "total", "cliente", "provincia", "dropshipper_id"])
 
 
 def unidrop_dropshippers_active_today() -> dict:

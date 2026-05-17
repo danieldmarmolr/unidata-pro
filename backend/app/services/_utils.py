@@ -30,7 +30,12 @@ def resolve_window(
     Garantiza from_ts < to_ts. Siempre usa zona horaria Argentina (UTC-3)
     para que 'today' coincida con el dia que ve el usuario, no con UTC.
     """
-    now = now_ar()
+    now_tz = now_ar()
+    # Naive Argentina datetimes — sin timezone info para que PostgreSQL los trate
+    # como timestamps locales en la session timezone (America/Argentina/Buenos_Aires).
+    # Esto es equivalente a CURRENT_DATE::timestamp en SQL puro y evita el drift UTC
+    # que ocurre cuando se pasan datetimes timezone-aware a columnas TIMESTAMP naive.
+    now = now_tz.replace(tzinfo=None)
     if period == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return {"days": 1, "from_ts": start, "to_ts": now, "label": "today"}
@@ -40,8 +45,13 @@ def resolve_window(
         return {"days": 1, "from_ts": yesterday_start, "to_ts": today_start, "label": "yesterday"}
     if period == "custom" and from_iso and to_iso:
         try:
-            f = dt.datetime.fromisoformat(from_iso).replace(tzinfo=now.tzinfo)
-            t = dt.datetime.fromisoformat(to_iso).replace(tzinfo=now.tzinfo) + dt.timedelta(days=1)
+            f = dt.datetime.fromisoformat(from_iso)
+            if f.tzinfo is not None:
+                f = f.astimezone(now_tz.tzinfo).replace(tzinfo=None)
+            t = dt.datetime.fromisoformat(to_iso)
+            if t.tzinfo is not None:
+                t = t.astimezone(now_tz.tzinfo).replace(tzinfo=None)
+            t = t + dt.timedelta(days=1)
             if t <= f:
                 t = f + dt.timedelta(days=1)
             days = max(1, (t - f).days)
