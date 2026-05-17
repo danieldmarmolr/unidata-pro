@@ -144,9 +144,10 @@ def orders_by_province(unit: str, province: str, period: str = "30d", from_iso: 
     )
 
 
-def orders_by_customer_unistore(customer_id: int) -> dict:
-    """Historial de orders de un customer."""
+def orders_by_customer_unistore(customer_id: int, period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Historial de orders de un customer, filtrado por periodo."""
     eng = get_engine("unistore")
+    win = resolve_window(period, from_iso, to_iso)
     method_expr = _shipping_method_expr(eng)
     canal_sql = _classify_channel_sql("m.metodo_envio")
     rows = q(eng, f"""
@@ -164,6 +165,7 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
           LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
           LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
           WHERE o."customerId" = :cid
+            AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
         )
         SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus",
                m.total, m.provincia,
@@ -173,7 +175,7 @@ def orders_by_customer_unistore(customer_id: int) -> dict:
         FROM base m
         ORDER BY m.fecha DESC
         LIMIT 200
-    """, {"cid": int(customer_id)}) or []
+    """, {"cid": int(customer_id), "from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(
         rows,
         ["order_id", "numero", "fecha", "payment", "shipping", "total", "provincia", "metodo_envio", "canal", "empaquetada"],
@@ -421,20 +423,21 @@ def saas_users_active(segment: str = "all") -> dict:
 
 def saas_users_new(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'u."createdAt" >= NOW() - make_interval(days => :d)' + _seg_clause(segment)
-    sql_built = _build_user_sql(eng).format(where=where, order='u."createdAt" DESC')
-    rows = q(eng, sql_built, {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = 'u.start_date_subscription::date >= CAST(:from_ts AS date) AND u.start_date_subscription::date <= CAST(:to_ts AS date)' + _seg_clause(segment)
+    sql_built = _build_user_sql(eng).format(where=where, order='u.start_date_subscription DESC')
+    rows = q(eng, sql_built, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
 
 
 def saas_users_churned(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     where = """u.end_date_subscription IS NOT NULL
-               AND u.end_date_subscription >= NOW() - make_interval(days => :d)
-               AND u.end_date_subscription <= NOW()""" + _seg_clause(segment)
-    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription DESC"), {"d": days}) or []
+               AND u.end_date_subscription >= :from_ts
+               AND u.end_date_subscription < :to_ts""" + _seg_clause(segment)
+    rows = q(eng, _build_user_sql(eng).format(where=where, order="u.end_date_subscription DESC"),
+             {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
 
 
@@ -495,25 +498,25 @@ def _build_order_select(eng) -> str:
 
 def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
 def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'o."createdAt" >= NOW() - make_interval(days => :d)'
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = 'o."createdAt" >= :from_ts AND o."createdAt" < :to_ts'
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
 def tn_orders_cancelled(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = "o.status = 'cancelled' AND o.\"createdAt\" >= NOW() - make_interval(days => :d)"
-    rows = q(eng, _build_order_select(eng).format(where=where), {"d": days}) or []
+    win = resolve_window(period, from_iso, to_iso)
+    where = "o.status = 'cancelled' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
+    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _orders_serialize(rows)
 
 
@@ -534,22 +537,26 @@ def unidrop_orders_tn_paid(period: str = "30d", from_iso: str | None = None, to_
     NUNCA mezclar con tienda_nube de Unistore (que es Fox Electronics).
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    rows = q(eng, """
+    win = resolve_window(period, from_iso, to_iso)
+    # tienda_nube_orders usa snake_case — billingProvince/shippingProvince no existen
+    prov_col = col_or_null(eng, "public", "tienda_nube_orders", "tno", [
+        "billing_province", "shipping_province", "billingProvince", "shippingProvince", "province",
+    ])
+    rows = q(eng, f"""
         SELECT tno.tienda_nube_id::text AS id,
                tno."number",
                tno.created_at::text AS fecha,
                tno.payment_status::text AS estado_pago,
                COALESCE(tno.total, 0)::float AS total,
                COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
-               COALESCE(tno."billingProvince", tno."shippingProvince", '') AS provincia,
+               COALESCE({prov_col}::text, '') AS provincia,
                tno.user_id AS dropshipper_id
         FROM public.tienda_nube_orders tno
         WHERE tno.payment_status::text = 'paid'
-          AND tno.created_at >= NOW() - make_interval(days => :d)
+          AND tno.created_at >= :from_ts AND tno.created_at < :to_ts
         ORDER BY tno.created_at DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "number", "fecha", "estado_pago", "total", "cliente", "provincia", "dropshipper_id",
     ])
@@ -560,11 +567,11 @@ def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_
     Source: unidrop.mercado_libre_dev.OrderMercadoLibre.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     rows = q(eng, """
         SELECT o.id::text AS id,
                o."number",
-               o."mlOrderId"::text AS ml_order_id,
+               o.id::text AS ml_order_id,
                o."dateCreated"::text AS fecha,
                o.status::text AS estado,
                COALESCE(o."totalAmount", 0)::float AS total,
@@ -572,10 +579,10 @@ def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_
                COALESCE(o."shipping_cost", 0)::float AS shipping_cost
         FROM mercado_libre_dev."OrderMercadoLibre" o
         WHERE o.status IN ('paid','confirmed','shipped','delivered')
-          AND o."dateCreated" >= NOW() - make_interval(days => :d)
+          AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
         ORDER BY o."dateCreated" DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "number", "ml_order_id", "fecha", "estado", "total", "profit_unidrop", "shipping_cost",
     ])
@@ -586,7 +593,7 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
     Ground truth de lo que efectivamente facturamos.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    win = resolve_window(period, from_iso, to_iso)
     rows = q(eng, """
         SELECT pi.id::text AS intent_id,
                pi."createdAt"::text AS fecha,
@@ -600,14 +607,49 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
         LEFT JOIN public."User" u ON u.id = cpa."userId"
         WHERE pi."status" = 'PROCESSED'
-          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+          AND pi."createdAt" >= :from_ts AND pi."createdAt" < :to_ts
         ORDER BY pi."createdAt" DESC NULLS LAST
         LIMIT 2000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "intent_id", "fecha", "pagado", "ml_orders_count", "tn_orders_count",
         "dropshipper", "dni", "dropshipper_id",
     ])
+
+
+def unidrop_orders_combined_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes TN + ML combinadas de Unidrop para el periodo. Fuente de verdad para el popup del blurb."""
+    eng = get_engine("unidrop")
+    win = resolve_window(period, from_iso, to_iso)
+    rows = q(eng, """
+        SELECT 'TN'::text AS canal,
+               tno.tienda_nube_id::text AS id,
+               tno."number",
+               tno.created_at::text AS fecha,
+               COALESCE(tno.total, 0)::float AS total,
+               COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
+               ''::text AS provincia,
+               tno.user_id::text AS dropshipper_id
+        FROM public.tienda_nube_orders tno
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= :from_ts AND tno.created_at < :to_ts
+        UNION ALL
+        SELECT 'ML'::text AS canal,
+               o.id::text AS id,
+               o."number",
+               o."dateCreated"::text AS fecha,
+               COALESCE(o."totalAmount", 0)::float AS total,
+               ''::text AS cliente,
+               ''::text AS provincia,
+               (SELECT mla."userId"::text FROM mercado_libre_dev."MercadoLibreUserAccount" mla
+                WHERE mla."mlUserId"::text = o."sellerId"::text LIMIT 1) AS dropshipper_id
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        WHERE o.status IN ('paid','confirmed','shipped','delivered')
+          AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
+        ORDER BY fecha DESC
+        LIMIT 2000
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
+    return _serialize(rows, ["canal", "id", "number", "fecha", "total", "cliente", "provincia", "dropshipper_id"])
 
 
 def unidrop_dropshippers_active_today() -> dict:
@@ -719,23 +761,25 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
     lugar de mostrarlo como una transaccion plana sin contexto.
     """
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
-    where = 'pt."createdAt" >= NOW() - make_interval(days => :d)'
+    win = resolve_window(period, from_iso, to_iso)
+    # creditedAmount puede no existir en todas las instancias del schema
+    credited_col = col_or_null(eng, "public", "PaymentTransaction", "pt", ["creditedAmount", "credited_amount"])
+    where = 'pt."createdAt" >= :from_ts AND pt."createdAt" < :to_ts'
     if status == "paid":
-        where += " AND pt.status::text = 'PROCESSED' "
+        where += " AND UPPER(pt.status::text) IN ('COMPLETED','SUCCEEDED','APPROVED','PAID','PROCESSED') "
     elif status == "pending":
-        where += " AND pt.status::text = 'PENDING' "
+        where += " AND UPPER(pt.status::text) = 'PENDING' "
     elif status == "refunded":
-        where += " AND pt.status::text IN ('CANCELLED','REFUNDED','VOIDED') "
+        where += " AND UPPER(pt.status::text) IN ('CANCELLED','REFUNDED','VOIDED') "
     rows = q(eng, f"""
         SELECT pt.id,
                pt."createdAt"::text AS fecha,
                pt.status::text AS status,
                pt.amount::float AS monto,
-               pt.commission::float AS comision,
-               pt."creditedAmount"::float AS acreditado,
+               COALESCE(pt.commission, 0)::float AS comision,
+               COALESCE({credited_col}::float, 0) AS acreditado,
                COALESCE(pt."taloTransactionId", '') AS talo_id,
-               -- tipo: clasifica el PaymentIntent asociado
+               -- tipo: orderIds y mlOrderIds son arrays PostgreSQL, NO jsonb
                CASE
                  WHEN EXISTS (
                    SELECT 1 FROM public."PaymentIntent" pi
@@ -747,92 +791,69 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
                    SELECT 1 FROM public."PaymentIntent" pi
                    WHERE pi."paymentTransactionId" = pt.id
                      AND pi."orderIds" IS NOT NULL
-                     AND jsonb_typeof(pi."orderIds"::jsonb) = 'array'
-                     AND jsonb_array_length(pi."orderIds"::jsonb) > 0
+                     AND array_length(pi."orderIds", 1) > 0
                  ) THEN 'Orden TN'
                  ELSE 'Suscripcion / Otros'
                END AS tipo,
-               -- numero de orden TN (formato DROP-DNI-Incremental)
                COALESCE((
                   SELECT string_agg(COALESCE(o.order_number, o.number::text), ', ')
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL
                ), '') AS orden_numero,
-               -- numero de orden MELI (ml order id de PaymentIntent.mlOrderIds)
                COALESCE((
                   SELECT string_agg(mloid::text, ', ')
                   FROM public."PaymentIntent" pi
                   CROSS JOIN LATERAL unnest(pi."mlOrderIds") AS mloid
                   WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."mlOrderIds" IS NOT NULL
                ), '') AS meli_orden_id,
-               -- user via tienda_nube_orders.user_id
                COALESCE((
                   SELECT u.id::text
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.id IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.id IS NOT NULL
                   LIMIT 1
                ), '') AS user_id,
                COALESCE((
                   SELECT u.dni
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.dni IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.dni IS NOT NULL
                   LIMIT 1
                ), '') AS dni,
                COALESCE((
                   SELECT u.email
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.email IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.email IS NOT NULL
                   LIMIT 1
                ), '') AS email,
                COALESCE((
                   SELECT u.phone
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.phone IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.phone IS NOT NULL
                   LIMIT 1
                ), '') AS telefono
         FROM public."PaymentTransaction" pt
         WHERE {where}
         ORDER BY pt."createdAt" DESC LIMIT 1000
-    """, {"d": days}) or []
+    """, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, [
         "id", "fecha", "status", "monto", "comision", "acreditado",
         "talo_id", "tipo", "orden_numero", "meli_orden_id",
@@ -876,9 +897,9 @@ def subs_meli_active(plan: str | None = None) -> dict:
 
 def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     try:
-        eng = get_engine("unistore")  # devoluciones vive en unistore_api (mismo cluster RDS)
+        eng = get_engine("unidev")
     except Exception as e:
-        log.warning("devoluciones_list: no engine unistore: %s", e)
+        log.warning("devoluciones_list: no engine unidev: %s", e)
         return _serialize([], [])
     win = resolve_window(period, from_iso, to_iso)
     where = "d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts"
@@ -887,15 +908,27 @@ def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | 
     if modelo != "all":
         where += " AND d.modelo_negocio = :m"
         p["m"] = modelo
-    # Sanity: cuantos registros hay sin el subquery
     count_check = q(eng, f"SELECT COUNT(*) FROM public.devoluciones d WHERE {where}", p)
     log.info("devoluciones_list count_check: %s", count_check[0][0] if count_check else "NONE")
+    # devolucion_items may not exist — check before joining
+    has_items = q(eng, """
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='public' AND table_name='devolucion_items' LIMIT 1
+    """)
+    if has_items:
+        qty_col = col_or_null(eng, "public", "devolucion_items", "di", ["cantidad_solicitada", "quantity", "qty"])
+        unit_col = col_or_null(eng, "public", "devolucion_items", "di", ["monto_unitario", "unit_price", "price", "monto"])
+        join_sql = "LEFT JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id"
+        monto_expr = f"COALESCE(SUM({qty_col}::float * {unit_col}::float), 0)::float AS monto"
+    else:
+        join_sql = ""
+        monto_expr = "0::float AS monto"
     rows = q(eng, f"""
         SELECT d.devolucion_id, d.fecha_creacion::text, d.estado_general,
                d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email,
-               COALESCE(SUM(di.cantidad_solicitada * di.monto_unitario), 0)::float AS monto
+               {monto_expr}
         FROM public.devoluciones d
-        LEFT JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id
+        {join_sql}
         WHERE {where}
         GROUP BY d.devolucion_id, d.fecha_creacion, d.estado_general,
                  d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email

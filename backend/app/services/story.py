@@ -128,9 +128,9 @@ def today_story() -> dict:
                 "accent": "#0ea5e9",
                 "link": {
                     "kind": "drill",
-                    "endpoint": "/api/drilldowns/unidrop/orders-tn?period=today",
-                    "title": "Ordenes TN pagas de hoy · Unidrop",
-                    "filename": "unidrop_orders_tn_today.csv",
+                    "endpoint": "/api/drilldowns/unidrop/orders-combined?period=today",
+                    "title": "Ordenes TN+ML pagas de hoy · Unidrop",
+                    "filename": "unidrop_orders_today.csv",
                 },
             })
     except Exception as e:

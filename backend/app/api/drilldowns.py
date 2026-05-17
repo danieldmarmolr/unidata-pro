@@ -35,8 +35,11 @@ def province_orders(
 def customer_orders(
     customer_id: int,
     _: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
-    return svc.orders_by_customer_unistore(customer_id)
+    return svc.orders_by_customer_unistore(customer_id, period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/payment-accounts/{account_id}/transactions")
@@ -182,6 +185,17 @@ def drill_unidrop_orders_ml(
 ) -> dict:
     """Ordenes ML de dropshippers Unidrop pagadas en periodo."""
     return svc.unidrop_orders_ml_paid(period, from_iso=from_iso, to_iso=to_iso)
+
+
+@router.get("/unidrop/orders-combined")
+def drill_unidrop_orders_combined(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[_PERIOD_LITERAL, Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Ordenes TN + ML combinadas de dropshippers Unidrop pagadas en periodo."""
+    return svc.unidrop_orders_combined_paid(period, from_iso=from_iso, to_iso=to_iso)
 
 
 @router.get("/unidrop/dropshippers-active-today")
