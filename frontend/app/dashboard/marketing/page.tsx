@@ -179,6 +179,8 @@ export default function MarketingPage() {
           </>
         )}
 
+        {unit === "unidrop" && <MetaAdsTeaser />}
+
         {unit === "unidrop" && dataDrop && (
           <InteractiveMetricChart
             points={(() => {
@@ -216,5 +218,57 @@ export default function MarketingPage() {
         />
       )}
     </>
+  );
+}
+
+function MetaAdsTeaser() {
+  type Impact = {
+    kpi: { spend: number; new_signups: number; new_subscriptions: number;
+           cac_dropshipper: number; roas: number; revenue_pi: number };
+  };
+  const { data } = useQuery<Impact>({
+    queryKey: ["meta-impact-teaser-30d"],
+    queryFn: () => api(`/api/marketing/meta/unidrop-impact?period=30d`),
+    staleTime: 120_000,
+  });
+  const k = data?.kpi;
+  return (
+    <a href="/dashboard/marketing/meta"
+       className="block bg-gradient-to-br from-primary/5 via-accent/5 to-transparent border border-primary/30 rounded-xl p-4 mb-6 hover:shadow-md transition">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center flex-shrink-0">
+          <span className="text-base font-extrabold">M</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-bold text-text">Meta Ads · Pautas Unidrop</h3>
+          <p className="text-[11px] text-text-muted">Spend Facebook/Instagram cruzado con signups y revenue · últimos 30 días</p>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap text-[11px]">
+          {k && (
+            <>
+              <div className="text-right">
+                <div className="text-text-muted text-[9px] uppercase tracking-wider">Inversión</div>
+                <div className="font-bold tabular-nums">{new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(k.spend)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-text-muted text-[9px] uppercase tracking-wider">Signups</div>
+                <div className="font-bold tabular-nums">{k.new_signups}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-text-muted text-[9px] uppercase tracking-wider">CAC</div>
+                <div className="font-bold tabular-nums text-primary">
+                  {k.cac_dropshipper > 0 ? new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(k.cac_dropshipper) : "—"}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-text-muted text-[9px] uppercase tracking-wider">ROAS</div>
+                <div className="font-bold tabular-nums text-emerald-600">{k.roas > 0 ? `${k.roas.toFixed(2)}x` : "—"}</div>
+              </div>
+            </>
+          )}
+          <span className="text-primary text-xs font-semibold">Ver detalle →</span>
+        </div>
+      </div>
+    </a>
   );
 }

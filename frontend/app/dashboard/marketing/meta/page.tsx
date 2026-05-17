@@ -11,6 +11,7 @@ import { fmtArDateTime } from "@/lib/dates";
 import {
   ArrowLeft, DollarSign, Eye, MousePointerClick, Target, TrendingUp,
   RefreshCw, Megaphone, ChevronRight, ChevronDown, ExternalLink, AlertTriangle,
+  Users, UserPlus, Repeat, Zap,
 } from "lucide-react";
 
 type MetaOverview = {
@@ -31,6 +32,25 @@ type MetaOverview = {
   }[];
   period: string;
   unit: string | null;
+};
+
+type MetaImpact = {
+  period: string;
+  kpi: {
+    spend: number;
+    impressions: number;
+    clicks: number;
+    new_signups: number;
+    new_subscriptions: number;
+    revenue_pi: number;
+    pi_count: number;
+    cac_dropshipper: number;
+    cac_subscripcion: number;
+    roas: number;
+    cpc: number;
+  };
+  daily: { d: string; spend: number; clicks: number; signups: number; revenue: number }[];
+  funnel: { step: string; value: number; rate_from_prev: number | null }[];
 };
 
 type MetaCampaign = {
@@ -75,6 +95,13 @@ export default function MetaAdsPage() {
     queryKey: ["meta-campaigns", period, unit],
     queryFn: () => api(`/api/marketing/meta/campaigns?period=${period}${unit ? `&unit=${unit}` : ""}&limit=200`),
     staleTime: 60_000,
+  });
+  // Cross-impact Unidrop (solo cuando unit es unidrop o sin filtro y la cuenta es Unidrop)
+  const impQ = useQuery<MetaImpact>({
+    queryKey: ["meta-unidrop-impact", period],
+    queryFn: () => api(`/api/marketing/meta/unidrop-impact?period=${period}`),
+    staleTime: 60_000,
+    enabled: !unit || unit === "unidrop",
   });
 
   type SyncResult = { ok: boolean; accounts?: { id: string; name: string; campaigns: number; ads: number; insights: number; error: string | null }[] };
@@ -185,6 +212,140 @@ export default function MetaAdsPage() {
               <KpiCard icon={Target} label="CPC" value={formatCurrency(ov.kpi.cpc)} hint="Costo por click" />
               <KpiCard icon={TrendingUp} label="CPM" value={formatCurrency(ov.kpi.cpm)} hint="Costo por mil impresiones" />
             </div>
+
+            {/* === Impacto en Unidrop (cross-area) === */}
+            {impQ.data && (!unit || unit === "unidrop") && (
+              <div className="bg-gradient-to-br from-primary/5 via-accent/5 to-transparent border border-primary/20 rounded-xl p-4 mb-5">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div>
+                    <h2 className="text-sm font-bold text-text inline-flex items-center gap-2">
+                      <Zap size={14} className="text-primary" /> Impacto de la pauta en UNIDROP
+                    </h2>
+                    <p className="text-[11px] text-text-muted">
+                      Spend Meta × signups · suscripciones · revenue PaymentIntent · funnel
+                    </p>
+                  </div>
+                </div>
+                {/* KPIs cross */}
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                  <KpiBoxCross
+                    icon={UserPlus} accent="emerald"
+                    label="Nuevos signups"
+                    value={formatNumber(impQ.data.kpi.new_signups)}
+                    hint={impQ.data.kpi.cac_dropshipper > 0
+                      ? `CAC ${formatCurrency(impQ.data.kpi.cac_dropshipper)}/dropshipper`
+                      : "Sin CAC calculado"}
+                  />
+                  <KpiBoxCross
+                    icon={Repeat} accent="primary"
+                    label="Suscripciones nuevas"
+                    value={formatNumber(impQ.data.kpi.new_subscriptions)}
+                    hint={impQ.data.kpi.cac_subscripcion > 0
+                      ? `CAC ${formatCurrency(impQ.data.kpi.cac_subscripcion)}/suscripción`
+                      : "Sin CAC calculado"}
+                  />
+                  <KpiBoxCross
+                    icon={DollarSign} accent="emerald"
+                    label="Revenue PaymentIntent"
+                    value={formatCurrency(impQ.data.kpi.revenue_pi)}
+                    hint={`${formatNumber(impQ.data.kpi.pi_count)} pagos PROCESSED`}
+                  />
+                  <KpiBoxCross
+                    icon={TrendingUp} accent="amber"
+                    label="ROAS (gross)"
+                    value={impQ.data.kpi.roas > 0 ? `${impQ.data.kpi.roas.toFixed(2)}x` : "—"}
+                    hint={impQ.data.kpi.spend > 0
+                      ? `${formatCurrency(impQ.data.kpi.revenue_pi)} / ${formatCurrency(impQ.data.kpi.spend)}`
+                      : "Sin spend"}
+                  />
+                  <KpiBoxCross
+                    icon={Users} accent="primary"
+                    label="Conversión click→signup"
+                    value={impQ.data.kpi.clicks > 0
+                      ? `${(impQ.data.kpi.new_signups / impQ.data.kpi.clicks * 100).toFixed(2)}%`
+                      : "—"}
+                    hint={`${formatNumber(impQ.data.kpi.clicks)} clicks → ${formatNumber(impQ.data.kpi.new_signups)} signups`}
+                  />
+                </div>
+
+                {/* Funnel */}
+                <div className="bg-surface border border-border rounded-lg p-3 mb-4">
+                  <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-3">Funnel de adquisición</div>
+                  <div className="space-y-1.5">
+                    {(() => {
+                      const maxV = Math.max(1, ...impQ.data.funnel.map((s) => s.value));
+                      return impQ.data.funnel.map((s, i) => (
+                        <div key={s.step} className="flex items-center gap-3">
+                          <div className="w-44 text-xs flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-primary/10 text-primary text-[10px] font-bold flex items-center justify-center">{i + 1}</span>
+                            <span className="font-semibold text-text">{s.step}</span>
+                          </div>
+                          <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden">
+                            <div className="h-full bg-gradient-to-r from-primary/70 to-accent/70"
+                                 style={{ width: `${(s.value / maxV) * 100}%` }} />
+                            <div className="absolute inset-0 flex items-center justify-end pr-2 text-[11px] font-bold tabular-nums text-text">
+                              {formatNumber(s.value)}
+                            </div>
+                          </div>
+                          <div className="w-20 text-right text-[10px] text-text-muted tabular-nums shrink-0">
+                            {s.rate_from_prev !== null && s.rate_from_prev > 0
+                              ? `${s.rate_from_prev.toFixed(2)}%`
+                              : ""}
+                          </div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                </div>
+
+                {/* Daily overlay: spend + signups + revenue */}
+                {impQ.data.daily.length > 0 && (
+                  <div className="bg-surface border border-border rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
+                        <p className="text-[10px] text-text-muted">
+                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary inline-block" /> Spend</span>
+                          {" · "}
+                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500 inline-block" /> Signups</span>
+                          {" · "}
+                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500 inline-block" /> Revenue</span>
+                        </p>
+                      </div>
+                    </div>
+                    {(() => {
+                      const last30 = impQ.data.daily.slice(-30);
+                      const maxSpend = Math.max(1, ...last30.map((d) => d.spend));
+                      const maxSign = Math.max(1, ...last30.map((d) => d.signups));
+                      const maxRev = Math.max(1, ...last30.map((d) => d.revenue));
+                      return (
+                        <div className="space-y-1">
+                          {last30.map((d) => (
+                            <div key={d.d} className="flex items-center gap-2">
+                              <div className="w-14 text-[10px] text-text-muted font-mono shrink-0">{d.d.slice(5)}</div>
+                              <div className="flex-1 grid grid-cols-3 gap-1">
+                                <div className="h-4 bg-soft rounded relative overflow-hidden">
+                                  <div className="h-full bg-primary" style={{ width: `${(d.spend / maxSpend) * 100}%` }} />
+                                </div>
+                                <div className="h-4 bg-soft rounded relative overflow-hidden">
+                                  <div className="h-full bg-emerald-500" style={{ width: `${(d.signups / maxSign) * 100}%` }} />
+                                </div>
+                                <div className="h-4 bg-soft rounded relative overflow-hidden">
+                                  <div className="h-full bg-amber-500" style={{ width: `${(d.revenue / maxRev) * 100}%` }} />
+                                </div>
+                              </div>
+                              <div className="w-44 text-right text-[10px] text-text-muted shrink-0 tabular-nums">
+                                {formatCurrency(d.spend)} · {d.signups} sign · {formatCurrency(d.revenue)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Daily spend chart */}
             {ov.daily.length > 0 && (
@@ -304,6 +465,34 @@ function KpiCard({ icon: Icon, label, value, hint }: { icon: typeof Eye; label: 
       </div>
       <div className="text-xl font-extrabold text-text tabular-nums truncate">{value}</div>
       <div className="text-[10px] text-text-muted mt-1">{hint}</div>
+    </div>
+  );
+}
+
+function KpiBoxCross({
+  icon: Icon, label, value, hint, accent,
+}: {
+  icon: typeof Eye;
+  label: string;
+  value: string;
+  hint: string;
+  accent: "primary" | "emerald" | "amber";
+}) {
+  const accents: Record<"primary" | "emerald" | "amber", string> = {
+    primary: "from-primary to-accent",
+    emerald: "from-emerald-500 to-teal-500",
+    amber: "from-amber-500 to-orange-500",
+  };
+  return (
+    <div className="bg-surface border border-border rounded-lg p-3">
+      <div className="flex items-start justify-between mb-1">
+        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+        <div className={`w-7 h-7 rounded-md bg-gradient-to-br ${accents[accent]} text-white flex items-center justify-center shadow-sm`}>
+          <Icon size={12} />
+        </div>
+      </div>
+      <div className="text-lg font-extrabold text-text tabular-nums truncate">{value}</div>
+      <div className="text-[10px] text-text-muted mt-0.5 truncate">{hint}</div>
     </div>
   );
 }
