@@ -424,8 +424,8 @@ def saas_users_active(segment: str = "all") -> dict:
 def saas_users_new(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
-    where = 'u."createdAt" >= :from_ts AND u."createdAt" < :to_ts' + _seg_clause(segment)
-    sql_built = _build_user_sql(eng).format(where=where, order='u."createdAt" DESC')
+    where = 'u.start_date_subscription::date >= :from_ts::date AND u.start_date_subscription::date <= :to_ts::date' + _seg_clause(segment)
+    sql_built = _build_user_sql(eng).format(where=where, order='u.start_date_subscription DESC')
     rows = q(eng, sql_built, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
 
@@ -567,7 +567,7 @@ def unidrop_orders_ml_paid(period: str = "30d", from_iso: str | None = None, to_
     rows = q(eng, """
         SELECT o.id::text AS id,
                o."number",
-               o."mlOrderId"::text AS ml_order_id,
+               o.id::text AS ml_order_id,
                o."dateCreated"::text AS fecha,
                o.status::text AS estado,
                COALESCE(o."totalAmount", 0)::float AS total,
@@ -758,22 +758,24 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
     """
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
+    # creditedAmount puede no existir en todas las instancias del schema
+    credited_col = col_or_null(eng, "public", "PaymentTransaction", "pt", ["creditedAmount", "credited_amount"])
     where = 'pt."createdAt" >= :from_ts AND pt."createdAt" < :to_ts'
     if status == "paid":
-        where += " AND pt.status::text = 'PROCESSED' "
+        where += " AND UPPER(pt.status::text) IN ('COMPLETED','SUCCEEDED','APPROVED','PAID','PROCESSED') "
     elif status == "pending":
-        where += " AND pt.status::text = 'PENDING' "
+        where += " AND UPPER(pt.status::text) = 'PENDING' "
     elif status == "refunded":
-        where += " AND pt.status::text IN ('CANCELLED','REFUNDED','VOIDED') "
+        where += " AND UPPER(pt.status::text) IN ('CANCELLED','REFUNDED','VOIDED') "
     rows = q(eng, f"""
         SELECT pt.id,
                pt."createdAt"::text AS fecha,
                pt.status::text AS status,
                pt.amount::float AS monto,
-               pt.commission::float AS comision,
-               pt."creditedAmount"::float AS acreditado,
+               COALESCE(pt.commission, 0)::float AS comision,
+               COALESCE({credited_col}::float, 0) AS acreditado,
                COALESCE(pt."taloTransactionId", '') AS talo_id,
-               -- tipo: clasifica el PaymentIntent asociado
+               -- tipo: orderIds y mlOrderIds son arrays PostgreSQL, NO jsonb
                CASE
                  WHEN EXISTS (
                    SELECT 1 FROM public."PaymentIntent" pi
@@ -785,86 +787,63 @@ def talo_transactions(period: str = "30d", status: str | None = None, from_iso: 
                    SELECT 1 FROM public."PaymentIntent" pi
                    WHERE pi."paymentTransactionId" = pt.id
                      AND pi."orderIds" IS NOT NULL
-                     AND jsonb_typeof(pi."orderIds"::jsonb) = 'array'
-                     AND jsonb_array_length(pi."orderIds"::jsonb) > 0
+                     AND array_length(pi."orderIds", 1) > 0
                  ) THEN 'Orden TN'
                  ELSE 'Suscripcion / Otros'
                END AS tipo,
-               -- numero de orden TN (formato DROP-DNI-Incremental)
                COALESCE((
                   SELECT string_agg(COALESCE(o.order_number, o.number::text), ', ')
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL
                ), '') AS orden_numero,
-               -- numero de orden MELI (ml order id de PaymentIntent.mlOrderIds)
                COALESCE((
                   SELECT string_agg(mloid::text, ', ')
                   FROM public."PaymentIntent" pi
                   CROSS JOIN LATERAL unnest(pi."mlOrderIds") AS mloid
                   WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."mlOrderIds" IS NOT NULL
                ), '') AS meli_orden_id,
-               -- user via tienda_nube_orders.user_id
                COALESCE((
                   SELECT u.id::text
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.id IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.id IS NOT NULL
                   LIMIT 1
                ), '') AS user_id,
                COALESCE((
                   SELECT u.dni
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.dni IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.dni IS NOT NULL
                   LIMIT 1
                ), '') AS dni,
                COALESCE((
                   SELECT u.email
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.email IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.email IS NOT NULL
                   LIMIT 1
                ), '') AS email,
                COALESCE((
                   SELECT u.phone
                   FROM public."PaymentIntent" pi
-                  CROSS JOIN LATERAL jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(pi."orderIds"::jsonb) = 'array' THEN pi."orderIds"::jsonb
-                      ELSE '[]'::jsonb
-                    END
-                  ) AS oid
-                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid
+                  CROSS JOIN LATERAL unnest(pi."orderIds") AS oid
+                  LEFT JOIN public.tienda_nube_orders o ON o.tienda_nube_id::text = oid::text
                   LEFT JOIN public."User" u ON u.id = o.user_id
-                  WHERE pi."paymentTransactionId" = pt.id AND u.phone IS NOT NULL
+                  WHERE pi."paymentTransactionId" = pt.id
+                    AND pi."orderIds" IS NOT NULL AND u.phone IS NOT NULL
                   LIMIT 1
                ), '') AS telefono
         FROM public."PaymentTransaction" pt
@@ -914,7 +893,7 @@ def subs_meli_active(plan: str | None = None) -> dict:
 
 def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     try:
-        eng = get_engine("unistore")  # devoluciones vive en unistore_api (mismo cluster RDS)
+        eng = get_engine("unidev")
     except Exception as e:
         log.warning("devoluciones_list: no engine unistore: %s", e)
         return _serialize([], [])
