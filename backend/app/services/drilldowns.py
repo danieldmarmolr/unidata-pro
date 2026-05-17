@@ -424,7 +424,7 @@ def saas_users_active(segment: str = "all") -> dict:
 def saas_users_new(period: str = "30d", segment: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
-    where = 'u.start_date_subscription::date >= :from_ts::date AND u.start_date_subscription::date <= :to_ts::date' + _seg_clause(segment)
+    where = 'u.start_date_subscription::date >= CAST(:from_ts AS date) AND u.start_date_subscription::date <= CAST(:to_ts AS date)' + _seg_clause(segment)
     sql_built = _build_user_sql(eng).format(where=where, order='u.start_date_subscription DESC')
     rows = q(eng, sql_built, {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
     return _serialize(rows, _USER_COLS)
@@ -899,7 +899,7 @@ def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | 
     try:
         eng = get_engine("unidev")
     except Exception as e:
-        log.warning("devoluciones_list: no engine unistore: %s", e)
+        log.warning("devoluciones_list: no engine unidev: %s", e)
         return _serialize([], [])
     win = resolve_window(period, from_iso, to_iso)
     where = "d.fecha_creacion >= :from_ts AND d.fecha_creacion < :to_ts"
@@ -908,15 +908,27 @@ def devoluciones_list(period: str = "30d", modelo: str = "all", from_iso: str | 
     if modelo != "all":
         where += " AND d.modelo_negocio = :m"
         p["m"] = modelo
-    # Sanity: cuantos registros hay sin el subquery
     count_check = q(eng, f"SELECT COUNT(*) FROM public.devoluciones d WHERE {where}", p)
     log.info("devoluciones_list count_check: %s", count_check[0][0] if count_check else "NONE")
+    # devolucion_items may not exist — check before joining
+    has_items = q(eng, """
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema='public' AND table_name='devolucion_items' LIMIT 1
+    """)
+    if has_items:
+        qty_col = col_or_null(eng, "public", "devolucion_items", "di", ["cantidad_solicitada", "quantity", "qty"])
+        unit_col = col_or_null(eng, "public", "devolucion_items", "di", ["monto_unitario", "unit_price", "price", "monto"])
+        join_sql = "LEFT JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id"
+        monto_expr = f"COALESCE(SUM({qty_col}::float * {unit_col}::float), 0)::float AS monto"
+    else:
+        join_sql = ""
+        monto_expr = "0::float AS monto"
     rows = q(eng, f"""
         SELECT d.devolucion_id, d.fecha_creacion::text, d.estado_general,
                d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email,
-               COALESCE(SUM(di.cantidad_solicitada * di.monto_unitario), 0)::float AS monto
+               {monto_expr}
         FROM public.devoluciones d
-        LEFT JOIN public.devolucion_items di ON di.devolucion_id = d.devolucion_id
+        {join_sql}
         WHERE {where}
         GROUP BY d.devolucion_id, d.fecha_creacion, d.estado_general,
                  d.modelo_negocio, d.tipo_resolucion_preferida, d.cliente_email
