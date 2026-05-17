@@ -538,14 +538,18 @@ def unidrop_orders_tn_paid(period: str = "30d", from_iso: str | None = None, to_
     """
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
-    rows = q(eng, """
+    # tienda_nube_orders usa snake_case — billingProvince/shippingProvince no existen
+    prov_col = col_or_null(eng, "public", "tienda_nube_orders", "tno", [
+        "billing_province", "shipping_province", "billingProvince", "shippingProvince", "province",
+    ])
+    rows = q(eng, f"""
         SELECT tno.tienda_nube_id::text AS id,
                tno."number",
                tno.created_at::text AS fecha,
                tno.payment_status::text AS estado_pago,
                COALESCE(tno.total, 0)::float AS total,
                COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
-               COALESCE(tno."billingProvince", tno."shippingProvince", '') AS provincia,
+               COALESCE({prov_col}::text, '') AS provincia,
                tno.user_id AS dropshipper_id
         FROM public.tienda_nube_orders tno
         WHERE tno.payment_status::text = 'paid'
@@ -624,7 +628,7 @@ def unidrop_orders_combined_paid(period: str = "30d", from_iso: str | None = Non
                tno.created_at::text AS fecha,
                COALESCE(tno.total, 0)::float AS total,
                COALESCE(NULLIF(tno.contact_name,''), tno.contact_identification, '') AS cliente,
-               COALESCE(tno."billingProvince", tno."shippingProvince", '') AS provincia,
+               ''::text AS provincia,
                tno.user_id::text AS dropshipper_id
         FROM public.tienda_nube_orders tno
         WHERE tno.payment_status::text = 'paid'
