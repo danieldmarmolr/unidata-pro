@@ -507,9 +507,10 @@ def unidrop_impact(period: str = "30d") -> dict:
         daily_map[d]["revenue"] = float(r[1] or 0)
     daily = sorted(daily_map.values(), key=lambda x: x["d"])
 
-    spend = float(meta_tot[0] or 0) if meta_tot else 0.0
-    impressions = int(meta_tot[1] or 0) if meta_tot else 0
-    clicks = int(meta_tot[2] or 0) if meta_tot else 0
+    # get_conn usa RealDictCursor → meta_tot es dict
+    spend = float((meta_tot or {}).get("spend") or 0)
+    impressions = int((meta_tot or {}).get("impressions") or 0)
+    clicks = int((meta_tot or {}).get("clicks") or 0)
 
     cac_dropshipper = (spend / new_signups) if new_signups > 0 else 0.0
     cac_subscripcion = (spend / new_subs) if new_subs > 0 else 0.0
