@@ -259,6 +259,88 @@ def _sync_insights(account_id: str, since: str, until: str) -> int:
 # ─── Public sync API ──────────────────────────────────────────────────────────
 
 
+# Tipos de breakdown soportados (subset común que Meta acepta solo).
+# Algunos breakdowns son mutuamente excluyentes en una sola request, por eso
+# sincronizamos uno por uno.
+SUPPORTED_BREAKDOWNS = [
+    "age",
+    "gender",
+    "publisher_platform",                 # facebook / instagram / audience_network / messenger
+    "platform_position",                  # feed / story / reels / etc
+    "device_platform",                    # mobile / desktop
+    "country",
+    "region",                              # provincia (para AR)
+    "hourly_stats_aggregated_by_advertiser_time_zone",
+]
+
+
+def _sync_one_breakdown(account_id: str, breakdown: str, since: str, until: str) -> int:
+    fields = "spend,impressions,reach,clicks,actions"
+    items = _http_get_paged(
+        f"/{account_id}/insights",
+        params={
+            "level": "account",
+            "fields": fields,
+            "breakdowns": breakdown,
+            "time_range": f'{{"since":"{since}","until":"{until}"}}',
+            "time_increment": "1",
+            "limit": 500,
+        },
+        max_pages=200,
+    )
+    for it in items:
+        key = it.get(breakdown)
+        if key is None and breakdown == "hourly_stats_aggregated_by_advertiser_time_zone":
+            # Field puede llegar como "hourly_stats_aggregated_by_advertiser_time_zone"
+            key = it.get("hourly_stats_aggregated_by_advertiser_time_zone")
+        meta_ads_db.upsert_breakdown({
+            "ad_account_id": account_id,
+            "breakdown_type": breakdown,
+            "breakdown_key": str(key) if key is not None else "",
+            "breakdown_key2": None,
+            "date_start": it.get("date_start"),
+            "spend": _f(it.get("spend")) or 0.0,
+            "impressions": _i(it.get("impressions")) or 0,
+            "reach": _i(it.get("reach")) or 0,
+            "clicks": _i(it.get("clicks")) or 0,
+            "actions": it.get("actions"),
+        })
+    return len(items)
+
+
+def sync_breakdowns(historical_days: int = 30, types: list[str] | None = None) -> dict:
+    """Sync de breakdowns. Por default ultimos 30d porque el volumen crece x N segmentos."""
+    meta_ads_db.init()
+    bd_types = types or SUPPORTED_BREAKDOWNS
+    accounts = meta_ads_db.list_accounts()
+    if not accounts:
+        accounts = _fetch_accounts()
+        for a in accounts:
+            meta_ads_db.upsert_account(
+                id=a["id"], name=a.get("name", ""), currency=a.get("currency"),
+                unit=a.get("unit", "unidrop"), timezone_name=a.get("timezone_name"),
+                account_status=a.get("account_status"),
+            )
+    today = dt.date.today()
+    since = (today - dt.timedelta(days=int(historical_days))).isoformat()
+    until = today.isoformat()
+    result: dict[str, Any] = {"accounts": [], "since": since, "until": until, "breakdowns": bd_types}
+    for acc in accounts:
+        acc_id = acc["id"]
+        acc_res: dict[str, Any] = {"id": acc_id, "name": acc.get("name"), "rows": {}, "error": None}
+        for bd in bd_types:
+            try:
+                n = _sync_one_breakdown(acc_id, bd, since, until)
+                acc_res["rows"][bd] = n
+            except Exception as e:
+                err = str(e)[:400]
+                log.warning("Sync breakdown %s/%s fail: %s", acc_id, bd, err)
+                acc_res["rows"][bd] = -1
+                acc_res["error"] = err
+        result["accounts"].append(acc_res)
+    return result
+
+
 def sync_all(historical_days: int = 365) -> dict:
     """Sync completo. Llamable desde endpoint admin o cron."""
     meta_ads_db.init()
@@ -602,6 +684,367 @@ def ads(adset_id: str | None = None, period: str = "30d", limit: int = 100) -> l
             LIMIT %s
         """, params)
         return [dict(r) for r in cur.fetchall()]
+
+
+# ─── Breakdowns queries ───────────────────────────────────────────────────────
+
+
+def breakdown(period: str = "30d", unit: str | None = None, breakdown_type: str = "age",
+              limit: int = 50) -> dict:
+    """Devuelve breakdown agregado (no daily). El default age aplica al subset Unidrop."""
+    days = _period_days(period)
+    meta_ads_db.init()
+    where_unit = "AND a.unit = %s" if unit else ""
+    params: list = [breakdown_type, days]
+    if unit:
+        params.append(unit)
+    params.append(limit)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f"""
+            SELECT b.breakdown_key AS key,
+                   SUM(b.spend)::float       AS spend,
+                   SUM(b.impressions)::bigint AS impressions,
+                   SUM(b.clicks)::bigint     AS clicks,
+                   CASE WHEN SUM(b.impressions) > 0
+                        THEN SUM(b.clicks)::float / SUM(b.impressions) * 100
+                        ELSE 0 END::float    AS ctr,
+                   CASE WHEN SUM(b.clicks) > 0
+                        THEN SUM(b.spend) / SUM(b.clicks)
+                        ELSE 0 END::float    AS cpc
+            FROM meta_insights_breakdowns_daily b
+            INNER JOIN meta_ad_accounts a ON a.id = b.ad_account_id
+            WHERE b.breakdown_type = %s
+              AND b.date_start >= CURRENT_DATE - make_interval(days => %s)
+              {where_unit}
+            GROUP BY b.breakdown_key
+            ORDER BY spend DESC NULLS LAST
+            LIMIT %s
+        """, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    return {"type": breakdown_type, "period": period, "unit": unit, "data": rows}
+
+
+def hourly_performance(period: str = "30d", unit: str | None = None) -> dict:
+    """Performance por hora del día (avanzado para optimizar dayparting)."""
+    days = _period_days(period)
+    meta_ads_db.init()
+    where_unit = "AND a.unit = %s" if unit else ""
+    params: list = [days]
+    if unit:
+        params.append(unit)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f"""
+            SELECT b.breakdown_key AS hour,
+                   SUM(b.spend)::float       AS spend,
+                   SUM(b.impressions)::bigint AS impressions,
+                   SUM(b.clicks)::bigint     AS clicks,
+                   CASE WHEN SUM(b.impressions) > 0
+                        THEN SUM(b.clicks)::float / SUM(b.impressions) * 100
+                        ELSE 0 END::float    AS ctr,
+                   CASE WHEN SUM(b.clicks) > 0
+                        THEN SUM(b.spend) / SUM(b.clicks)
+                        ELSE 0 END::float    AS cpc
+            FROM meta_insights_breakdowns_daily b
+            INNER JOIN meta_ad_accounts a ON a.id = b.ad_account_id
+            WHERE b.breakdown_type = 'hourly_stats_aggregated_by_advertiser_time_zone'
+              AND b.date_start >= CURRENT_DATE - make_interval(days => %s)
+              {where_unit}
+            GROUP BY b.breakdown_key
+            ORDER BY hour
+        """, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    return {"period": period, "unit": unit, "data": rows}
+
+
+# ─── Cross-data: atribucion ventas / productos / retention ────────────────────
+
+
+def sales_attribution(period: str = "30d") -> dict:
+    """Revenue PaymentIntent atribuido a usuarios firmados durante el periodo de campañas Meta.
+
+    Modelo simple: para cada usuario creado en el periodo, su revenue PI (paid) se atribuye
+    al spend Meta de Unidrop. Esto da:
+      - Atribución total: revenue de cohort vs total revenue del periodo
+      - Revenue / dropshipper atribuido (LTV inicial)
+      - Distribución temporal (creados día X aportaron $Y en los siguientes Z días)
+    """
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+    meta_ads_db.init()
+
+    # Spend Meta unidrop
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT COALESCE(SUM(i.spend), 0)::float AS spend
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE a.unit = 'unidrop'
+              AND i.date_start >= CURRENT_DATE - make_interval(days => %s)
+        """, (days,))
+        sp = cur.fetchone() or {}
+        spend = float((sp or {}).get("spend") or 0)
+
+    eng = get_engine("unidrop")
+    # Revenue PI total del periodo (denominador)
+    rev_tot_rows = q(eng, """
+        SELECT COALESCE(SUM(pi."paidAmount"), 0)::float AS rev,
+               COUNT(*)::int AS pi_count
+        FROM public."PaymentIntent" pi
+        WHERE pi.status = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0.0, 0)]
+    revenue_total = float(rev_tot_rows[0][0] or 0)
+    pi_count_total = int(rev_tot_rows[0][1] or 0)
+
+    # Revenue PI de la cohort (usuarios creados en el periodo)
+    cohort_rev = q(eng, """
+        SELECT COUNT(DISTINCT u.id)::int AS users_with_revenue,
+               COALESCE(SUM(pi."paidAmount"), 0)::float AS rev,
+               COUNT(pi.id)::int AS pi_count
+        FROM public."User" u
+        INNER JOIN public."PaymentIntent" pi ON pi."userId" = u.id
+        WHERE u."createdAt" >= NOW() - make_interval(days => :d)
+          AND pi.status = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0, 0.0, 0)]
+    users_with_rev = int(cohort_rev[0][0] or 0)
+    revenue_attributed = float(cohort_rev[0][1] or 0)
+    pi_count_attributed = int(cohort_rev[0][2] or 0)
+
+    # Nuevos signups del periodo (denominador para LTV inicial)
+    new_signups_row = q(eng, """
+        SELECT COUNT(*)::int FROM public."User"
+        WHERE "createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0,)]
+    new_signups = int(new_signups_row[0][0] or 0)
+
+    # Daily attribution: para cada dia, revenue del cohort
+    cohort_daily = q(eng, """
+        SELECT date_trunc('day', u."createdAt")::date::text AS signup_d,
+               COUNT(DISTINCT u.id)::int AS signups,
+               COALESCE(SUM(pi."paidAmount"), 0)::float AS rev_first_30d
+        FROM public."User" u
+        LEFT JOIN public."PaymentIntent" pi
+               ON pi."userId" = u.id
+              AND pi.status = 'PROCESSED'
+              AND pi."createdAt" >= u."createdAt"
+              AND pi."createdAt" <= u."createdAt" + INTERVAL '30 days'
+        WHERE u."createdAt" >= NOW() - make_interval(days => :d)
+        GROUP BY 1 ORDER BY 1
+    """, {"d": days}) or []
+
+    rev_attribution_pct = (revenue_attributed / revenue_total * 100) if revenue_total > 0 else 0.0
+    ltv_first_30d = (revenue_attributed / new_signups) if new_signups > 0 else 0.0
+    roas_attr = (revenue_attributed / spend) if spend > 0 else 0.0
+
+    return {
+        "period": period,
+        "kpi": {
+            "spend": spend,
+            "revenue_total": revenue_total,
+            "revenue_attributed": revenue_attributed,
+            "rev_attribution_pct": rev_attribution_pct,
+            "pi_count_total": pi_count_total,
+            "pi_count_attributed": pi_count_attributed,
+            "new_signups": new_signups,
+            "users_with_revenue": users_with_rev,
+            "activation_rate": (users_with_rev / new_signups * 100) if new_signups > 0 else 0.0,
+            "ltv_first_30d": ltv_first_30d,
+            "roas_attributed": roas_attr,
+        },
+        "daily_cohort": [{"d": r[0], "signups": int(r[1] or 0), "rev_first_30d": float(r[2] or 0)} for r in cohort_daily],
+    }
+
+
+def top_attributed_products(period: str = "30d", limit: int = 20) -> dict:
+    """Top SKUs vendidos por dropshippers que firmaron en el periodo (cohort Meta-attributed)."""
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+
+    eng = get_engine("unidrop")
+
+    # SKUs cross-channel (ML + TN) en orders de los users del cohort
+    rows = q(eng, """
+        WITH cohort_users AS (
+          SELECT id, dni FROM public."User"
+          WHERE "createdAt" >= NOW() - make_interval(days => :d)
+        ),
+        ml_lines AS (
+          SELECT oim."sellerSku" AS sku,
+                 oim."item_title" AS title,
+                 oim."imagesUrls" AS images,
+                 SUM(oim.quantity)::int AS qty,
+                 SUM(oim."totalAmount")::float AS revenue
+          FROM cohort_users c
+          INNER JOIN public."OrderMercadoLibre" oml ON oml."userId" = c.id
+          INNER JOIN public."OrderItemMercadoLibre" oim ON oim."orderMercadoLibreId" = oml.id
+          WHERE oml."dateCreated" >= NOW() - make_interval(days => :d)
+            AND oml.status = 'paid'
+          GROUP BY 1, 2, 3
+        ),
+        tn_lines AS (
+          SELECT tnoi.sku AS sku,
+                 tnoi.name AS title,
+                 NULL::text AS images,
+                 SUM(tnoi.quantity)::int AS qty,
+                 SUM(tnoi.price * tnoi.quantity)::float AS revenue
+          FROM cohort_users c
+          INNER JOIN public.tienda_nube_orders tno ON tno.user_id = c.id
+          INNER JOIN public.tienda_nube_order_items tnoi ON tnoi.tienda_nube_order_id = tno.tienda_nube_id
+          WHERE tno.created_at_tn >= NOW() - make_interval(days => :d)
+            AND tno.payment_status::text = 'paid'
+          GROUP BY 1, 2
+        ),
+        unified AS (
+          SELECT sku, title, images, qty, revenue FROM ml_lines
+          UNION ALL
+          SELECT sku, title, images, qty, revenue FROM tn_lines
+        )
+        SELECT sku,
+               MAX(title) AS title,
+               MAX(images) AS images,
+               SUM(qty)::int AS qty,
+               SUM(revenue)::float AS revenue
+        FROM unified
+        WHERE sku IS NOT NULL AND sku <> ''
+        GROUP BY sku
+        ORDER BY revenue DESC NULLS LAST
+        LIMIT :lim
+    """, {"d": days, "lim": limit}) or []
+
+    items = []
+    for r in rows:
+        img_str = r[2]
+        first_img: str | None = None
+        if img_str:
+            if isinstance(img_str, str):
+                first_img = img_str.split(",")[0].strip() or None
+            elif isinstance(img_str, list):
+                first_img = (img_str[0] if img_str else None)
+        items.append({
+            "sku": r[0],
+            "title": r[1],
+            "image": first_img,
+            "qty": int(r[3] or 0),
+            "revenue": float(r[4] or 0),
+        })
+
+    return {"period": period, "items": items}
+
+
+def cohort_retention(period: str = "30d") -> dict:
+    """Retention 30/60/90d para users del cohort (firmados en el periodo). Activo = sub activa hoy."""
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+    eng = get_engine("unidrop")
+    rows = q(eng, """
+        WITH cohort AS (
+          SELECT id, "createdAt"::date AS d, subscription_status
+          FROM public."User"
+          WHERE "createdAt" >= NOW() - make_interval(days => :d)
+        )
+        SELECT
+          COUNT(*)::int AS cohort_size,
+          COUNT(*) FILTER (WHERE subscription_status = 'active')::int AS active_now,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 30 AND subscription_status = 'active')::int AS active_30d_plus,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 30)::int AS cohort_30d_plus,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 60 AND subscription_status = 'active')::int AS active_60d_plus,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 60)::int AS cohort_60d_plus,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 90 AND subscription_status = 'active')::int AS active_90d_plus,
+          COUNT(*) FILTER (WHERE d <= CURRENT_DATE - 90)::int AS cohort_90d_plus
+        FROM cohort
+    """, {"d": days}) or [(0,) * 8]
+    r = rows[0]
+    cohort_size = int(r[0] or 0)
+    active_now = int(r[1] or 0)
+    d30_active, d30_total = int(r[2] or 0), int(r[3] or 0)
+    d60_active, d60_total = int(r[4] or 0), int(r[5] or 0)
+    d90_active, d90_total = int(r[6] or 0), int(r[7] or 0)
+    return {
+        "period": period,
+        "cohort_size": cohort_size,
+        "active_now": active_now,
+        "activation_pct": (active_now / cohort_size * 100) if cohort_size > 0 else 0.0,
+        "retention_30d": {"cohort": d30_total, "active": d30_active,
+                          "pct": (d30_active / d30_total * 100) if d30_total > 0 else 0.0},
+        "retention_60d": {"cohort": d60_total, "active": d60_active,
+                          "pct": (d60_active / d60_total * 100) if d60_total > 0 else 0.0},
+        "retention_90d": {"cohort": d90_total, "active": d90_active,
+                          "pct": (d90_active / d90_total * 100) if d90_total > 0 else 0.0},
+    }
+
+
+def same_time_compare(period: str = "30d", unit: str | None = None) -> dict:
+    """Compara KPIs vs mismo bloque de tiempo en periodos previos (7d / 28d back).
+    Devuelve % de variación de spend, clicks y signups Unidrop.
+    """
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+    meta_ads_db.init()
+
+    def _meta_window(days_back_start: int) -> dict:
+        where_unit = "AND a.unit = %s" if unit else ""
+        params: list = [days_back_start, days_back_start - days]
+        if unit:
+            params.append(unit)
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(f"""
+                SELECT COALESCE(SUM(i.spend), 0)::float AS spend,
+                       COALESCE(SUM(i.clicks), 0)::bigint AS clicks,
+                       COALESCE(SUM(i.impressions), 0)::bigint AS impressions
+                FROM meta_insights_daily i
+                INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+                WHERE i.date_start <= CURRENT_DATE - make_interval(days => %s)
+                  AND i.date_start > CURRENT_DATE - make_interval(days => %s)
+                  {where_unit}
+            """, params)
+            return dict(cur.fetchone() or {})
+
+    cur_window = _meta_window(0)
+    prev_window = _meta_window(days)
+
+    # Signups Unidrop window
+    eng = get_engine("unidrop")
+    cur_sig = q(eng, """
+        SELECT COUNT(*)::int FROM public."User"
+        WHERE "createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0,)]
+    prev_sig = q(eng, """
+        SELECT COUNT(*)::int FROM public."User"
+        WHERE "createdAt" >= NOW() - make_interval(days => :d2)
+          AND "createdAt" < NOW() - make_interval(days => :d)
+    """, {"d": days, "d2": days * 2}) or [(0,)]
+    cur_signups = int(cur_sig[0][0] or 0)
+    prev_signups = int(prev_sig[0][0] or 0)
+
+    def _delta(a: float, b: float) -> float:
+        return ((a - b) / b * 100) if b else 0.0
+
+    return {
+        "period": period,
+        "current": {
+            "spend": float(cur_window.get("spend") or 0),
+            "clicks": int(cur_window.get("clicks") or 0),
+            "impressions": int(cur_window.get("impressions") or 0),
+            "signups": cur_signups,
+        },
+        "previous": {
+            "spend": float(prev_window.get("spend") or 0),
+            "clicks": int(prev_window.get("clicks") or 0),
+            "impressions": int(prev_window.get("impressions") or 0),
+            "signups": prev_signups,
+        },
+        "delta_pct": {
+            "spend": _delta(float(cur_window.get("spend") or 0), float(prev_window.get("spend") or 0)),
+            "clicks": _delta(float(cur_window.get("clicks") or 0), float(prev_window.get("clicks") or 0)),
+            "impressions": _delta(float(cur_window.get("impressions") or 0), float(prev_window.get("impressions") or 0)),
+            "signups": _delta(cur_signups, prev_signups),
+        },
+    }
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

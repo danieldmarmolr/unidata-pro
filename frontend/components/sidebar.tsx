@@ -73,7 +73,18 @@ const ITEMS: NavItem[] = [
   { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA, areas: ["marketing"] },
+  {
+    label: "Marketing",
+    href: "/dashboard/marketing",
+    icon: Megaphone,
+    group: "Cross",
+    roles: ONLY_GERENCIA,
+    areas: ["marketing"],
+    children: [
+      { label: "Vista general", href: "/dashboard/marketing",      icon: Megaphone },
+      { label: "Meta Ads",      href: "/dashboard/marketing/meta", icon: Target    },
+    ],
+  },
   {
     label: "Customer Success",
     href: "/dashboard/cs",
