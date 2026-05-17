@@ -1,20 +1,21 @@
 """
 Storytelling automatico - narrativa del dia basada en datos reales.
-Genera 5-7 blurbs cortos cross-unidad para el home, listos para compartir
-con toda la empresa ("hoy esto, eso comparado con ayer/semana").
+Genera blurbs cortos cross-unidad para el home.
 
-Cada blurb incluye un `link` opcional para que el frontend lo haga clickable:
-- {"kind": "drill", "endpoint": "/api/drilldowns/...", "title": "...", "filename": "..."}
-- {"kind": "navigate", "href": "/dashboard/..."}
+Comparacion apples-to-apples: cada blurb compara "hoy hasta ahora" vs
+"ayer a esta misma hora" (ej: si son las 15:43, compara 0:00-15:43 de hoy
+contra 0:00-15:43 de ayer).
+
+Cada blurb incluye un `link` con `kind: "drill"` para que el frontend
+abra un popup con la data que respalda el numero contado.
 """
 from __future__ import annotations
 
 import datetime as dt
+from urllib.parse import quote
+import logging
 
 from app.utils.tz import today_ar, now_ar
-import logging
-from urllib.parse import quote
-
 from app.db.engines import get_engine
 from app.services._utils import q, scalar, table_exists
 
@@ -29,50 +30,56 @@ def _fmt_int(v: int) -> str:
     return f"{v:,}".replace(",", ".")
 
 
-def _delta_phrase(now: float, prev: float, unit: str = "") -> str:
+def _delta_phrase(now: float, prev: float) -> str:
     if not prev:
         return ""
     pct = (now - prev) / prev * 100
     sign = "+" if pct >= 0 else ""
     direction = "arriba" if pct >= 0 else "abajo"
-    return f"{sign}{pct:.0f}% {direction} vs ayer"
+    return f"{sign}{pct:.0f}% {direction} vs ayer a esta hora"
+
+
+# ── Helpers de ventana temporal ──────────────────────────────────────────────
+# "Hoy hasta ahora": desde medianoche local hasta NOW()
+# "Ayer misma hora": mismo intervalo corrido 24h hacia atras
+
+def _tw(col: str) -> str:
+    """Fragmento WHERE para hoy hasta NOW() sobre la columna dada."""
+    return f"{col} >= CURRENT_DATE::timestamp AND {col} <= NOW()"
+
+
+def _yw(col: str) -> str:
+    """Fragmento WHERE para ayer hasta la misma hora de NOW()."""
+    return f"{col} >= (CURRENT_DATE - 1)::timestamp AND {col} <= NOW() - INTERVAL '1 day'"
 
 
 def today_story() -> dict:
-    """
-    Construye una lista de blurbs narrativos sobre el dia.
-    Cada blurb: { type, icon, title, body, accent }
-    """
     blurbs: list[dict] = []
-    uni = get_engine("unistore")
+    uni  = get_engine("unistore")
     drop = get_engine("unidrop")
 
     today_date = today_ar()
-    today_iso = today_date.isoformat()
+    today_iso  = today_date.isoformat()
 
-    # ============================================================
-    # 1) GMV total del dia + comparativa vs ayer
-    # ============================================================
+    # ── 1) GMV Unistore ───────────────────────────────────────────────────────
     try:
-        gmv_today = float(scalar(uni, """
+        gmv_today = float(scalar(uni, f"""
             SELECT COALESCE((SELECT SUM(total) FROM tienda_nube."Order"
-                             WHERE "createdAt"::date = CURRENT_DATE
-                               AND "paymentStatus"='paid'), 0)
+                             WHERE {_tw('"createdAt"')} AND "paymentStatus"='paid'), 0)
                  + COALESCE((SELECT SUM(total_amount) FROM meli.meli_orders
-                             WHERE date_created::date = CURRENT_DATE
+                             WHERE {_tw('date_created')}
                                AND status IN ('paid','confirmed','shipped','delivered')), 0)
         """) or 0)
-        gmv_yest = float(scalar(uni, """
+        gmv_yest = float(scalar(uni, f"""
             SELECT COALESCE((SELECT SUM(total) FROM tienda_nube."Order"
-                             WHERE "createdAt"::date = CURRENT_DATE - 1
-                               AND "paymentStatus"='paid'), 0)
+                             WHERE {_yw('"createdAt"')} AND "paymentStatus"='paid'), 0)
                  + COALESCE((SELECT SUM(total_amount) FROM meli.meli_orders
-                             WHERE date_created::date = CURRENT_DATE - 1
+                             WHERE {_yw('date_created')}
                                AND status IN ('paid','confirmed','shipped','delivered')), 0)
         """) or 0)
         if gmv_today > 0:
             delta = _delta_phrase(gmv_today, gmv_yest)
-            body = f"Unistore lleva {_fmt_money(gmv_today)} en GMV hoy"
+            body  = f"Unistore lleva {_fmt_money(gmv_today)} en GMV hoy"
             if delta: body += f", {delta}."
             else: body += "."
             blurbs.append({
@@ -84,38 +91,34 @@ def today_story() -> dict:
                 "link": {
                     "kind": "drill",
                     "endpoint": "/api/drilldowns/orders/paid?period=today",
-                    "title": "Ordenes pagas de hoy",
+                    "title": "Ordenes pagas de hoy · Unistore",
                     "filename": "orders_paid_today.csv",
                 },
             })
     except Exception as e:
         log.warning("story gmv fail: %s", e)
 
-    # ============================================================
-    # 1b) GMV Unidrop del dia (TN + MELI sumados sobre tablas Unidrop)
-    # ============================================================
+    # ── 1b) GMV Unidrop ───────────────────────────────────────────────────────
     try:
-        drop_today = float(scalar(drop, """
+        drop_today = float(scalar(drop, f"""
             SELECT
               COALESCE((SELECT SUM(total) FROM public.tienda_nube_orders
-                        WHERE created_at::date = CURRENT_DATE
-                          AND payment_status = 'paid'), 0)
+                        WHERE {_tw('created_at')} AND payment_status = 'paid'), 0)
             + COALESCE((SELECT SUM("totalAmount") FROM mercado_libre_dev."OrderMercadoLibre"
-                        WHERE "dateCreated"::date = CURRENT_DATE
+                        WHERE {_tw('"dateCreated"')}
                           AND status IN ('paid','confirmed','shipped','delivered')), 0)
         """) or 0)
-        drop_yest = float(scalar(drop, """
+        drop_yest = float(scalar(drop, f"""
             SELECT
               COALESCE((SELECT SUM(total) FROM public.tienda_nube_orders
-                        WHERE created_at::date = CURRENT_DATE - 1
-                          AND payment_status = 'paid'), 0)
+                        WHERE {_yw('created_at')} AND payment_status = 'paid'), 0)
             + COALESCE((SELECT SUM("totalAmount") FROM mercado_libre_dev."OrderMercadoLibre"
-                        WHERE "dateCreated"::date = CURRENT_DATE - 1
+                        WHERE {_yw('"dateCreated"')}
                           AND status IN ('paid','confirmed','shipped','delivered')), 0)
         """) or 0)
         if drop_today > 0:
             delta = _delta_phrase(drop_today, drop_yest)
-            body = f"Unidrop lleva {_fmt_money(drop_today)} en ventas dropshippers hoy"
+            body  = f"Unidrop lleva {_fmt_money(drop_today)} en ventas dropshippers hoy"
             body += f", {delta}." if delta else "."
             blurbs.append({
                 "type": "gmv_unidrop",
@@ -124,21 +127,18 @@ def today_story() -> dict:
                 "body": body,
                 "accent": "#0ea5e9",
                 "link": {
-                    "kind": "navigate",
-                    "href": "/dashboard/ventas?unit=unidrop",
+                    "kind": "drill",
+                    "endpoint": "/api/drilldowns/unidrop/orders-tn?period=today",
+                    "title": "Ordenes TN pagas de hoy · Unidrop",
+                    "filename": "unidrop_orders_tn_today.csv",
                 },
             })
     except Exception as e:
         log.warning("story gmv unidrop fail: %s", e)
 
-    # ============================================================
-    # 2) SKU lider por canal — uno por canal: TN/MELI Unistore, TN/MELI Unidrop
-    # ============================================================
-    # Helper para construir el blurb de un lider por canal.
-    # Ahora el click NO abre un modal, navega al Producto 360 con period=today
-    # asi el usuario ve la seccion 'Ordenes con este SKU' completa + el resto
-    # de KPIs del producto.
-    def _leader_blurb(label: str, channel: str, sku: str, name: str, units: int, drill_endpoint: str, drill_filename: str) -> dict:
+    # ── 2) SKU lider por canal ────────────────────────────────────────────────
+    def _leader_blurb(label: str, channel: str, sku: str, name: str, units: int,
+                      drill_endpoint: str, drill_filename: str) -> dict:
         clean_name = (name or sku)[:60]
         return {
             "type": f"top_sku_{channel}",
@@ -147,60 +147,64 @@ def today_story() -> dict:
             "body": f"En {label} hoy lidera \"{clean_name}\" con {units} unidades vendidas.",
             "accent": "#a259ff",
             "link": {
-                "kind": "navigate",
-                "href": f"/dashboard/productos/{sku}?period=today",
+                "kind": "drill",
+                "endpoint": drill_endpoint,
+                "title": f"Ordenes de hoy · {label}",
+                "filename": drill_filename,
             },
         }
 
     # 2a) Lider TN Unistore
     try:
-        rows = q(uni, """
+        rows = q(uni, f"""
             SELECT oi.sku, MAX(oi.name) AS name, SUM(oi.quantity)::int AS units,
                    MAX(oi."productId") AS product_id
             FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-            WHERE o."paymentStatus"='paid' AND o."createdAt"::date = CURRENT_DATE
-              AND oi.sku IS NOT NULL
-              AND oi.sku NOT ILIKE '%PVA%'
+            WHERE o."paymentStatus"='paid' AND {_tw('o."createdAt"')}
+              AND oi.sku IS NOT NULL AND oi.sku NOT ILIKE '%PVA%'
             GROUP BY oi.sku ORDER BY SUM(oi.quantity * oi.price) DESC LIMIT 1
         """) or []
         if rows:
             sku, name, units, pid = rows[0]
-            ep = f"/api/drilldowns/products/{int(pid)}/orders?period=today" if pid else "/api/drilldowns/orders/paid?period=today"
-            blurbs.append(_leader_blurb("TN Unistore", "tn_unistore", sku, name, int(units or 0), ep, f"top_tn_unistore_{today_iso}.csv"))
+            ep = (f"/api/drilldowns/products/{int(pid)}/orders?period=today"
+                  if pid else "/api/drilldowns/orders/paid?period=today")
+            blurbs.append(_leader_blurb(
+                "TN Unistore", "tn_unistore", sku, name, int(units or 0),
+                ep, f"top_tn_unistore_{today_iso}.csv",
+            ))
     except Exception as e:
         log.warning("story sku TN unistore fail: %s", e)
 
-    # 2b) Lider MELI Unistore - solo si meli_order_items existe en este schema
+    # 2b) Lider MELI Unistore
     if table_exists(uni, "meli", "meli_order_items"):
         try:
-            rows = q(uni, """
+            rows = q(uni, f"""
                 SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
                 FROM meli.meli_order_items mi
                 JOIN meli.meli_orders mo ON mo.id = mi.order_id
-                WHERE mo.date_created::date = CURRENT_DATE
+                WHERE {_tw('mo.date_created')}
                   AND mo.status IN ('paid','confirmed','shipped','delivered')
-                  AND mi.seller_sku IS NOT NULL
-                  AND mi.seller_sku NOT ILIKE '%PVA%'
+                  AND mi.seller_sku IS NOT NULL AND mi.seller_sku NOT ILIKE '%PVA%'
                 GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
             """) or []
             if rows:
                 sku, name, units = rows[0]
                 blurbs.append(_leader_blurb(
                     "MELI Unistore", "meli_unistore", sku, name, int(units or 0),
-                    "/api/drilldowns/orders/paid?period=today&channel=meli",
+                    "/api/drilldowns/orders/paid?period=today",
                     f"top_meli_unistore_{today_iso}.csv",
                 ))
         except Exception as e:
             log.debug("story sku MELI unistore fail: %s", e)
 
-    # 2c) Lider TN Unidrop (si existe la tabla — try/except absorbe el error)
+    # 2c) Lider TN Unidrop
     try:
-        rows = q(drop, """
+        rows = q(drop, f"""
             SELECT oi.sku, MAX(oi.name) AS name, SUM(oi.quantity)::int AS units
             FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-            WHERE o."paymentStatus"='paid' AND o."createdAt"::date = CURRENT_DATE
+            WHERE o."paymentStatus"='paid' AND {_tw('o."createdAt"')}
               AND oi.sku IS NOT NULL
             GROUP BY oi.sku ORDER BY SUM(oi.quantity * oi.price) DESC LIMIT 1
         """) or []
@@ -208,39 +212,37 @@ def today_story() -> dict:
             sku, name, units = rows[0]
             blurbs.append(_leader_blurb(
                 "TN Unidrop", "tn_unidrop", sku, name, int(units or 0),
-                "/api/drilldowns/orders/paid?period=today&unit=unidrop",
+                "/api/drilldowns/unidrop/orders-tn?period=today",
                 f"top_tn_unidrop_{today_iso}.csv",
             ))
     except Exception as e:
-        log.warning("story sku TN unidrop fail (probable: schema no existe): %s", e)
+        log.warning("story sku TN unidrop fail: %s", e)
 
-    # 2d) Lider MELI Unidrop - solo si la tabla existe en este schema
+    # 2d) Lider MELI Unidrop
     if table_exists(drop, "meli", "meli_order_items"):
         try:
-            rows = q(drop, """
-            SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
-            FROM meli.meli_order_items mi
-            JOIN meli.meli_orders mo ON mo.id = mi.order_id
-            WHERE mo.date_created::date = CURRENT_DATE
-              AND mo.status IN ('paid','confirmed','shipped','delivered')
-              AND mi.seller_sku IS NOT NULL
-            GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
+            rows = q(drop, f"""
+                SELECT mi.seller_sku AS sku, MAX(mi.title) AS name, SUM(mi.quantity)::int AS units
+                FROM meli.meli_order_items mi
+                JOIN meli.meli_orders mo ON mo.id = mi.order_id
+                WHERE {_tw('mo.date_created')}
+                  AND mo.status IN ('paid','confirmed','shipped','delivered')
+                  AND mi.seller_sku IS NOT NULL
+                GROUP BY mi.seller_sku ORDER BY SUM(mi.unit_price * mi.quantity) DESC LIMIT 1
             """) or []
             if rows:
                 sku, name, units = rows[0]
                 blurbs.append(_leader_blurb(
                     "MELI Unidrop", "meli_unidrop", sku, name, int(units or 0),
-                    "/api/drilldowns/orders/paid?period=today&unit=unidrop&channel=meli",
+                    "/api/drilldowns/unidrop/orders-ml?period=today",
                     f"top_meli_unidrop_{today_iso}.csv",
                 ))
         except Exception as e:
             log.debug("story sku MELI unidrop fail: %s", e)
 
-    # ============================================================
-    # 3) Provincia con mas actividad hoy
-    # ============================================================
+    # ── 3) Provincia con mas actividad ───────────────────────────────────────
     try:
-        prov = q(uni, """
+        prov = q(uni, f"""
             SELECT COALESCE(NULLIF(TRIM(c."billingProvince"),''),
                             NULLIF(TRIM(osa.province),''),'(sin provincia)') AS prov,
                    COUNT(DISTINCT o.id)::int AS orders,
@@ -248,7 +250,7 @@ def today_story() -> dict:
             FROM tienda_nube."Order" o
             LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
             LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
-            WHERE o."paymentStatus" = 'paid' AND o."createdAt"::date = CURRENT_DATE
+            WHERE o."paymentStatus" = 'paid' AND {_tw('o."createdAt"')}
             GROUP BY 1 ORDER BY 3 DESC NULLS LAST LIMIT 1
         """) or []
         if prov:
@@ -270,24 +272,20 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story province fail: %s", e)
 
-    # ============================================================
-    # 4) Cliente top del dia
-    # ============================================================
+    # ── 4) Cliente top del dia ────────────────────────────────────────────────
     try:
-        top_cust = q(uni, """
+        top_cust = q(uni, f"""
             SELECT c.id, COALESCE(c.name, c.email, 'Customer ' || c.id::text) AS nombre,
-                   SUM(o.total)::float AS revenue,
-                   COUNT(*)::int AS orders
+                   SUM(o.total)::float AS revenue, COUNT(*)::int AS orders
             FROM tienda_nube."Order" o
             JOIN tienda_nube."Customer" c ON c.id = o."customerId"
-            WHERE o."paymentStatus"='paid' AND o."createdAt"::date = CURRENT_DATE
-            GROUP BY c.id, c.name, c.email
-            ORDER BY revenue DESC LIMIT 1
+            WHERE o."paymentStatus"='paid' AND {_tw('o."createdAt"')}
+            GROUP BY c.id, c.name, c.email ORDER BY revenue DESC LIMIT 1
         """) or []
         if top_cust:
-            cid = int(top_cust[0][0] or 0)
-            cn = top_cust[0][1]
-            crev = float(top_cust[0][2] or 0)
+            cid     = int(top_cust[0][0] or 0)
+            cn      = top_cust[0][1]
+            crev    = float(top_cust[0][2] or 0)
             corders = int(top_cust[0][3] or 0)
             blurbs.append({
                 "type": "top_customer",
@@ -305,64 +303,83 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story customer fail: %s", e)
 
-    # ============================================================
-    # 5) Suscripciones / churn Unidrop hoy
-    # ============================================================
+    # ── 5) Nuevos dropshippers suscritos + revenue suscripciones hoy ─────────
     try:
-        new_users = int(scalar(drop, """
-            SELECT COUNT(*) FROM public."User" WHERE "createdAt"::date = CURRENT_DATE
+        new_subs = int(scalar(drop, """
+            SELECT COUNT(*) FROM public."User"
+            WHERE start_date_subscription::date = CURRENT_DATE
         """) or 0)
+        subs_rev_today = float(scalar(drop, f"""
+            SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransactionSubscription"
+            WHERE {_tw('"createdAt"')}
+        """) or 0)
+        subs_rev_yest = float(scalar(drop, f"""
+            SELECT COALESCE(SUM(amount), 0) FROM public."PaymentTransactionSubscription"
+            WHERE {_yw('"createdAt"')}
+        """) or 0)
+        if new_subs > 0 or subs_rev_today > 0:
+            parts = []
+            if new_subs:
+                parts.append(f"{new_subs} {'nuevo suscriptor' if new_subs == 1 else 'nuevos suscriptores'}")
+            if subs_rev_today > 0:
+                delta = _delta_phrase(subs_rev_today, subs_rev_yest)
+                rev_str = f"{_fmt_money(subs_rev_today)} cobrados en suscripciones"
+                if delta: rev_str += f" ({delta})"
+                parts.append(rev_str)
+            blurbs.append({
+                "type": "subs_pulse",
+                "icon": "💎",
+                "title": "SaaS · Suscripciones",
+                "body": f"Unidrop: {' · '.join(parts)} hoy.",
+                "accent": "#10b981",
+                "link": {
+                    "kind": "drill",
+                    "endpoint": "/api/drilldowns/saas/users-new?period=today",
+                    "title": "Nuevos suscriptores hoy · Unidrop",
+                    "filename": "nuevos_suscriptores_today.csv",
+                },
+            })
+    except Exception as e:
+        log.warning("story subs fail: %s", e)
+
+    # ── 6) SaaS churn hoy ────────────────────────────────────────────────────
+    try:
         churn = int(scalar(drop, """
             SELECT COUNT(*) FROM public."User"
             WHERE end_date_subscription::date = CURRENT_DATE
         """) or 0)
-        if new_users > 0 or churn > 0:
-            parts = []
-            if new_users: parts.append(f"{new_users} {'nuevo usuario' if new_users == 1 else 'nuevos usuarios'}")
-            if churn: parts.append(f"{churn} {'suscripcion vencida' if churn == 1 else 'suscripciones vencidas'}")
-            # Linkear al drill que mas peso tenga (nuevos usuarios o churn)
-            if new_users >= churn:
-                link = {
-                    "kind": "drill",
-                    "endpoint": "/api/drilldowns/saas/users-new?period=today",
-                    "title": "Nuevos usuarios hoy (Unidrop)",
-                    "filename": "nuevos_today.csv",
-                }
-            else:
-                link = {
+        if churn > 0:
+            blurbs.append({
+                "type": "saas_churn",
+                "icon": "📉",
+                "title": "SaaS · Vencimientos",
+                "body": f"{churn} {'suscripcion vence' if churn == 1 else 'suscripciones vencen'} hoy en Unidrop.",
+                "accent": "#ef4444",
+                "link": {
                     "kind": "drill",
                     "endpoint": "/api/drilldowns/saas/users-churned?period=today",
-                    "title": "Churn hoy (Unidrop)",
+                    "title": "Suscripciones vencidas hoy",
                     "filename": "churn_today.csv",
-                }
-            blurbs.append({
-                "type": "saas_pulse",
-                "icon": "📈",
-                "title": "SaaS hoy",
-                "body": f"En Unidrop: {' y '.join(parts)} en el dia.",
-                "accent": "#10b981",
-                "link": link,
+                },
             })
     except Exception as e:
-        log.warning("story saas fail: %s", e)
+        log.warning("story churn fail: %s", e)
 
-    # ============================================================
-    # 6) Pagos Talo del dia + comparativa
-    # ============================================================
+    # ── 7) Pagos Talo del dia ─────────────────────────────────────────────────
     try:
-        talo_today = float(scalar(drop, """
+        talo_today = float(scalar(drop, f"""
             SELECT COALESCE(SUM(amount),0) FROM public."PaymentTransaction"
-            WHERE "createdAt"::date = CURRENT_DATE
+            WHERE {_tw('"createdAt"')}
               AND status::text IN ('completed','succeeded','approved','paid','PROCESSED')
         """) or 0)
-        talo_yest = float(scalar(drop, """
+        talo_yest = float(scalar(drop, f"""
             SELECT COALESCE(SUM(amount),0) FROM public."PaymentTransaction"
-            WHERE "createdAt"::date = CURRENT_DATE - 1
+            WHERE {_yw('"createdAt"')}
               AND status::text IN ('completed','succeeded','approved','paid','PROCESSED')
         """) or 0)
         if talo_today > 0:
             delta = _delta_phrase(talo_today, talo_yest)
-            body = f"Talo proceso {_fmt_money(talo_today)} en pagos hoy"
+            body  = f"Talo proceso {_fmt_money(talo_today)} en pagos hoy"
             body += f", {delta}." if delta else "."
             blurbs.append({
                 "type": "talo_pulse",
@@ -380,14 +397,12 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story talo fail: %s", e)
 
-    # ============================================================
-    # 7) Devoluciones (Unidev) - solo si hay
-    # ============================================================
+    # ── 8) Devoluciones Unidev ────────────────────────────────────────────────
     try:
         eng_dev = get_engine("unidev")
-        dev_today = int(scalar(eng_dev, """
+        dev_today = int(scalar(eng_dev, f"""
             SELECT COUNT(*) FROM public.devoluciones
-            WHERE fecha_creacion::date = CURRENT_DATE
+            WHERE {_tw('fecha_creacion')}
         """) or 0)
         if dev_today > 0:
             blurbs.append({
@@ -406,9 +421,7 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story dev fail: %s", e)
 
-    # ============================================================
-    # 8) Stock critico Unistore (digip) - SKUs con stock < 5 unidades
-    # ============================================================
+    # ── 9) Stock critico Unistore ─────────────────────────────────────────────
     try:
         low_stock = int(scalar(uni, """
             SELECT COUNT(*)::int FROM (
@@ -426,16 +439,16 @@ def today_story() -> dict:
                 "body": f"Hay {low_stock} {'SKU' if low_stock == 1 else 'SKUs'} con stock bajo (1-5 unidades) en deposito Digip. Revisa reposicion.",
                 "accent": "#dc2626",
                 "link": {
-                    "kind": "navigate",
-                    "href": "/dashboard/stock-heatmap",
+                    "kind": "drill",
+                    "endpoint": "/api/drilldowns/products/stock-critico",
+                    "title": "SKUs con stock critico · Unistore",
+                    "filename": "stock_critico.csv",
                 },
             })
     except Exception as e:
         log.warning("story stock fail: %s", e)
 
-    # ============================================================
-    # 9) Logistica - ordenes pagas y sin despacho hace mas de 5 dias
-    # ============================================================
+    # ── 10) Ordenes atascadas ─────────────────────────────────────────────────
     try:
         stuck = int(scalar(uni, """
             SELECT COUNT(*)::int
@@ -453,36 +466,34 @@ def today_story() -> dict:
             blurbs.append({
                 "type": "stuck_orders",
                 "icon": "🚚",
-                "title": "Logistica - ordenes atascadas",
+                "title": "Logistica · ordenes atascadas",
                 "body": f"{stuck} {'orden paga' if stuck == 1 else 'ordenes pagas'} sin despacho hace +5 dias. Revisa preparacion en Digip.",
                 "accent": "#f97316",
                 "link": {
-                    "kind": "navigate",
-                    "href": "/dashboard/logistica",
+                    "kind": "drill",
+                    "endpoint": "/api/drilldowns/orders/stuck",
+                    "title": "Ordenes pagas sin despacho (+5 dias)",
+                    "filename": "ordenes_atascadas.csv",
                 },
             })
     except Exception as e:
         log.warning("story stuck fail: %s", e)
 
-    # ============================================================
-    # 10) Facturacion Contabilium del dia (Unistore + Unidrop)
-    # ============================================================
+    # ── 11) Facturacion Contabilium ───────────────────────────────────────────
     try:
-        fact_unistore = float(scalar(uni, """
-            SELECT COALESCE(SUM("Total"),0)::float
-            FROM contabilium."SalesOrder"
-            WHERE "FechaEmision"::date = CURRENT_DATE
+        fact_unistore = float(scalar(uni, f"""
+            SELECT COALESCE(SUM("Total"),0)::float FROM contabilium."SalesOrder"
+            WHERE {_tw('"FechaEmision"')}
         """) or 0)
-        fact_unidrop = float(scalar(drop, """
-            SELECT COALESCE(SUM(total),0)::float
-            FROM contabillium_dev."ContabilliumInvoice"
-            WHERE "fechaEmision"::date = CURRENT_DATE
+        fact_unidrop = float(scalar(drop, f"""
+            SELECT COALESCE(SUM(total),0)::float FROM contabillium_dev."ContabilliumInvoice"
+            WHERE {_tw('"fechaEmision"')}
         """) or 0)
         fact_total = fact_unistore + fact_unidrop
         if fact_total > 0:
             parts = []
             if fact_unistore > 0: parts.append(f"Unistore {_fmt_money(fact_unistore)}")
-            if fact_unidrop > 0: parts.append(f"Unidrop {_fmt_money(fact_unidrop)}")
+            if fact_unidrop > 0:  parts.append(f"Unidrop {_fmt_money(fact_unidrop)}")
             blurbs.append({
                 "type": "finanzas_pulse",
                 "icon": "🧾",
@@ -497,24 +508,20 @@ def today_story() -> dict:
     except Exception as e:
         log.warning("story finanzas fail: %s", e)
 
-    # ============================================================
-    # 11) Dropshippers Unidrop activos hoy (con orden paga TN o MELI)
-    # ============================================================
+    # ── 12) Dropshippers activos hoy ─────────────────────────────────────────
     try:
-        active_drops = int(scalar(drop, """
+        active_drops = int(scalar(drop, f"""
             SELECT COUNT(DISTINCT u.id)::int
             FROM public."User" u
             WHERE EXISTS (
               SELECT 1 FROM public.tienda_nube_orders o
-              WHERE o.user_id = u.id
-                AND o.created_at::date = CURRENT_DATE
+              WHERE o.user_id = u.id AND {_tw('o.created_at')}
                 AND o.payment_status = 'paid'
             ) OR EXISTS (
               SELECT 1 FROM mercado_libre_dev."OrderMercadoLibre" mo
               JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
                 ON mla."mlUserId"::text = mo."sellerId"::text
-              WHERE mla."userId" = u.id
-                AND mo."dateCreated"::date = CURRENT_DATE
+              WHERE mla."userId" = u.id AND {_tw('mo."dateCreated"')}
                 AND mo.status IN ('paid','confirmed','shipped','delivered')
             )
         """) or 0)
@@ -526,14 +533,15 @@ def today_story() -> dict:
                 "body": f"{active_drops} {'dropshipper vendio' if active_drops == 1 else 'dropshippers vendieron'} hoy en TN o MELI Unidrop.",
                 "accent": "#8b5cf6",
                 "link": {
-                    "kind": "navigate",
-                    "href": "/dashboard/dropshippers",
+                    "kind": "drill",
+                    "endpoint": "/api/drilldowns/unidrop/dropshippers-active-today",
+                    "title": "Dropshippers con ventas hoy",
+                    "filename": "dropshippers_activos_hoy.csv",
                 },
             })
     except Exception as e:
         log.warning("story drops active fail: %s", e)
 
-    # Si no hay nada (raro), placeholder
     if not blurbs:
         blurbs.append({
             "type": "placeholder",

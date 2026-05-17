@@ -184,6 +184,12 @@ def drill_unidrop_orders_ml(
     return svc.unidrop_orders_ml_paid(period, from_iso=from_iso, to_iso=to_iso)
 
 
+@router.get("/unidrop/dropshippers-active-today")
+def drill_dropshippers_active_today(_: Annotated[dict, Depends(current_user)]) -> dict:
+    """Dropshippers con ventas hoy (TN o MELI Unidrop), ordenados por GMV desc."""
+    return svc.unidrop_dropshippers_active_today()
+
+
 @router.get("/unidrop/intents-processed")
 def drill_unidrop_intents(
     _: Annotated[dict, Depends(current_user)],

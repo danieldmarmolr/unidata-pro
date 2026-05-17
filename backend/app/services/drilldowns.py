@@ -610,6 +610,43 @@ def unidrop_intents_processed(period: str = "30d", from_iso: str | None = None, 
     ])
 
 
+def unidrop_dropshippers_active_today() -> dict:
+    """Dropshippers con al menos una venta hoy (TN o MELI Unidrop), ordenados por GMV desc."""
+    eng = get_engine("unidrop")
+    rows = q(eng, """
+        SELECT
+            u.id AS dropshipper_id,
+            COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
+            u.email,
+            u.dni,
+            COALESCE(SUM(tn.total), 0)::float AS gmv_tn,
+            COUNT(DISTINCT tn.tienda_nube_id)::int AS ordenes_tn,
+            COALESCE(SUM(ml."totalAmount"), 0)::float AS gmv_ml,
+            COUNT(DISTINCT ml.id)::int AS ordenes_ml
+        FROM public."User" u
+        LEFT JOIN public.tienda_nube_orders tn
+            ON tn.user_id = u.id
+            AND tn.created_at >= CURRENT_DATE::timestamp AND tn.created_at <= NOW()
+            AND tn.payment_status = 'paid'
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."userId" = u.id
+        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" ml
+            ON ml."sellerId"::text = mla."mlUserId"::text
+            AND ml."dateCreated" >= CURRENT_DATE::timestamp AND ml."dateCreated" <= NOW()
+            AND ml.status IN ('paid','confirmed','shipped','delivered')
+        WHERE (
+            (tn.tienda_nube_id IS NOT NULL)
+            OR (ml.id IS NOT NULL)
+        )
+        GROUP BY u.id, u.fantasy_name, u.name, u.email, u.dni
+        ORDER BY (COALESCE(SUM(tn.total), 0) + COALESCE(SUM(ml."totalAmount"), 0)) DESC
+        LIMIT 500
+    """) or []
+    return _serialize(rows, [
+        "dropshipper_id", "nombre", "email", "dni",
+        "gmv_tn", "ordenes_tn", "gmv_ml", "ordenes_ml",
+    ])
+
+
 def tn_products_published() -> dict:
     eng = get_engine("unistore")
     rows = q(eng, """
