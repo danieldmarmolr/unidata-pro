@@ -5,31 +5,24 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
-import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
 import {
   ArrowLeft, DollarSign, Eye, MousePointerClick, Target, TrendingUp,
-  RefreshCw, Megaphone, ChevronRight, ChevronDown, ExternalLink, AlertTriangle,
-  Users, UserPlus, Repeat, Zap,
+  RefreshCw, AlertTriangle, Users, UserPlus, Repeat, Zap, Clock, MapPin,
+  Smartphone, Layers, ArrowUpRight, ArrowDownRight, ShoppingBag, Activity,
 } from "lucide-react";
+
+// ─── Types ──────────────────────────────────────────────────────────────────
 
 type MetaOverview = {
   kpi: {
-    spend: number;
-    impressions: number;
-    clicks: number;
-    reach: number;
-    active_campaigns: number;
-    cpm: number;
-    cpc: number;
-    ctr: number;
+    spend: number; impressions: number; clicks: number; reach: number;
+    active_campaigns: number; cpm: number; cpc: number; ctr: number;
   };
   daily: { d: string; spend: number; impressions: number; clicks: number }[];
-  accounts: {
-    id: string; name: string; currency: string; unit: string;
-    last_synced_at: string | null; spend: number;
-  }[];
+  accounts: { id: string; name: string; currency: string; unit: string;
+              last_synced_at: string | null; spend: number }[];
   period: string;
   unit: string | null;
 };
@@ -37,39 +30,66 @@ type MetaOverview = {
 type MetaImpact = {
   period: string;
   kpi: {
-    spend: number;
-    impressions: number;
-    clicks: number;
-    new_signups: number;
-    new_subscriptions: number;
-    revenue_pi: number;
-    pi_count: number;
-    cac_dropshipper: number;
-    cac_subscripcion: number;
-    roas: number;
-    cpc: number;
+    spend: number; impressions: number; clicks: number;
+    new_signups: number; new_subscriptions: number;
+    revenue_pi: number; pi_count: number;
+    cac_dropshipper: number; cac_subscripcion: number;
+    roas: number; cpc: number;
   };
   daily: { d: string; spend: number; clicks: number; signups: number; revenue: number }[];
   funnel: { step: string; value: number; rate_from_prev: number | null }[];
 };
 
 type MetaCampaign = {
-  id: string;
-  name: string;
-  objective: string | null;
-  status: string;
-  effective_status: string;
-  daily_budget: number | null;
-  lifetime_budget: number | null;
-  unit: string;
-  account_name: string;
-  currency: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  cpm: number;
-  cpc: number;
-  ctr: number;
+  id: string; name: string; objective: string | null;
+  status: string; effective_status: string;
+  daily_budget: number | null; lifetime_budget: number | null;
+  unit: string; account_name: string; currency: string;
+  spend: number; impressions: number; clicks: number;
+  cpm: number; cpc: number; ctr: number;
+};
+
+type BreakdownResp = {
+  type: string; period: string; unit: string | null;
+  data: { key: string; spend: number; impressions: number; clicks: number; ctr: number; cpc: number }[];
+};
+
+type HourlyResp = {
+  period: string; unit: string | null;
+  data: { hour: string; spend: number; impressions: number; clicks: number; ctr: number; cpc: number }[];
+};
+
+type SameTime = {
+  period: string;
+  current: { spend: number; clicks: number; impressions: number; signups: number };
+  previous: { spend: number; clicks: number; impressions: number; signups: number };
+  delta_pct: { spend: number; clicks: number; impressions: number; signups: number };
+};
+
+type Attribution = {
+  period: string;
+  kpi: {
+    spend: number; revenue_total: number; revenue_attributed: number;
+    rev_attribution_pct: number; pi_count_total: number; pi_count_attributed: number;
+    new_signups: number; users_with_revenue: number;
+    activation_rate: number; ltv_first_30d: number; roas_attributed: number;
+  };
+  daily_cohort: { d: string; signups: number; rev_first_30d: number }[];
+};
+
+type CohortRet = {
+  period: string;
+  cohort_size: number;
+  active_now: number;
+  activation_pct: number;
+  retention_30d: { cohort: number; active: number; pct: number };
+  retention_60d: { cohort: number; active: number; pct: number };
+  retention_90d: { cohort: number; active: number; pct: number };
+};
+
+type TopProducts = {
+  period: string;
+  items: { sku: string; title: string | null; image: string | null; qty: number; revenue: number }[];
 };
 
 const PERIOD_OPTIONS = [
@@ -79,29 +99,90 @@ const PERIOD_OPTIONS = [
   { value: "1y", label: "12 meses" },
 ];
 
+// ─── Page ───────────────────────────────────────────────────────────────────
+
 export default function MetaAdsPage() {
   const me = getUser();
   const isAdmin = !!me?.is_admin || me?.role === "admin";
   const [period, setPeriod] = useState<"7d" | "30d" | "90d" | "1y">("30d");
   const [unit, setUnit] = useState<"" | "unistore" | "unidrop" | "unidev">("");
   const qc = useQueryClient();
+  const showCross = !unit || unit === "unidrop";
+  const qsBase = `period=${period}${unit ? `&unit=${unit}` : ""}`;
 
   const ovQ = useQuery<MetaOverview>({
     queryKey: ["meta-overview", period, unit],
-    queryFn: () => api(`/api/marketing/meta/overview?period=${period}${unit ? `&unit=${unit}` : ""}`),
+    queryFn: () => api(`/api/marketing/meta/overview?${qsBase}`),
     staleTime: 60_000,
   });
   const cpQ = useQuery<{ items: MetaCampaign[]; count: number }>({
     queryKey: ["meta-campaigns", period, unit],
-    queryFn: () => api(`/api/marketing/meta/campaigns?period=${period}${unit ? `&unit=${unit}` : ""}&limit=200`),
+    queryFn: () => api(`/api/marketing/meta/campaigns?${qsBase}&limit=200`),
     staleTime: 60_000,
   });
-  // Cross-impact Unidrop (solo cuando unit es unidrop o sin filtro y la cuenta es Unidrop)
   const impQ = useQuery<MetaImpact>({
-    queryKey: ["meta-unidrop-impact", period],
+    queryKey: ["meta-impact", period],
     queryFn: () => api(`/api/marketing/meta/unidrop-impact?period=${period}`),
     staleTime: 60_000,
-    enabled: !unit || unit === "unidrop",
+    enabled: showCross,
+  });
+  const stQ = useQuery<SameTime>({
+    queryKey: ["meta-same-time", period, unit],
+    queryFn: () => api(`/api/marketing/meta/same-time?${qsBase}`),
+    staleTime: 60_000,
+  });
+  const ageQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "age", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=age&${qsBase}`),
+    staleTime: 60_000,
+  });
+  const genQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "gender", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=gender&${qsBase}`),
+    staleTime: 60_000,
+  });
+  const platQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "publisher_platform", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=publisher_platform&${qsBase}`),
+    staleTime: 60_000,
+  });
+  const posQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "platform_position", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=platform_position&${qsBase}`),
+    staleTime: 60_000,
+  });
+  const devQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "device_platform", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=device_platform&${qsBase}`),
+    staleTime: 60_000,
+  });
+  const regQ = useQuery<BreakdownResp>({
+    queryKey: ["meta-bk", "region", period, unit],
+    queryFn: () => api(`/api/marketing/meta/breakdown?type=region&${qsBase}&limit=15`),
+    staleTime: 60_000,
+  });
+  const hourQ = useQuery<HourlyResp>({
+    queryKey: ["meta-hourly", period, unit],
+    queryFn: () => api(`/api/marketing/meta/hourly?${qsBase}`),
+    staleTime: 60_000,
+  });
+  const attrQ = useQuery<Attribution>({
+    queryKey: ["meta-attr", period],
+    queryFn: () => api(`/api/marketing/meta/sales-attribution?period=${period}`),
+    staleTime: 60_000,
+    enabled: showCross,
+  });
+  const retQ = useQuery<CohortRet>({
+    queryKey: ["meta-ret", period],
+    queryFn: () => api(`/api/marketing/meta/cohort-retention?period=${period === "7d" ? "30d" : period}`),
+    staleTime: 60_000,
+    enabled: showCross,
+  });
+  const topQ = useQuery<TopProducts>({
+    queryKey: ["meta-top-products", period],
+    queryFn: () => api(`/api/marketing/meta/top-products?period=${period}&limit=12`),
+    staleTime: 60_000,
+    enabled: showCross,
   });
 
   type SyncResult = { ok: boolean; accounts?: { id: string; name: string; campaigns: number; ads: number; insights: number; error: string | null }[] };
@@ -111,6 +192,17 @@ export default function MetaAdsPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["meta-overview"] });
       qc.invalidateQueries({ queryKey: ["meta-campaigns"] });
+      qc.invalidateQueries({ queryKey: ["meta-impact"] });
+      qc.invalidateQueries({ queryKey: ["meta-same-time"] });
+    },
+  });
+  type BkSyncResult = { ok: boolean; accounts?: { id: string; name: string; rows: Record<string, number>; error: string | null }[] };
+  const bkSyncMut = useMutation<BkSyncResult, Error, number>({
+    mutationFn: (historicalDays: number) =>
+      api<BkSyncResult>(`/api/marketing/meta/sync-breakdowns?historical_days=${historicalDays}`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["meta-bk"] });
+      qc.invalidateQueries({ queryKey: ["meta-hourly"] });
     },
   });
 
@@ -119,7 +211,7 @@ export default function MetaAdsPage() {
 
   return (
     <>
-      <Topbar title="Meta Ads" subtitle="Spend + impressions + clicks · Facebook Marketing API" />
+      <Topbar title="Meta Ads · Comando central" subtitle="Performance, audiencia, atribución y orquestación cross-area" />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
         <Link href="/dashboard/marketing" className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-primary mb-4">
           <ArrowLeft size={14} /> Volver a Marketing
@@ -149,19 +241,16 @@ export default function MetaAdsPage() {
             ))}
           </div>
           {isAdmin && (
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                onClick={() => syncMut.mutate(30)}
-                disabled={syncMut.isPending}
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              <button onClick={() => syncMut.mutate(30)} disabled={syncMut.isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5 disabled:opacity-50">
-                <RefreshCw size={12} className={syncMut.isPending ? "animate-spin" : ""} /> Sync ahora
+                <RefreshCw size={12} className={syncMut.isPending ? "animate-spin" : ""} /> Sync 30d
               </button>
-              <button
-                onClick={() => {
-                  if (confirm("Pull histórico de 12 meses. Puede tardar ~5-10 min. ¿Continuar?")) {
-                    syncMut.mutate(365);
-                  }
-                }}
+              <button onClick={() => bkSyncMut.mutate(30)} disabled={bkSyncMut.isPending}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-accent/40 text-accent text-xs font-semibold hover:bg-accent/5 disabled:opacity-50">
+                <RefreshCw size={12} className={bkSyncMut.isPending ? "animate-spin" : ""} /> Sync breakdowns
+              </button>
+              <button onClick={() => { if (confirm("Pull histórico 12m. Tarda ~5-10 min. ¿Continuar?")) syncMut.mutate(365); }}
                 disabled={syncMut.isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-semibold hover:bg-amber-50 disabled:opacity-50">
                 <RefreshCw size={12} /> Backfill 12m
@@ -180,6 +269,11 @@ export default function MetaAdsPage() {
             Sync OK · {syncMut.data.accounts?.map((a) => `${a.campaigns} camp · ${a.ads} ads · ${a.insights} insights`).join(" | ")}
           </div>
         )}
+        {bkSyncMut.isSuccess && bkSyncMut.data && (
+          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg px-3 py-2 text-xs mb-4">
+            Breakdowns OK · {bkSyncMut.data.accounts?.map((a) => `${a.name}: ${Object.entries(a.rows).map(([k,v]) => `${k}=${v}`).join(" · ")}`).join(" | ")}
+          </div>
+        )}
 
         {/* Empty state */}
         {isEmpty && !ovQ.isLoading && (
@@ -187,85 +281,44 @@ export default function MetaAdsPage() {
             <AlertTriangle size={32} className="text-amber-600 mx-auto mb-3" />
             <h3 className="text-sm font-bold text-amber-900 mb-1">Sin datos de Meta Ads todavía</h3>
             <p className="text-xs text-amber-800/80 mb-4">
-              Si esta es la primera vez, hacé click en <strong>"Backfill 12m"</strong> arriba para traer histórico.
-              Después el cron diario se encarga del refresh.
+              Hacé click en <strong>"Backfill 12m"</strong> para traer histórico inicial.
             </p>
-            {isAdmin && (
-              <button
-                onClick={() => syncMut.mutate(365)}
-                disabled={syncMut.isPending}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 text-white text-xs font-semibold shadow disabled:opacity-50">
-                <RefreshCw size={12} className={syncMut.isPending ? "animate-spin" : ""} />
-                {syncMut.isPending ? "Sincronizando..." : "Hacer backfill 12 meses"}
-              </button>
-            )}
           </div>
         )}
 
         {!isEmpty && ov && (
-          <>
-            {/* KPIs */}
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-              <KpiCard icon={DollarSign} label="Inversión" value={formatCurrency(ov.kpi.spend)} hint={`${formatNumber(ov.kpi.active_campaigns)} campañas activas`} />
-              <KpiCard icon={Eye} label="Impresiones" value={formatNumber(ov.kpi.impressions)} hint={`Alcance ${formatNumber(ov.kpi.reach)}`} />
-              <KpiCard icon={MousePointerClick} label="Clicks" value={formatNumber(ov.kpi.clicks)} hint={`CTR ${ov.kpi.ctr.toFixed(2)}%`} />
-              <KpiCard icon={Target} label="CPC" value={formatCurrency(ov.kpi.cpc)} hint="Costo por click" />
-              <KpiCard icon={TrendingUp} label="CPM" value={formatCurrency(ov.kpi.cpm)} hint="Costo por mil impresiones" />
-            </div>
+          <div className="space-y-5">
+            {/* ── Section 1: Pulso ── */}
+            <Section title="Pulso" icon={Activity} subtitle="KPIs hero + variación vs periodo previo equivalente">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
+                <KpiHero icon={DollarSign} label="Inversión" value={formatCurrency(ov.kpi.spend)} hint={`${formatNumber(ov.kpi.active_campaigns)} campañas activas`} delta={stQ.data?.delta_pct.spend} />
+                <KpiHero icon={Eye} label="Impresiones" value={formatNumber(ov.kpi.impressions)} hint={`Alcance ${formatNumber(ov.kpi.reach)}`} delta={stQ.data?.delta_pct.impressions} />
+                <KpiHero icon={MousePointerClick} label="Clicks" value={formatNumber(ov.kpi.clicks)} hint={`CTR ${ov.kpi.ctr.toFixed(2)}%`} delta={stQ.data?.delta_pct.clicks} />
+                <KpiHero icon={Target} label="CPC" value={formatCurrency(ov.kpi.cpc)} hint="Costo por click" />
+                <KpiHero icon={TrendingUp} label="CPM" value={formatCurrency(ov.kpi.cpm)} hint="Costo por mil impresiones" />
+              </div>
+            </Section>
 
-            {/* === Impacto en Unidrop (cross-area) === */}
-            {impQ.data && (!unit || unit === "unidrop") && (
-              <div className="bg-gradient-to-br from-primary/5 via-accent/5 to-transparent border border-primary/20 rounded-xl p-4 mb-5">
-                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                  <div>
-                    <h2 className="text-sm font-bold text-text inline-flex items-center gap-2">
-                      <Zap size={14} className="text-primary" /> Impacto de la pauta en UNIDROP
-                    </h2>
-                    <p className="text-[11px] text-text-muted">
-                      Spend Meta × signups · suscripciones · revenue PaymentIntent · funnel
-                    </p>
-                  </div>
-                </div>
-                {/* KPIs cross */}
+            {/* ── Section 2: Impacto Unidrop (cross) ── */}
+            {showCross && impQ.data && (
+              <Section title="Impacto en UNIDROP" icon={Zap} subtitle="Spend × signups · suscripciones · revenue PaymentIntent · funnel"
+                accent>
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-                  <KpiBoxCross
-                    icon={UserPlus} accent="emerald"
-                    label="Nuevos signups"
+                  <KpiBoxCross icon={UserPlus} accent="emerald" label="Nuevos signups"
                     value={formatNumber(impQ.data.kpi.new_signups)}
-                    hint={impQ.data.kpi.cac_dropshipper > 0
-                      ? `CAC ${formatCurrency(impQ.data.kpi.cac_dropshipper)}/dropshipper`
-                      : "Sin CAC calculado"}
-                  />
-                  <KpiBoxCross
-                    icon={Repeat} accent="primary"
-                    label="Suscripciones nuevas"
+                    hint={impQ.data.kpi.cac_dropshipper > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_dropshipper)}/dropshipper` : "Sin CAC"} />
+                  <KpiBoxCross icon={Repeat} accent="primary" label="Suscripciones nuevas"
                     value={formatNumber(impQ.data.kpi.new_subscriptions)}
-                    hint={impQ.data.kpi.cac_subscripcion > 0
-                      ? `CAC ${formatCurrency(impQ.data.kpi.cac_subscripcion)}/suscripción`
-                      : "Sin CAC calculado"}
-                  />
-                  <KpiBoxCross
-                    icon={DollarSign} accent="emerald"
-                    label="Revenue PaymentIntent"
+                    hint={impQ.data.kpi.cac_subscripcion > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_subscripcion)}/sub` : "Sin CAC"} />
+                  <KpiBoxCross icon={DollarSign} accent="emerald" label="Revenue PaymentIntent"
                     value={formatCurrency(impQ.data.kpi.revenue_pi)}
-                    hint={`${formatNumber(impQ.data.kpi.pi_count)} pagos PROCESSED`}
-                  />
-                  <KpiBoxCross
-                    icon={TrendingUp} accent="amber"
-                    label="ROAS (gross)"
+                    hint={`${formatNumber(impQ.data.kpi.pi_count)} pagos PROCESSED`} />
+                  <KpiBoxCross icon={TrendingUp} accent="amber" label="ROAS (gross)"
                     value={impQ.data.kpi.roas > 0 ? `${impQ.data.kpi.roas.toFixed(2)}x` : "—"}
-                    hint={impQ.data.kpi.spend > 0
-                      ? `${formatCurrency(impQ.data.kpi.revenue_pi)} / ${formatCurrency(impQ.data.kpi.spend)}`
-                      : "Sin spend"}
-                  />
-                  <KpiBoxCross
-                    icon={Users} accent="primary"
-                    label="Conversión click→signup"
-                    value={impQ.data.kpi.clicks > 0
-                      ? `${(impQ.data.kpi.new_signups / impQ.data.kpi.clicks * 100).toFixed(2)}%`
-                      : "—"}
-                    hint={`${formatNumber(impQ.data.kpi.clicks)} clicks → ${formatNumber(impQ.data.kpi.new_signups)} signups`}
-                  />
+                    hint={impQ.data.kpi.spend > 0 ? `${formatCurrency(impQ.data.kpi.revenue_pi)} / ${formatCurrency(impQ.data.kpi.spend)}` : "Sin spend"} />
+                  <KpiBoxCross icon={Users} accent="primary" label="Conv click→signup"
+                    value={impQ.data.kpi.clicks > 0 ? `${(impQ.data.kpi.new_signups / impQ.data.kpi.clicks * 100).toFixed(2)}%` : "—"}
+                    hint={`${formatNumber(impQ.data.kpi.clicks)} → ${formatNumber(impQ.data.kpi.new_signups)}`} />
                 </div>
 
                 {/* Funnel */}
@@ -281,16 +334,11 @@ export default function MetaAdsPage() {
                             <span className="font-semibold text-text">{s.step}</span>
                           </div>
                           <div className="flex-1 h-6 bg-soft rounded relative overflow-hidden">
-                            <div className="h-full bg-gradient-to-r from-primary/70 to-accent/70"
-                                 style={{ width: `${(s.value / maxV) * 100}%` }} />
-                            <div className="absolute inset-0 flex items-center justify-end pr-2 text-[11px] font-bold tabular-nums text-text">
-                              {formatNumber(s.value)}
-                            </div>
+                            <div className="h-full bg-gradient-to-r from-primary/70 to-accent/70" style={{ width: `${(s.value / maxV) * 100}%` }} />
+                            <div className="absolute inset-0 flex items-center justify-end pr-2 text-[11px] font-bold tabular-nums text-text">{formatNumber(s.value)}</div>
                           </div>
                           <div className="w-20 text-right text-[10px] text-text-muted tabular-nums shrink-0">
-                            {s.rate_from_prev !== null && s.rate_from_prev > 0
-                              ? `${s.rate_from_prev.toFixed(2)}%`
-                              : ""}
+                            {s.rate_from_prev !== null && s.rate_from_prev > 0 ? `${s.rate_from_prev.toFixed(2)}%` : ""}
                           </div>
                         </div>
                       ));
@@ -298,23 +346,17 @@ export default function MetaAdsPage() {
                   </div>
                 </div>
 
-                {/* Daily overlay: spend + signups + revenue */}
+                {/* Daily overlay 3-col */}
                 {impQ.data.daily.length > 0 && (
                   <div className="bg-surface border border-border rounded-lg p-3">
-                    <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
-                      <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
-                        <p className="text-[10px] text-text-muted">
-                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-primary inline-block" /> Spend</span>
-                          {" · "}
-                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500 inline-block" /> Signups</span>
-                          {" · "}
-                          <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500 inline-block" /> Revenue</span>
-                        </p>
-                      </div>
+                    <div className="mb-2">
+                      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
+                      <p className="text-[10px] text-text-muted">
+                        <Legend color="bg-primary" label="Spend" /> · <Legend color="bg-emerald-500" label="Signups" /> · <Legend color="bg-amber-500" label="Revenue" />
+                      </p>
                     </div>
                     {(() => {
-                      const last30 = impQ.data.daily.slice(-30);
+                      const last30 = impQ.data!.daily.slice(-30);
                       const maxSpend = Math.max(1, ...last30.map((d) => d.spend));
                       const maxSign = Math.max(1, ...last30.map((d) => d.signups));
                       const maxRev = Math.max(1, ...last30.map((d) => d.revenue));
@@ -344,18 +386,108 @@ export default function MetaAdsPage() {
                     })()}
                   </div>
                 )}
-              </div>
+              </Section>
             )}
 
-            {/* Daily spend chart */}
-            {ov.daily.length > 0 && (
-              <div className="bg-surface border border-border rounded-xl p-4 mb-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-sm font-bold text-text">Inversión diaria</h3>
-                    <p className="text-[11px] text-text-muted">{ov.daily.length} días con data</p>
-                  </div>
+            {/* ── Section 3: Atribución de ventas (cross) ── */}
+            {showCross && attrQ.data && (
+              <Section title="Atribución de ventas" icon={ArrowUpRight} subtitle="Revenue del cohort firmado en el periodo + LTV inicial + activation rate">
+                <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
+                  <MiniStat label="Revenue total periodo" value={formatCurrency(attrQ.data.kpi.revenue_total)} hint={`${formatNumber(attrQ.data.kpi.pi_count_total)} pagos`} />
+                  <MiniStat label="Revenue cohort" value={formatCurrency(attrQ.data.kpi.revenue_attributed)} hint={`${formatNumber(attrQ.data.kpi.pi_count_attributed)} pagos`} accent="emerald" />
+                  <MiniStat label="% Atribución" value={`${attrQ.data.kpi.rev_attribution_pct.toFixed(1)}%`} hint="del revenue total" accent="primary" />
+                  <MiniStat label="Activation rate" value={`${attrQ.data.kpi.activation_rate.toFixed(1)}%`}
+                    hint={`${formatNumber(attrQ.data.kpi.users_with_revenue)} de ${formatNumber(attrQ.data.kpi.new_signups)} pagaron`}
+                    accent="amber" />
+                  <MiniStat label="LTV 30d (cohort)" value={formatCurrency(attrQ.data.kpi.ltv_first_30d)}
+                    hint={`ROAS atribuido ${attrQ.data.kpi.roas_attributed.toFixed(2)}x`}
+                    accent="emerald" />
                 </div>
+                <div className="text-[10px] text-text-muted">
+                  Cohort = users creados en el periodo. Revenue = PaymentIntent PROCESSED en sus primeros 30 días. Atribución temporal (ventana de creación).
+                </div>
+              </Section>
+            )}
+
+            {/* ── Section 4: Retention cohort (cross) ── */}
+            {showCross && retQ.data && (
+              <Section title="Retention del cohort" icon={Users} subtitle="% del cohort firmado que sigue con subscription_status='active'">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <RetCard label="Cohort total" value={formatNumber(retQ.data.cohort_size)} pct={null} hint={`${formatNumber(retQ.data.active_now)} activos hoy (${retQ.data.activation_pct.toFixed(1)}%)`} />
+                  <RetCard label="Retention 30d" value={`${retQ.data.retention_30d.pct.toFixed(1)}%`} pct={retQ.data.retention_30d.pct}
+                    hint={`${formatNumber(retQ.data.retention_30d.active)} / ${formatNumber(retQ.data.retention_30d.cohort)}`} />
+                  <RetCard label="Retention 60d" value={`${retQ.data.retention_60d.pct.toFixed(1)}%`} pct={retQ.data.retention_60d.pct}
+                    hint={`${formatNumber(retQ.data.retention_60d.active)} / ${formatNumber(retQ.data.retention_60d.cohort)}`} />
+                  <RetCard label="Retention 90d" value={`${retQ.data.retention_90d.pct.toFixed(1)}%`} pct={retQ.data.retention_90d.pct}
+                    hint={`${formatNumber(retQ.data.retention_90d.active)} / ${formatNumber(retQ.data.retention_90d.cohort)}`} />
+                </div>
+              </Section>
+            )}
+
+            {/* ── Section 5: Top productos atribuidos (cross) ── */}
+            {showCross && topQ.data && topQ.data.items.length > 0 && (
+              <Section title="Top productos atribuidos al cohort" icon={ShoppingBag} subtitle="SKUs (ML + TN) vendidos por dropshippers firmados en el periodo · top 12 por revenue">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {topQ.data.items.map((p) => (
+                    <Link key={p.sku} href={`/dashboard/productos/${encodeURIComponent(p.sku)}`}
+                      className="group bg-surface border border-border rounded-lg p-2 hover:border-primary/40 hover:shadow-md transition">
+                      <div className="aspect-square bg-soft rounded mb-2 overflow-hidden">
+                        {p.image
+                          ? <img src={p.image} alt={p.title ?? p.sku} className="w-full h-full object-cover group-hover:scale-105 transition" loading="lazy" />
+                          : <div className="w-full h-full flex items-center justify-center text-text-muted text-[10px]">Sin foto</div>}
+                      </div>
+                      <div className="text-[9px] font-mono text-text-muted truncate">{p.sku}</div>
+                      <div className="text-[11px] font-semibold text-text truncate">{p.title || "—"}</div>
+                      <div className="text-[10px] mt-1 flex items-center justify-between">
+                        <span className="tabular-nums text-text-muted">{p.qty} ud</span>
+                        <span className="tabular-nums font-bold text-text">{formatCurrency(p.revenue)}</span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* ── Section 6: Audiencia (age + gender) ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Section title="Audiencia · Edad" icon={Users} subtitle="Spend, clicks y CTR por rango etario">
+                <BreakdownTable data={ageQ.data?.data ?? []} label="Edad" />
+              </Section>
+              <Section title="Audiencia · Género" icon={Users} subtitle="Distribución por género">
+                <BreakdownTable data={genQ.data?.data ?? []} label="Género" />
+              </Section>
+            </div>
+
+            {/* ── Section 7: Placement (publisher + position) ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Section title="Plataforma" icon={Layers} subtitle="Facebook / Instagram / Audience Network / Messenger">
+                <BreakdownTable data={platQ.data?.data ?? []} label="Plataforma" />
+              </Section>
+              <Section title="Posición" icon={Layers} subtitle="Feed / Stories / Reels / Marketplace …">
+                <BreakdownTable data={posQ.data?.data ?? []} label="Posición" />
+              </Section>
+            </div>
+
+            {/* ── Section 8: Device + Region ── */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <Section title="Dispositivo" icon={Smartphone} subtitle="Mobile / Desktop">
+                <BreakdownTable data={devQ.data?.data ?? []} label="Device" />
+              </Section>
+              <Section title="Top regiones (geo)" icon={MapPin} subtitle="Provincias / regiones que más impresiones reciben">
+                <BreakdownTable data={regQ.data?.data ?? []} label="Región" maxRows={15} />
+              </Section>
+            </div>
+
+            {/* ── Section 9: Hora del día ── */}
+            {(hourQ.data?.data?.length ?? 0) > 0 && (
+              <Section title="Hora del día" icon={Clock} subtitle="Cuándo se gasta vs cuándo convierte mejor (TZ cuenta publicitaria)">
+                <HourlyChart data={hourQ.data!.data} />
+              </Section>
+            )}
+
+            {/* ── Section 10: Daily spend ── */}
+            {ov.daily.length > 0 && (
+              <Section title="Inversión diaria" icon={DollarSign} subtitle={`${ov.daily.length} días con data`}>
                 <div className="space-y-1">
                   {(() => {
                     const maxSpend = Math.max(1, ...ov.daily.map((d) => d.spend));
@@ -363,8 +495,7 @@ export default function MetaAdsPage() {
                       <div key={d.d} className="flex items-center gap-2">
                         <div className="w-16 text-[10px] text-text-muted font-mono shrink-0">{d.d.slice(5)}</div>
                         <div className="flex-1 h-5 bg-soft rounded relative overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-primary to-accent"
-                            style={{ width: `${(d.spend / maxSpend) * 100}%` }} />
+                          <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${(d.spend / maxSpend) * 100}%` }} />
                         </div>
                         <div className="w-28 text-right text-[11px] font-bold tabular-nums shrink-0">{formatCurrency(d.spend)}</div>
                         <div className="w-20 text-right text-[10px] text-text-muted shrink-0">{formatNumber(d.clicks)} clk</div>
@@ -372,13 +503,12 @@ export default function MetaAdsPage() {
                     ));
                   })()}
                 </div>
-              </div>
+              </Section>
             )}
 
-            {/* Cuentas */}
+            {/* ── Section 11: Cuentas ── */}
             {ov.accounts.length > 0 && (
-              <div className="bg-surface border border-border rounded-xl p-4 mb-5">
-                <h3 className="text-sm font-bold text-text mb-3">Cuentas publicitarias</h3>
+              <Section title="Cuentas publicitarias" icon={Layers}>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                   {ov.accounts.map((a) => (
                     <div key={a.id} className="bg-soft/40 border border-border rounded-lg p-3">
@@ -394,18 +524,12 @@ export default function MetaAdsPage() {
                     </div>
                   ))}
                 </div>
-              </div>
+              </Section>
             )}
 
-            {/* Campañas */}
-            <div className="bg-surface border border-border rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-text">Campañas</h3>
-                  <p className="text-[11px] text-text-muted">{cpQ.data?.count ?? 0} campañas · ordenadas por inversión</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
+            {/* ── Section 12: Campañas ── */}
+            <Section title="Campañas" icon={Target} subtitle={`${cpQ.data?.count ?? 0} campañas · ordenadas por inversión`}>
+              <div className="overflow-x-auto max-h-[560px] overflow-y-auto -mx-3">
                 <table className="w-full text-xs">
                   <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                     <tr>
@@ -430,9 +554,7 @@ export default function MetaAdsPage() {
                             <div className="truncate font-semibold text-text" title={c.name}>{c.name}</div>
                             <div className="text-[10px] text-text-muted">{c.account_name}</div>
                           </td>
-                          <td className="px-2 py-2">
-                            <CampaignStatusBadge status={c.effective_status || c.status} />
-                          </td>
+                          <td className="px-2 py-2"><CampaignStatusBadge status={c.effective_status || c.status} /></td>
                           <td className="px-2 py-2 text-[10px] text-text-muted">{c.objective?.replace(/^OUTCOME_/, "").toLowerCase() || "—"}</td>
                           <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(c.spend)}</td>
                           <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.impressions)}</td>
@@ -446,15 +568,46 @@ export default function MetaAdsPage() {
                   </tbody>
                 </table>
               </div>
-            </div>
-          </>
+            </Section>
+          </div>
         )}
       </div>
     </>
   );
 }
 
-function KpiCard({ icon: Icon, label, value, hint }: { icon: typeof Eye; label: string; value: string; hint: string }) {
+// ─── Components ─────────────────────────────────────────────────────────────
+
+function Section({ title, subtitle, icon: Icon, children, accent }: {
+  title: string;
+  subtitle?: string;
+  icon: typeof Eye;
+  children: React.ReactNode;
+  accent?: boolean;
+}) {
+  return (
+    <div className={
+      accent
+        ? "bg-gradient-to-br from-primary/5 via-accent/5 to-transparent border border-primary/20 rounded-xl p-4"
+        : "bg-surface border border-border rounded-xl p-4"
+    }>
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-7 h-7 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><Icon size={14} /></div>
+        <div>
+          <h2 className="text-sm font-bold text-text">{title}</h2>
+          {subtitle && <p className="text-[11px] text-text-muted">{subtitle}</p>}
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function KpiHero({ icon: Icon, label, value, hint, delta }: {
+  icon: typeof Eye; label: string; value: string; hint: string; delta?: number;
+}) {
+  const showDelta = delta !== undefined && Number.isFinite(delta);
+  const up = showDelta && (delta ?? 0) >= 0;
   return (
     <div className="bg-surface border border-border rounded-xl p-4">
       <div className="flex items-start justify-between mb-2">
@@ -464,18 +617,21 @@ function KpiCard({ icon: Icon, label, value, hint }: { icon: typeof Eye; label: 
         </div>
       </div>
       <div className="text-xl font-extrabold text-text tabular-nums truncate">{value}</div>
-      <div className="text-[10px] text-text-muted mt-1">{hint}</div>
+      <div className="text-[10px] text-text-muted mt-1 flex items-center gap-1.5">
+        {showDelta && (
+          <span className={"inline-flex items-center gap-0.5 font-bold tabular-nums " + (up ? "text-emerald-600" : "text-rose-600")}>
+            {up ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}
+            {Math.abs(delta!).toFixed(1)}%
+          </span>
+        )}
+        <span className="truncate">{hint}</span>
+      </div>
     </div>
   );
 }
 
-function KpiBoxCross({
-  icon: Icon, label, value, hint, accent,
-}: {
-  icon: typeof Eye;
-  label: string;
-  value: string;
-  hint: string;
+function KpiBoxCross({ icon: Icon, label, value, hint, accent }: {
+  icon: typeof Eye; label: string; value: string; hint: string;
   accent: "primary" | "emerald" | "amber";
 }) {
   const accents: Record<"primary" | "emerald" | "amber", string> = {
@@ -495,6 +651,127 @@ function KpiBoxCross({
       <div className="text-[10px] text-text-muted mt-0.5 truncate">{hint}</div>
     </div>
   );
+}
+
+function MiniStat({ label, value, hint, accent }: {
+  label: string; value: string; hint: string; accent?: "primary" | "emerald" | "amber";
+}) {
+  const accentCls = accent === "emerald" ? "text-emerald-600" : accent === "primary" ? "text-primary" : accent === "amber" ? "text-amber-600" : "text-text";
+  return (
+    <div className="bg-soft/40 border border-border rounded-lg p-3">
+      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+      <div className={`text-lg font-extrabold tabular-nums truncate ${accentCls}`}>{value}</div>
+      <div className="text-[10px] text-text-muted mt-0.5 truncate">{hint}</div>
+    </div>
+  );
+}
+
+function RetCard({ label, value, hint, pct }: {
+  label: string; value: string; hint: string; pct: number | null;
+}) {
+  const tone = pct === null ? "text-text" : pct >= 60 ? "text-emerald-600" : pct >= 30 ? "text-amber-600" : "text-rose-600";
+  return (
+    <div className="bg-surface border border-border rounded-lg p-4">
+      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+      <div className={`text-2xl font-extrabold tabular-nums ${tone}`}>{value}</div>
+      <div className="text-[10px] text-text-muted mt-0.5">{hint}</div>
+      {pct !== null && (
+        <div className="mt-2 h-1.5 bg-soft rounded overflow-hidden">
+          <div className={"h-full " + (pct >= 60 ? "bg-emerald-500" : pct >= 30 ? "bg-amber-500" : "bg-rose-500")}
+            style={{ width: `${Math.min(100, pct)}%` }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BreakdownTable({ data, label, maxRows = 10 }: {
+  data: BreakdownResp["data"];
+  label: string;
+  maxRows?: number;
+}) {
+  if (!data || data.length === 0) {
+    return <div className="text-xs text-text-muted py-4 text-center">Sin breakdown sincronizado. Usá "Sync breakdowns" arriba.</div>;
+  }
+  const top = data.slice(0, maxRows);
+  const maxSpend = Math.max(1, ...top.map((r) => r.spend));
+  return (
+    <table className="w-full text-xs">
+      <thead className="text-text-muted text-[10px] uppercase tracking-wider">
+        <tr className="border-b border-border">
+          <th className="text-left py-1 pr-2">{label}</th>
+          <th className="text-right py-1 px-2">Spend</th>
+          <th className="text-right py-1 px-2">Clicks</th>
+          <th className="text-right py-1 pl-2">CTR</th>
+        </tr>
+      </thead>
+      <tbody>
+        {top.map((r) => (
+          <tr key={r.key} className="border-b border-border/60">
+            <td className="py-1.5 pr-2">
+              <div className="flex items-center gap-2">
+                <span className="text-text font-semibold w-24 truncate">{r.key || "—"}</span>
+                <div className="flex-1 h-1.5 bg-soft rounded overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${(r.spend / maxSpend) * 100}%` }} />
+                </div>
+              </div>
+            </td>
+            <td className="py-1.5 px-2 text-right tabular-nums font-bold">{formatCurrency(r.spend)}</td>
+            <td className="py-1.5 px-2 text-right tabular-nums">{formatNumber(r.clicks)}</td>
+            <td className="py-1.5 pl-2 text-right tabular-nums">{r.ctr > 0 ? `${r.ctr.toFixed(2)}%` : "—"}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function HourlyChart({ data }: { data: HourlyResp["data"] }) {
+  // Mostrar 24 horas (0-23). Si data viene como "00:00 - 01:00" tomamos hora inicial.
+  const byHour = new Map<number, { spend: number; clicks: number; ctr: number; cpc: number }>();
+  for (const r of data) {
+    const m = r.hour.match(/^(\d{1,2})/);
+    if (!m) continue;
+    const h = parseInt(m[1], 10);
+    const e = byHour.get(h) ?? { spend: 0, clicks: 0, ctr: 0, cpc: 0 };
+    e.spend += r.spend;
+    e.clicks += r.clicks;
+    byHour.set(h, e);
+  }
+  const hours = Array.from({ length: 24 }, (_, h) => ({
+    h,
+    spend: byHour.get(h)?.spend ?? 0,
+    clicks: byHour.get(h)?.clicks ?? 0,
+  }));
+  const maxSpend = Math.max(1, ...hours.map((x) => x.spend));
+  const maxClicks = Math.max(1, ...hours.map((x) => x.clicks));
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] text-text-muted mb-1">
+        <Legend color="bg-primary" label="Spend" /> · <Legend color="bg-emerald-500" label="Clicks" />
+      </div>
+      {hours.map(({ h, spend, clicks }) => (
+        <div key={h} className="flex items-center gap-2">
+          <div className="w-8 text-[10px] text-text-muted font-mono shrink-0">{String(h).padStart(2, "0")}h</div>
+          <div className="flex-1 grid grid-cols-2 gap-1">
+            <div className="h-3.5 bg-soft rounded relative overflow-hidden">
+              <div className="h-full bg-primary" style={{ width: `${(spend / maxSpend) * 100}%` }} />
+            </div>
+            <div className="h-3.5 bg-soft rounded relative overflow-hidden">
+              <div className="h-full bg-emerald-500" style={{ width: `${(clicks / maxClicks) * 100}%` }} />
+            </div>
+          </div>
+          <div className="w-40 text-right text-[10px] text-text-muted shrink-0 tabular-nums">
+            {formatCurrency(spend)} · {formatNumber(clicks)} clk
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return <span className="inline-flex items-center gap-1"><span className={`w-2 h-2 rounded-sm ${color} inline-block`} /> {label}</span>;
 }
 
 function CampaignStatusBadge({ status }: { status: string }) {

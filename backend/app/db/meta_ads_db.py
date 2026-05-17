@@ -151,6 +151,31 @@ def init() -> None:
                 "ON meta_insights_daily (campaign_id, date_start DESC) "
                 "WHERE campaign_id IS NOT NULL"
             )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS meta_insights_breakdowns_daily (
+                    id              BIGSERIAL PRIMARY KEY,
+                    ad_account_id   TEXT NOT NULL,
+                    breakdown_type  TEXT NOT NULL,
+                    breakdown_key   TEXT NOT NULL,
+                    breakdown_key2  TEXT,
+                    date_start      DATE NOT NULL,
+                    spend           NUMERIC NOT NULL DEFAULT 0,
+                    impressions     BIGINT NOT NULL DEFAULT 0,
+                    reach           BIGINT NOT NULL DEFAULT 0,
+                    clicks          BIGINT NOT NULL DEFAULT 0,
+                    actions         JSONB,
+                    synced_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_meta_bk_daily "
+                "ON meta_insights_breakdowns_daily "
+                "(ad_account_id, breakdown_type, breakdown_key, COALESCE(breakdown_key2,''), date_start)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_meta_bk_type_date "
+                "ON meta_insights_breakdowns_daily (breakdown_type, date_start DESC)"
+            )
         _INITIALIZED = True
 
 
@@ -284,6 +309,30 @@ def upsert_insight(row: dict) -> None:
                 synced_at = NOW()
         """, {**row, "actions": json.dumps(row.get("actions")) if row.get("actions") else None,
               "action_values": json.dumps(row.get("action_values")) if row.get("action_values") else None})
+
+
+def upsert_breakdown(row: dict) -> None:
+    """UPSERT por (account, breakdown_type, key, key2, date)."""
+    init()
+    import json
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            INSERT INTO meta_insights_breakdowns_daily
+                (ad_account_id, breakdown_type, breakdown_key, breakdown_key2,
+                 date_start, spend, impressions, reach, clicks, actions, synced_at)
+            VALUES (%(ad_account_id)s, %(breakdown_type)s, %(breakdown_key)s,
+                    %(breakdown_key2)s, %(date_start)s,
+                    %(spend)s, %(impressions)s, %(reach)s, %(clicks)s,
+                    %(actions)s, NOW())
+            ON CONFLICT (ad_account_id, breakdown_type, breakdown_key,
+                         COALESCE(breakdown_key2,''), date_start) DO UPDATE SET
+                spend = EXCLUDED.spend,
+                impressions = EXCLUDED.impressions,
+                reach = EXCLUDED.reach,
+                clicks = EXCLUDED.clicks,
+                actions = EXCLUDED.actions,
+                synced_at = NOW()
+        """, {**row, "actions": json.dumps(row.get("actions")) if row.get("actions") else None})
 
 
 def list_accounts() -> list[dict]:
