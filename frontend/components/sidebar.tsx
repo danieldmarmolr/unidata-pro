@@ -74,7 +74,6 @@ const ITEMS: NavItem[] = [
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
   { label: "Marketing",        href: "/dashboard/marketing",      icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA, areas: ["marketing"] },
-  { label: "Meta Ads",         href: "/dashboard/marketing/meta", icon: Megaphone,       group: "Cross", roles: ONLY_GERENCIA, areas: ["marketing"] },
   {
     label: "Customer Success",
     href: "/dashboard/cs",

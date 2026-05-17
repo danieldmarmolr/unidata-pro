@@ -616,6 +616,27 @@ async def get_meta_ad_performance(
 
 
 @mcp.tool()
+async def get_meta_unidrop_impact(
+    period: Annotated[Period, Field(description="Ventana temporal.")] = "30d",
+) -> dict[str, Any]:
+    """Cruza spend Meta Ads con metricas de Unidrop reales: signups, suscripciones
+    nuevas, revenue PaymentIntent. Calcula CAC dropshipper, CAC suscripcion, ROAS.
+    Devuelve daily overlay (spend vs signups vs revenue) + funnel
+    impresiones → clicks → signups → suscripciones.
+
+    Usar para: '¿cuanto cuesta adquirir un dropshipper?', 'ROAS del ultimo mes',
+    'cae el spend pero suben los signups?'.
+    """
+    try:
+        return await get_client().get(
+            "/api/marketing/meta/unidrop-impact",
+            params={"period": period},
+        )
+    except UnidataError as e:
+        return _err(e)
+
+
+@mcp.tool()
 async def trigger_meta_sync(
     historical_days: Annotated[int, Field(ge=1, le=730, description="Días hacia atrás a sincronizar. 365 = año entero. 30 cubre re-statements normales.")] = 30,
 ) -> dict[str, Any]:

@@ -403,6 +403,150 @@ def campaigns(period: str = "30d", unit: str | None = None, limit: int = 100) ->
         return [dict(r) for r in cur.fetchall()]
 
 
+def unidrop_impact(period: str = "30d") -> dict:
+    """Cross-area: cruza spend Meta Ads con metricas Unidrop reales.
+
+    Pensado para responder: "¿cuanto cuesta adquirir un dropshipper via Meta?
+    ¿cual fue el ROAS? ¿que campañas trajeron mas signups?"
+
+    Definiciones:
+    - CAC dropshipper = spend / nuevos User creados en el periodo
+    - CAC suscripcion = spend / nuevos subscription_status='active' en el periodo
+    - ROAS = revenue PaymentIntent.paidAmount / spend (gross, no neto)
+    - Daily overlay = serie diaria de spend + signups + revenue PI
+    """
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+    meta_ads_db.init()
+
+    # 1) Spend total + daily Meta (unit=unidrop)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT COALESCE(SUM(i.spend), 0)::float AS spend,
+                   COALESCE(SUM(i.impressions), 0)::bigint AS impressions,
+                   COALESCE(SUM(i.clicks), 0)::bigint AS clicks
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE a.unit = 'unidrop'
+              AND i.date_start >= CURRENT_DATE - make_interval(days => %s)
+        """, (days,))
+        meta_tot = cur.fetchone()
+        cur.execute("""
+            SELECT i.date_start::text AS d,
+                   COALESCE(SUM(i.spend), 0)::float AS spend,
+                   COALESCE(SUM(i.clicks), 0)::bigint AS clicks
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE a.unit = 'unidrop'
+              AND i.date_start >= CURRENT_DATE - make_interval(days => %s)
+            GROUP BY 1 ORDER BY 1
+        """, (days,))
+        meta_daily = [dict(r) for r in cur.fetchall()]
+
+    # 2) Unidrop datos (signups, suscripciones, revenue) — engine unidrop_api
+    eng_drop = get_engine("unidrop")
+    sign_rows = q(eng_drop, """
+        SELECT COUNT(*)::int AS signups
+        FROM public."User"
+        WHERE "createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0,)]
+    new_signups = int(sign_rows[0][0] or 0) if sign_rows else 0
+
+    sub_rows = q(eng_drop, """
+        SELECT COUNT(*)::int AS new_subs
+        FROM public."User"
+        WHERE "start_date_subscription" IS NOT NULL
+          AND "start_date_subscription" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0,)]
+    new_subs = int(sub_rows[0][0] or 0) if sub_rows else 0
+
+    rev_rows = q(eng_drop, """
+        SELECT COALESCE(SUM(pi."paidAmount"), 0)::float AS rev,
+               COUNT(*)::int AS pi_count
+        FROM public."PaymentIntent" pi
+        WHERE pi.status = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+    """, {"d": days}) or [(0.0, 0)]
+    revenue = float(rev_rows[0][0] or 0) if rev_rows else 0.0
+    pi_count = int(rev_rows[0][1] or 0) if rev_rows else 0
+
+    # 3) Daily signups + revenue Unidrop
+    daily_signups = q(eng_drop, """
+        SELECT date_trunc('day', "createdAt")::date::text AS d,
+               COUNT(*)::int AS n
+        FROM public."User"
+        WHERE "createdAt" >= NOW() - make_interval(days => :d)
+        GROUP BY 1 ORDER BY 1
+    """, {"d": days}) or []
+    daily_revenue = q(eng_drop, """
+        SELECT date_trunc('day', pi."createdAt")::date::text AS d,
+               COALESCE(SUM(pi."paidAmount"), 0)::float AS rev
+        FROM public."PaymentIntent" pi
+        WHERE pi.status = 'PROCESSED'
+          AND pi."createdAt" >= NOW() - make_interval(days => :d)
+        GROUP BY 1 ORDER BY 1
+    """, {"d": days}) or []
+
+    # Merge daily series
+    daily_map: dict[str, dict] = {}
+    for r in meta_daily:
+        d = r["d"]
+        daily_map[d] = {"d": d, "spend": float(r["spend"] or 0),
+                        "clicks": int(r["clicks"] or 0),
+                        "signups": 0, "revenue": 0.0}
+    for r in daily_signups:
+        d = r[0]
+        if d not in daily_map:
+            daily_map[d] = {"d": d, "spend": 0.0, "clicks": 0, "signups": 0, "revenue": 0.0}
+        daily_map[d]["signups"] = int(r[1] or 0)
+    for r in daily_revenue:
+        d = r[0]
+        if d not in daily_map:
+            daily_map[d] = {"d": d, "spend": 0.0, "clicks": 0, "signups": 0, "revenue": 0.0}
+        daily_map[d]["revenue"] = float(r[1] or 0)
+    daily = sorted(daily_map.values(), key=lambda x: x["d"])
+
+    spend = float(meta_tot[0] or 0) if meta_tot else 0.0
+    impressions = int(meta_tot[1] or 0) if meta_tot else 0
+    clicks = int(meta_tot[2] or 0) if meta_tot else 0
+
+    cac_dropshipper = (spend / new_signups) if new_signups > 0 else 0.0
+    cac_subscripcion = (spend / new_subs) if new_subs > 0 else 0.0
+    roas = (revenue / spend) if spend > 0 else 0.0
+    cost_per_click = (spend / clicks) if clicks > 0 else 0.0
+
+    # 4) Funnel: impressions → clicks → signups → suscripciones
+    funnel = [
+        {"step": "Impresiones", "value": impressions, "rate_from_prev": None},
+        {"step": "Clicks", "value": clicks,
+         "rate_from_prev": (clicks / impressions * 100) if impressions > 0 else 0},
+        {"step": "Nuevos signups", "value": new_signups,
+         "rate_from_prev": (new_signups / clicks * 100) if clicks > 0 else 0},
+        {"step": "Suscripciones nuevas", "value": new_subs,
+         "rate_from_prev": (new_subs / new_signups * 100) if new_signups > 0 else 0},
+    ]
+
+    return {
+        "period": period,
+        "kpi": {
+            "spend": spend,
+            "impressions": impressions,
+            "clicks": clicks,
+            "new_signups": new_signups,
+            "new_subscriptions": new_subs,
+            "revenue_pi": revenue,
+            "pi_count": pi_count,
+            "cac_dropshipper": cac_dropshipper,
+            "cac_subscripcion": cac_subscripcion,
+            "roas": roas,
+            "cpc": cost_per_click,
+        },
+        "daily": daily,
+        "funnel": funnel,
+    }
+
+
 def adsets(campaign_id: str | None = None, period: str = "30d", limit: int = 100) -> list[dict]:
     days = _period_days(period)
     meta_ads_db.init()

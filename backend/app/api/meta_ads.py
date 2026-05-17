@@ -60,6 +60,19 @@ def get_ads(
     return {"items": items, "count": len(items)}
 
 
+@router.get("/unidrop-impact")
+def get_unidrop_impact(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["7d", "30d", "90d", "1y", "all"], Query()] = "30d",
+) -> dict:
+    """Cross-data Meta Ads × Unidrop:
+    - CAC dropshipper / CAC suscripcion / ROAS
+    - Daily overlay (spend + signups + revenue)
+    - Funnel impresiones → clicks → signups → suscripciones
+    """
+    return meta_svc.unidrop_impact(period=period)
+
+
 @router.post("/sync")
 def trigger_sync(
     _: Annotated[dict, Depends(require_admin)],
