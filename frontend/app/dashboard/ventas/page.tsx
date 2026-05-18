@@ -280,7 +280,6 @@ export default function VentasPage() {
  filename={`provincia_${drill.province}_orders.csv`}
  onClose={() => setDrill(null)}
  />
- )} />
  )}
  </>
  );
