@@ -126,14 +126,14 @@ export function MetaImpactChart({
           <YAxis yAxisId="count" orientation="right" tick={{ fontSize: 9, fill: "var(--color-text-muted, #9ca3af)" }} axisLine={false} tickLine={false} width={38} />
           <Tooltip
             contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid var(--color-border, #e5e7eb)" }}
-            formatter={(v: unknown, name: unknown) => {
-              const val = Number(v);
-              const key = String(name);
-              if (key === "spend") return [formatCurrency(val), "Spend total"];
-              if (key === "cp_spend") return [formatCurrency(val), selectedCampaign?.name ?? "Campaña"];
-              if (key === "revenue") return [formatCurrency(val), "Revenue"];
-              if (key === "signups") return [formatNumber(val), "Signups"];
-              return [v, name];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            formatter={(v: any, name: any): [string, string] => {
+              const val = Number(v ?? 0);
+              if (name === "spend") return [formatCurrency(val), "Spend total"];
+              if (name === "cp_spend") return [formatCurrency(val), selectedCampaign?.name ?? "Campaña"];
+              if (name === "revenue") return [formatCurrency(val), "Revenue"];
+              if (name === "signups") return [formatNumber(val), "Signups"];
+              return [String(v ?? ""), String(name ?? "")];
             }}
             labelFormatter={(l) => `📅 ${l}`}
           />
@@ -168,12 +168,13 @@ export function MetaImpactChart({
             <YAxis yAxisId="rate" orientation="right" tick={{ fontSize: 9, fill: "var(--color-text-muted, #9ca3af)" }} axisLine={false} tickLine={false} tickFormatter={(v) => `${Number(v).toFixed(1)}`} width={38} />
             <Tooltip
               contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid var(--color-border, #e5e7eb)" }}
-              formatter={(v: unknown, name: unknown) => {
-                const val = Number(v);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            formatter={(v: any, name: any): [string, string] => {
+                const val = Number(v ?? 0);
                 if (name === "cac") return [formatCurrency(val), "CAC"];
                 if (name === "roas") return [`${val.toFixed(2)}x`, "ROAS"];
                 if (name === "conv") return [`${val.toFixed(2)}%`, "Conv%"];
-                return [v, name];
+                return [String(v ?? ""), String(name ?? "")];
               }}
               labelFormatter={(l) => `📅 ${l}`}
             />
