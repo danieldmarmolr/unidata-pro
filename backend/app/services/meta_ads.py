@@ -389,7 +389,7 @@ def overview(period: str = "30d", unit: str | None = None) -> dict:
     where_unit = "AND a.unit = %s" if unit else ""
     params: list = [days]
     if unit:
-        params.insert(0, unit)
+        params.append(unit)
     with get_conn() as c, c.cursor() as cur:
         cur.execute(f"""
             SELECT
@@ -450,10 +450,9 @@ def campaigns(period: str = "30d", unit: str | None = None, limit: int = 100) ->
     days = _period_days(period)
     meta_ads_db.init()
     where_unit = "AND a.unit = %s" if unit else ""
-    params: list = []
+    params: list = [days]
     if unit:
         params.append(unit)
-    params.append(days)
     params.append(limit)
     with get_conn() as c, c.cursor() as cur:
         cur.execute(f"""
