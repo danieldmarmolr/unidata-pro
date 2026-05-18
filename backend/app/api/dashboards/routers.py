@@ -24,6 +24,7 @@ from app.services import dropshippers as dropshippers_svc
 from app.services import geo as geo_svc
 from app.services import story as story_svc
 from app.services import today_snapshot as today_svc
+from app.services import orders_global_unidrop as orders_global_svc
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 
@@ -137,6 +138,37 @@ def get_sales_unidrop(
     def _b() -> dict:
         return sales_drp_svc.sales_unidrop(period, channel, from_iso=from_iso, to_iso=to_iso)
     return _b()
+
+
+_orders_global_cache: TTLCache = TTLCache(maxsize=64, ttl=90)
+
+
+@router.get("/unidrop/orders")
+def get_unidrop_orders_global(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "7d",
+    channel: Annotated[Literal["all", "ml", "tn"], Query()] = "all",
+    shipping_type: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    search: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=300)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Vista global de órdenes Unidrop: todas las órdenes ML + TN de todos los dropshippers."""
+    require_area(user, ["ventas", "cs"])
+    key = f"ord-global:{period}:{channel}:{shipping_type}:{status}:{search}:{limit}:{offset}:{from_iso}:{to_iso}"
+    cached_val = _orders_global_cache.get(key)
+    if cached_val is not None:
+        return cached_val
+    result = orders_global_svc.orders_global_unidrop(
+        period=period, channel=channel, shipping_type=shipping_type,
+        status_filter=status, search_drop=search, limit=limit, offset=offset,
+        from_iso=from_iso, to_iso=to_iso,
+    )
+    _orders_global_cache[key] = result
+    return result
 
 
 @router.get("/logistica/unidrop")
