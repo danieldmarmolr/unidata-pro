@@ -27,7 +27,6 @@ type Channel = "all" | "tn" | "ml";
 type Drill =
  | { kind: "product"; productId: string; name: string }
  | { kind: "province"; province: string }
- | { kind: "user"; userId: number; name: string };
 
 export default function VentasPage() {
  const period = useGlobalFilters((s) => s.period);
@@ -66,7 +65,7 @@ export default function VentasPage() {
  : "Operadores Unidrop · TN + ML procesados a traves de la plataforma"
  }
  />
-      <div className="px-8 pt-6"><TodayPanel compact={period !== "today"} /></div>
+      <div className="px-8 pt-4"><TodayPanel compact={period !== "today"} unit={unit === "unistore" ? "unistore" : "unidrop"} /></div>
       
  <div className="flex-1 px-8 py-6 overflow-y-auto">
  <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
@@ -241,15 +240,15 @@ export default function VentasPage() {
  />
  ) : (
  <CategoryTable
- caption="Top 15 usuarios Unidrop por revenue"
- subtitle="Operadores que mas vendieron en el periodo · click para historial"
+ caption={`Top 15 dropshippers por revenue (${channel === "all" ? "TN + ML" : channel === "tn" ? "Tienda Nube" : "Mercado Libre"})`}
+ subtitle="Ordenes pagadas en el periodo · click para ver perfil 360"
  data={data.top_users ?? []}
  formatter="currency"
  extraColumns={[{ key: "orders", label: "Ord", format: "number" }]}
  onRowClick={(r) => {
  const id = r.extra?.user_id;
  if (typeof id === "number" && id > 0) {
- setDrill({ kind: "user", userId: id, name: r.category });
+ router.push(`/dashboard/dropshipper/${id}`);
  }
  }}
  />
@@ -273,15 +272,7 @@ export default function VentasPage() {
  filename={`provincia_${drill.province}_orders.csv`}
  onClose={() => setDrill(null)}
  />
- )}
- {drill?.kind === "user" && (
- <DrillDownModal
- title={`Historial de ${drill.name}`}
- subtitle="Ordenes Unidrop del usuario"
- endpoint={`/api/drilldowns/customers/${drill.userId}/orders`}
- filename={`user_${drill.userId}_orders.csv`}
- onClose={() => setDrill(null)}
- />
+ )} />
  )}
  </>
  );
