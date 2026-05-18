@@ -106,6 +106,8 @@ app.add_middleware(
 def _startup() -> None:
     users_db.init()
     areas_db.init()
+    from app.db import carga_digip_db as _carga_db
+    _carga_db.init()
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)
@@ -140,6 +142,9 @@ app.include_router(reminders_api.router)
 
 from app.api import meta_ads as meta_ads_api
 app.include_router(meta_ads_api.router)
+
+from app.api import logistica as logistica_api
+app.include_router(logistica_api.router)
 
 
 @app.get("/api/health")
