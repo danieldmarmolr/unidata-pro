@@ -106,6 +106,10 @@ export default function MetaAdsPage() {
   const isAdmin = !!me?.is_admin || me?.role === "admin";
   const [period, setPeriod] = useState<"7d" | "30d" | "90d" | "1y">("30d");
   const [unit, setUnit] = useState<"" | "unistore" | "unidrop" | "unidev">("");
+  const [cpSort, setCpSort] = useState<{ col: keyof MetaCampaign; dir: "asc" | "desc" }>({ col: "spend", dir: "desc" });
+  const [cpStatus, setCpStatus] = useState("");
+  const [cpObjective, setCpObjective] = useState("");
+  const [cpSearch, setCpSearch] = useState("");
   const qc = useQueryClient();
   const showCross = !unit || unit === "unidrop";
   const qsBase = `period=${period}${unit ? `&unit=${unit}` : ""}`;
@@ -346,14 +350,21 @@ export default function MetaAdsPage() {
                   </div>
                 </div>
 
-                {/* Daily overlay 3-col */}
+                {/* Daily overlay 3-col con valores y KPIs derivados */}
                 {impQ.data.daily.length > 0 && (
                   <div className="bg-surface border border-border rounded-lg p-3">
-                    <div className="mb-2">
-                      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
-                      <p className="text-[10px] text-text-muted">
-                        <Legend color="bg-primary" label="Spend" /> · <Legend color="bg-emerald-500" label="Signups" /> · <Legend color="bg-amber-500" label="Revenue" />
-                      </p>
+                    <div className="mb-2 flex items-center justify-between flex-wrap gap-1">
+                      <div>
+                        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
+                        <p className="text-[10px] text-text-muted">
+                          <Legend color="bg-primary" label="Spend" /> · <Legend color="bg-emerald-500" label="Signups" /> · <Legend color="bg-amber-500" label="Revenue" />
+                        </p>
+                      </div>
+                      <div className="text-[9px] text-text-muted flex gap-3">
+                        <span className="font-bold text-rose-500">CAC</span>
+                        <span className="font-bold text-emerald-600">ROAS</span>
+                        <span className="font-bold text-text-muted">Conv%</span>
+                      </div>
                     </div>
                     {(() => {
                       const last30 = impQ.data!.daily.slice(-30);
@@ -361,26 +372,62 @@ export default function MetaAdsPage() {
                       const maxSign = Math.max(1, ...last30.map((d) => d.signups));
                       const maxRev = Math.max(1, ...last30.map((d) => d.revenue));
                       return (
-                        <div className="space-y-1">
-                          {last30.map((d) => (
-                            <div key={d.d} className="flex items-center gap-2">
-                              <div className="w-14 text-[10px] text-text-muted font-mono shrink-0">{d.d.slice(5)}</div>
-                              <div className="flex-1 grid grid-cols-3 gap-1">
-                                <div className="h-4 bg-soft rounded relative overflow-hidden">
-                                  <div className="h-full bg-primary" style={{ width: `${(d.spend / maxSpend) * 100}%` }} />
+                        <div className="space-y-0.5">
+                          {last30.map((d) => {
+                            const cac = d.signups > 0 ? d.spend / d.signups : 0;
+                            const roas = d.spend > 0 ? d.revenue / d.spend : 0;
+                            const conv = d.clicks > 0 ? (d.signups / d.clicks) * 100 : 0;
+                            const spendPct = d.spend / maxSpend;
+                            const signPct = maxSign > 0 ? d.signups / maxSign : 0;
+                            const revPct = d.revenue / maxRev;
+                            return (
+                              <div key={d.d} className="flex items-center gap-2">
+                                <div className="w-10 text-[9px] text-text-muted font-mono shrink-0">{d.d.slice(5)}</div>
+                                <div className="flex-1 grid grid-cols-3 gap-1">
+                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
+                                    <div className="h-full bg-primary transition-all" style={{ width: `${spendPct * 100}%` }} />
+                                    <div className="absolute inset-0 flex items-center px-1">
+                                      <span className="text-[9px] font-bold tabular-nums truncate"
+                                        style={{ color: spendPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
+                                        {formatCurrency(d.spend)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
+                                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${signPct * 100}%` }} />
+                                    <div className="absolute inset-0 flex items-center px-1">
+                                      <span className="text-[9px] font-bold tabular-nums"
+                                        style={{ color: signPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
+                                        {d.signups} sign
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
+                                    <div className="h-full bg-amber-500 transition-all" style={{ width: `${revPct * 100}%` }} />
+                                    <div className="absolute inset-0 flex items-center px-1">
+                                      <span className="text-[9px] font-bold tabular-nums truncate"
+                                        style={{ color: revPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
+                                        {formatCurrency(d.revenue)}
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="h-4 bg-soft rounded relative overflow-hidden">
-                                  <div className="h-full bg-emerald-500" style={{ width: `${(d.signups / maxSign) * 100}%` }} />
-                                </div>
-                                <div className="h-4 bg-soft rounded relative overflow-hidden">
-                                  <div className="h-full bg-amber-500" style={{ width: `${(d.revenue / maxRev) * 100}%` }} />
+                                <div className="w-48 text-right text-[9px] shrink-0 tabular-nums flex gap-1 justify-end items-center">
+                                  <span className={cac > 0 ? "text-rose-600 font-semibold" : "text-text-muted"}>
+                                    {cac > 0 ? formatCurrency(cac) : "—"}
+                                  </span>
+                                  <span className="text-border">·</span>
+                                  <span className={roas > 0 ? "text-emerald-600 font-semibold" : "text-text-muted"}>
+                                    {roas > 0 ? `${roas.toFixed(2)}x` : "—"}
+                                  </span>
+                                  <span className="text-border">·</span>
+                                  <span className="text-text-muted">
+                                    {conv > 0 ? `${conv.toFixed(2)}%` : "—"}
+                                  </span>
                                 </div>
                               </div>
-                              <div className="w-44 text-right text-[10px] text-text-muted shrink-0 tabular-nums">
-                                {formatCurrency(d.spend)} · {d.signups} sign · {formatCurrency(d.revenue)}
-                              </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       );
                     })()}
@@ -528,47 +575,122 @@ export default function MetaAdsPage() {
             )}
 
             {/* ── Section 12: Campañas ── */}
-            <Section title="Campañas" icon={Target} subtitle={`${cpQ.data?.count ?? 0} campañas · ordenadas por inversión`}>
-              <div className="overflow-x-auto max-h-[560px] overflow-y-auto -mx-3">
-                <table className="w-full text-xs">
-                  <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
-                    <tr>
-                      <th className="text-left px-3 py-2">Campaña</th>
-                      <th className="text-left px-2 py-2">Estado</th>
-                      <th className="text-left px-2 py-2">Objetivo</th>
-                      <th className="text-right px-2 py-2">Spend</th>
-                      <th className="text-right px-2 py-2">Impresiones</th>
-                      <th className="text-right px-2 py-2">Clicks</th>
-                      <th className="text-right px-2 py-2">CPM</th>
-                      <th className="text-right px-2 py-2">CPC</th>
-                      <th className="text-right px-3 py-2">CTR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(cpQ.data?.items ?? []).length === 0 ? (
-                      <tr><td colSpan={9} className="text-center text-text-muted py-8">Sin campañas con spend en este periodo</td></tr>
-                    ) : (
-                      (cpQ.data?.items ?? []).map((c) => (
-                        <tr key={c.id} className="border-t border-border hover:bg-soft/40">
-                          <td className="px-3 py-2 max-w-[250px]">
-                            <div className="truncate font-semibold text-text" title={c.name}>{c.name}</div>
-                            <div className="text-[10px] text-text-muted">{c.account_name}</div>
-                          </td>
-                          <td className="px-2 py-2"><CampaignStatusBadge status={c.effective_status || c.status} /></td>
-                          <td className="px-2 py-2 text-[10px] text-text-muted">{c.objective?.replace(/^OUTCOME_/, "").toLowerCase() || "—"}</td>
-                          <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(c.spend)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.impressions)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.clicks)}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{c.impressions > 0 ? formatCurrency(c.cpm) : "—"}</td>
-                          <td className="px-2 py-2 text-right tabular-nums">{c.clicks > 0 ? formatCurrency(c.cpc) : "—"}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{c.impressions > 0 ? `${c.ctr.toFixed(2)}%` : "—"}</td>
-                        </tr>
-                      ))
+            {(() => {
+              const allCampaigns = cpQ.data?.items ?? [];
+              const uniqueStatuses = Array.from(new Set(allCampaigns.map(c => (c.effective_status || c.status).toUpperCase()))).filter(Boolean);
+              const uniqueObjectives = Array.from(new Set(allCampaigns.map(c => c.objective?.replace(/^OUTCOME_/, "") || ""))).filter(Boolean);
+              const filtered = allCampaigns
+                .filter(c => !cpStatus || (c.effective_status || c.status).toUpperCase() === cpStatus)
+                .filter(c => !cpObjective || (c.objective?.replace(/^OUTCOME_/, "") || "") === cpObjective)
+                .filter(c => !cpSearch || c.name.toLowerCase().includes(cpSearch.toLowerCase()))
+                .sort((a, b) => {
+                  const va = typeof a[cpSort.col] === "number" ? (a[cpSort.col] as number) : 0;
+                  const vb = typeof b[cpSort.col] === "number" ? (b[cpSort.col] as number) : 0;
+                  return cpSort.dir === "desc" ? vb - va : va - vb;
+                });
+              const totals = filtered.reduce(
+                (acc, c) => ({ spend: acc.spend + c.spend, impressions: acc.impressions + c.impressions, clicks: acc.clicks + c.clicks }),
+                { spend: 0, impressions: 0, clicks: 0 }
+              );
+              const tCpm = totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : 0;
+              const tCpc = totals.clicks > 0 ? totals.spend / totals.clicks : 0;
+              const tCtr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : 0;
+              const sortToggle = (col: keyof MetaCampaign) =>
+                setCpSort(s => s.col === col ? { col, dir: s.dir === "desc" ? "asc" : "desc" } : { col, dir: "desc" });
+              const SortArrow = ({ col }: { col: keyof MetaCampaign }) => (
+                <span className="ml-0.5 opacity-50">{cpSort.col === col ? (cpSort.dir === "desc" ? "↓" : "↑") : "↕"}</span>
+              );
+              return (
+                <Section title="Campañas" icon={Target}
+                  subtitle={`${filtered.length}${filtered.length !== allCampaigns.length ? ` de ${allCampaigns.length}` : ""} campañas · ${formatCurrency(totals.spend)} spend`}>
+                  <div className="flex items-center gap-2 mb-3 flex-wrap">
+                    <input type="text" placeholder="Buscar campaña…" value={cpSearch}
+                      onChange={e => setCpSearch(e.target.value)}
+                      className="px-2 py-1 text-xs border border-border rounded-lg bg-soft focus:outline-none focus:border-primary w-44" />
+                    <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
+                      {["", ...uniqueStatuses].map(s => (
+                        <button key={s} onClick={() => setCpStatus(s)}
+                          className={"px-2 py-0.5 text-[10px] font-bold rounded-md transition " + (cpStatus === s ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                          {s || "Todos"}
+                        </button>
+                      ))}
+                    </div>
+                    {uniqueObjectives.length > 0 && (
+                      <select value={cpObjective} onChange={e => setCpObjective(e.target.value)}
+                        className="px-2 py-1 text-[10px] border border-border rounded-lg bg-soft focus:outline-none focus:border-primary">
+                        <option value="">Todos los objetivos</option>
+                        {uniqueObjectives.map(o => <option key={o} value={o}>{o.toLowerCase()}</option>)}
+                      </select>
                     )}
-                  </tbody>
-                </table>
-              </div>
-            </Section>
+                    {(cpSearch || cpStatus || cpObjective) && (
+                      <button onClick={() => { setCpSearch(""); setCpStatus(""); setCpObjective(""); }}
+                        className="px-2 py-0.5 text-[10px] text-text-muted hover:text-rose-600 border border-border rounded-lg bg-soft">
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
+                  <div className="overflow-x-auto max-h-[560px] overflow-y-auto -mx-3">
+                    <table className="w-full text-xs">
+                      <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
+                        <tr>
+                          <th className="text-left px-3 py-2">Campaña</th>
+                          <th className="text-left px-2 py-2">Estado</th>
+                          <th className="text-left px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("objective")}>Objetivo <SortArrow col="objective" /></th>
+                          <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("spend")}>Spend <SortArrow col="spend" /></th>
+                          <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("impressions")}>Impr <SortArrow col="impressions" /></th>
+                          <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("clicks")}>Clicks <SortArrow col="clicks" /></th>
+                          <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("cpm")}>CPM <SortArrow col="cpm" /></th>
+                          <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("cpc")}>CPC <SortArrow col="cpc" /></th>
+                          <th className="text-right px-3 py-2 cursor-pointer select-none hover:text-text"
+                            onClick={() => sortToggle("ctr")}>CTR <SortArrow col="ctr" /></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.length === 0 ? (
+                          <tr><td colSpan={9} className="text-center text-text-muted py-8">Sin campañas para los filtros aplicados</td></tr>
+                        ) : (
+                          <>
+                            {filtered.map((c) => (
+                              <tr key={c.id} className="border-t border-border hover:bg-soft/40">
+                                <td className="px-3 py-2 max-w-[250px]">
+                                  <div className="truncate font-semibold text-text" title={c.name}>{c.name}</div>
+                                  <div className="text-[10px] text-text-muted">{c.account_name}</div>
+                                </td>
+                                <td className="px-2 py-2"><CampaignStatusBadge status={c.effective_status || c.status} /></td>
+                                <td className="px-2 py-2 text-[10px] text-text-muted">{c.objective?.replace(/^OUTCOME_/, "").toLowerCase() || "—"}</td>
+                                <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(c.spend)}</td>
+                                <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.impressions)}</td>
+                                <td className="px-2 py-2 text-right tabular-nums">{formatNumber(c.clicks)}</td>
+                                <td className="px-2 py-2 text-right tabular-nums">{c.impressions > 0 ? formatCurrency(c.cpm) : "—"}</td>
+                                <td className="px-2 py-2 text-right tabular-nums">{c.clicks > 0 ? formatCurrency(c.cpc) : "—"}</td>
+                                <td className="px-3 py-2 text-right tabular-nums">{c.impressions > 0 ? `${c.ctr.toFixed(2)}%` : "—"}</td>
+                              </tr>
+                            ))}
+                            <tr className="border-t-2 border-border bg-soft/70 font-bold text-text">
+                              <td className="px-3 py-2 text-[10px] uppercase tracking-wider text-text-muted" colSpan={3}>
+                                Total · {filtered.length} campaña{filtered.length !== 1 ? "s" : ""}
+                              </td>
+                              <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(totals.spend)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(totals.impressions)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(totals.clicks)}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{tCpm > 0 ? formatCurrency(tCpm) : "—"}</td>
+                              <td className="px-2 py-2 text-right tabular-nums">{tCpc > 0 ? formatCurrency(tCpc) : "—"}</td>
+                              <td className="px-3 py-2 text-right tabular-nums">{tCtr > 0 ? `${tCtr.toFixed(2)}%` : "—"}</td>
+                            </tr>
+                          </>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </Section>
+              );
+            })()}
           </div>
         )}
       </div>
