@@ -16,6 +16,7 @@ import { TopProductsTable } from "@/components/top-products";
 import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { UnidropOrdersGlobal } from "@/components/unidrop-orders-global";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { fmtArDateTime } from "@/lib/dates";
@@ -221,6 +222,13 @@ export default function VentasPage() {
  }
  }}
  />
+ </div>
+ )}
+
+ {/* Vista global de ordenes Unidrop (todas las ventas) */}
+ {unit === "unidrop" && (
+ <div className="mb-6">
+ <UnidropOrdersGlobal />
  </div>
  )}
 
