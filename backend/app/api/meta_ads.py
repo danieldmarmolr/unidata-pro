@@ -130,6 +130,25 @@ def get_cohort_retention(
     return meta_svc.cohort_retention(period=period)
 
 
+@router.get("/signups-per-day")
+def get_signups_per_day(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["7d", "30d", "90d", "1y"], Query()] = "30d",
+) -> list:
+    """Per-day list of new Unidrop users with subscription + revenue context."""
+    return meta_svc.signups_per_day(period=period)
+
+
+@router.get("/campaign-daily")
+def get_campaign_daily(
+    _: Annotated[dict, Depends(current_user)],
+    campaign_id: Annotated[str, Query()],
+    period: Annotated[Literal["7d", "30d", "90d", "1y"], Query()] = "30d",
+) -> list:
+    """Daily spend/clicks/impressions for a specific campaign."""
+    return meta_svc.campaign_daily_spend(campaign_id=campaign_id, period=period)
+
+
 @router.get("/same-time")
 def get_same_time(
     _: Annotated[dict, Depends(current_user)],

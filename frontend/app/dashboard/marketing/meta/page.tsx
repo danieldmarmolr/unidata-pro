@@ -12,6 +12,7 @@ import {
   RefreshCw, AlertTriangle, Users, UserPlus, Repeat, Zap, Clock, MapPin,
   Smartphone, Layers, ArrowUpRight, ArrowDownRight, ShoppingBag, Activity,
 } from "lucide-react";
+import { MetaImpactChart } from "@/components/meta-impact-chart";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -350,87 +351,17 @@ export default function MetaAdsPage() {
                   </div>
                 </div>
 
-                {/* Daily overlay 3-col con valores y KPIs derivados */}
+                {/* Visual overlay chart + KPI trends + dropshipper drill-down */}
                 {impQ.data.daily.length > 0 && (
                   <div className="bg-surface border border-border rounded-lg p-3">
-                    <div className="mb-2 flex items-center justify-between flex-wrap gap-1">
-                      <div>
-                        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Overlay diario · últimos 30 días</div>
-                        <p className="text-[10px] text-text-muted">
-                          <Legend color="bg-primary" label="Spend" /> · <Legend color="bg-emerald-500" label="Signups" /> · <Legend color="bg-amber-500" label="Revenue" />
-                        </p>
-                      </div>
-                      <div className="text-[9px] text-text-muted flex gap-3">
-                        <span className="font-bold text-rose-500">CAC</span>
-                        <span className="font-bold text-emerald-600">ROAS</span>
-                        <span className="font-bold text-text-muted">Conv%</span>
-                      </div>
+                    <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-3">
+                      Overlay diario · {impQ.data.daily.length} días
                     </div>
-                    {(() => {
-                      const last30 = impQ.data!.daily.slice(-30);
-                      const maxSpend = Math.max(1, ...last30.map((d) => d.spend));
-                      const maxSign = Math.max(1, ...last30.map((d) => d.signups));
-                      const maxRev = Math.max(1, ...last30.map((d) => d.revenue));
-                      return (
-                        <div className="space-y-0.5">
-                          {last30.map((d) => {
-                            const cac = d.signups > 0 ? d.spend / d.signups : 0;
-                            const roas = d.spend > 0 ? d.revenue / d.spend : 0;
-                            const conv = d.clicks > 0 ? (d.signups / d.clicks) * 100 : 0;
-                            const spendPct = d.spend / maxSpend;
-                            const signPct = maxSign > 0 ? d.signups / maxSign : 0;
-                            const revPct = d.revenue / maxRev;
-                            return (
-                              <div key={d.d} className="flex items-center gap-2">
-                                <div className="w-10 text-[9px] text-text-muted font-mono shrink-0">{d.d.slice(5)}</div>
-                                <div className="flex-1 grid grid-cols-3 gap-1">
-                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
-                                    <div className="h-full bg-primary transition-all" style={{ width: `${spendPct * 100}%` }} />
-                                    <div className="absolute inset-0 flex items-center px-1">
-                                      <span className="text-[9px] font-bold tabular-nums truncate"
-                                        style={{ color: spendPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
-                                        {formatCurrency(d.spend)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
-                                    <div className="h-full bg-emerald-500 transition-all" style={{ width: `${signPct * 100}%` }} />
-                                    <div className="absolute inset-0 flex items-center px-1">
-                                      <span className="text-[9px] font-bold tabular-nums"
-                                        style={{ color: signPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
-                                        {d.signups} sign
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="h-5 bg-soft rounded relative overflow-hidden">
-                                    <div className="h-full bg-amber-500 transition-all" style={{ width: `${revPct * 100}%` }} />
-                                    <div className="absolute inset-0 flex items-center px-1">
-                                      <span className="text-[9px] font-bold tabular-nums truncate"
-                                        style={{ color: revPct > 0.35 ? "white" : "var(--color-text-muted)" }}>
-                                        {formatCurrency(d.revenue)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="w-48 text-right text-[9px] shrink-0 tabular-nums flex gap-1 justify-end items-center">
-                                  <span className={cac > 0 ? "text-rose-600 font-semibold" : "text-text-muted"}>
-                                    {cac > 0 ? formatCurrency(cac) : "—"}
-                                  </span>
-                                  <span className="text-border">·</span>
-                                  <span className={roas > 0 ? "text-emerald-600 font-semibold" : "text-text-muted"}>
-                                    {roas > 0 ? `${roas.toFixed(2)}x` : "—"}
-                                  </span>
-                                  <span className="text-border">·</span>
-                                  <span className="text-text-muted">
-                                    {conv > 0 ? `${conv.toFixed(2)}%` : "—"}
-                                  </span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
+                    <MetaImpactChart
+                      daily={impQ.data.daily}
+                      campaigns={cpQ.data?.items ?? []}
+                      period={period}
+                    />
                   </div>
                 )}
               </Section>

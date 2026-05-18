@@ -629,6 +629,70 @@ def unidrop_impact(period: str = "30d") -> dict:
     }
 
 
+def signups_per_day(period: str = "30d") -> list[dict]:
+    """Per-day list of new Unidrop users with subscription + revenue context."""
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    from collections import defaultdict
+
+    days = _period_days(period)
+    eng = get_engine("unidrop")
+    rows = q(eng, """
+        SELECT
+            u."createdAt"::date::text AS d,
+            u.id,
+            COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
+            u.email,
+            COALESCE(u.dni, '') AS dni,
+            COALESCE(u.personeria::text, '') AS personeria,
+            CASE WHEN u.end_date_subscription IS NOT NULL
+                      AND u.end_date_subscription > NOW()
+                 THEN TRUE ELSE FALSE END AS suscripto,
+            u.end_date_subscription::text AS vence,
+            COALESCE((
+                SELECT SUM(pi."paidAmount")::float
+                FROM public."CustomerPaymentAccount" cpa
+                INNER JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
+                WHERE cpa."userId" = u.id
+                  AND pi.status = 'PROCESSED'
+                  AND pi."createdAt" BETWEEN u."createdAt"
+                      AND u."createdAt" + INTERVAL '30 days'
+            ), 0) AS revenue_30d
+        FROM public."User" u
+        WHERE u."createdAt" >= NOW() - make_interval(days => :d)
+        ORDER BY u."createdAt"::date ASC, revenue_30d DESC NULLS LAST
+    """, {"d": days}) or []
+
+    by_day: dict[str, list] = defaultdict(list)
+    for r in rows:
+        by_day[r[0]].append({
+            "id": r[1], "nombre": r[2] or "",
+            "email": r[3] or "", "dni": r[4] or "",
+            "personeria": r[5] or "",
+            "suscripto": bool(r[6]), "vence": r[7],
+            "revenue_30d": float(r[8] or 0),
+        })
+    return [{"d": d, "count": len(u), "users": u} for d, u in sorted(by_day.items())]
+
+
+def campaign_daily_spend(campaign_id: str, period: str = "30d") -> list[dict]:
+    """Daily spend/clicks/impressions for a specific campaign."""
+    days = _period_days(period)
+    meta_ads_db.init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT i.date_start::text AS d,
+                   COALESCE(SUM(i.spend), 0)::float AS spend,
+                   COALESCE(SUM(i.clicks), 0)::bigint AS clicks,
+                   COALESCE(SUM(i.impressions), 0)::bigint AS impressions
+            FROM meta_insights_daily i
+            WHERE i.campaign_id = %s
+              AND i.date_start >= CURRENT_DATE - make_interval(days => %s)
+            GROUP BY 1 ORDER BY 1
+        """, (campaign_id, days))
+        return [dict(r) for r in cur.fetchall()]
+
+
 def adsets(campaign_id: str | None = None, period: str = "30d", limit: int = 100) -> list[dict]:
     days = _period_days(period)
     meta_ads_db.init()
