@@ -630,7 +630,7 @@ def unidrop_impact(period: str = "30d") -> dict:
 
 
 def signups_per_day(period: str = "30d") -> list[dict]:
-    """Per-day list of new Unidrop users with subscription + revenue context."""
+    """Per-day list of new Unidrop users with full Unidrop profile (ML/TN channels, orders, GMV, revenue)."""
     from app.db.engines import get_engine
     from app.services._utils import q
     from collections import defaultdict
@@ -638,6 +638,38 @@ def signups_per_day(period: str = "30d") -> list[dict]:
     days = _period_days(period)
     eng = get_engine("unidrop")
     rows = q(eng, """
+        WITH ml_stats AS (
+            SELECT mla.id AS mla_id,
+                   mla.nickname AS nickname_meli,
+                   COUNT(oml.id) FILTER (WHERE oml."status" = 'paid')::int AS ml_orders,
+                   COALESCE(SUM(oml."totalAmount") FILTER (WHERE oml."status" = 'paid'), 0)::float AS ml_gmv
+            FROM mercado_libre_dev."MercadoLibreUserAccount" mla
+            LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml
+                ON mla."mlUserId"::text = oml."sellerId"::text
+            GROUP BY mla.id, mla.nickname
+        ),
+        tn_cred AS (
+            SELECT u2.id AS user_id
+            FROM public."User" u2
+            INNER JOIN public."TiendaNubeCredential" t ON t.store_id = u2.store_id
+            WHERE u2.store_id IS NOT NULL
+        ),
+        tn_stats AS (
+            SELECT user_id,
+                   COUNT(*) FILTER (WHERE payment_status::text = 'paid')::int AS tn_orders,
+                   COALESCE(SUM(total) FILTER (WHERE payment_status::text = 'paid'), 0)::float AS tn_gmv
+            FROM public.tienda_nube_orders
+            WHERE user_id IS NOT NULL
+            GROUP BY user_id
+        ),
+        revenue_all AS (
+            SELECT cpa."userId" AS user_id,
+                   COALESCE(SUM(pi."paidAmount"), 0)::float AS revenue_total
+            FROM public."CustomerPaymentAccount" cpa
+            INNER JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
+            WHERE pi.status = 'PROCESSED'
+            GROUP BY cpa."userId"
+        )
         SELECT
             u."createdAt"::date::text AS d,
             u.id,
@@ -645,22 +677,26 @@ def signups_per_day(period: str = "30d") -> list[dict]:
             u.email,
             COALESCE(u.dni, '') AS dni,
             COALESCE(u.personeria::text, '') AS personeria,
-            CASE WHEN u.end_date_subscription IS NOT NULL
-                      AND u.end_date_subscription > NOW()
+            CASE WHEN u.end_date_subscription IS NOT NULL AND u.end_date_subscription > NOW()
                  THEN TRUE ELSE FALSE END AS suscripto,
             u.end_date_subscription::text AS vence,
-            COALESCE((
-                SELECT SUM(pi."paidAmount")::float
-                FROM public."CustomerPaymentAccount" cpa
-                INNER JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
-                WHERE cpa."userId" = u.id
-                  AND pi.status = 'PROCESSED'
-                  AND pi."createdAt" BETWEEN u."createdAt"
-                      AND u."createdAt" + INTERVAL '30 days'
-            ), 0) AS revenue_30d
+            COALESCE(sm.name, '') AS plan_name,
+            COALESCE(ml.nickname_meli, '') AS nickname_meli,
+            (u."mercadoLibreAccountId" IS NOT NULL) AS tiene_ml,
+            COALESCE(ml.ml_orders, 0) AS ml_orders,
+            COALESCE(ml.ml_gmv, 0) AS ml_gmv,
+            (tnc.user_id IS NOT NULL) AS tiene_tn,
+            COALESCE(tns.tn_orders, 0) AS tn_orders,
+            COALESCE(tns.tn_gmv, 0) AS tn_gmv,
+            COALESCE(rev.revenue_total, 0) AS revenue_total
         FROM public."User" u
+        LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
+        LEFT JOIN ml_stats ml ON ml.mla_id = u."mercadoLibreAccountId"
+        LEFT JOIN tn_cred tnc ON tnc.user_id = u.id
+        LEFT JOIN tn_stats tns ON tns.user_id = u.id
+        LEFT JOIN revenue_all rev ON rev.user_id = u.id
         WHERE u."createdAt" >= NOW() - make_interval(days => :d)
-        ORDER BY u."createdAt"::date ASC, revenue_30d DESC NULLS LAST
+        ORDER BY u."createdAt"::date ASC, COALESCE(rev.revenue_total, 0) DESC NULLS LAST
     """, {"d": days}) or []
 
     by_day: dict[str, list] = defaultdict(list)
@@ -670,7 +706,15 @@ def signups_per_day(period: str = "30d") -> list[dict]:
             "email": r[3] or "", "dni": r[4] or "",
             "personeria": r[5] or "",
             "suscripto": bool(r[6]), "vence": r[7],
-            "revenue_30d": float(r[8] or 0),
+            "plan_name": r[8] or "",
+            "nickname_meli": r[9] or "",
+            "tiene_ml": bool(r[10]),
+            "ml_orders": int(r[11] or 0),
+            "ml_gmv": float(r[12] or 0),
+            "tiene_tn": bool(r[13]),
+            "tn_orders": int(r[14] or 0),
+            "tn_gmv": float(r[15] or 0),
+            "revenue_total": float(r[16] or 0),
         })
     return [{"d": d, "count": len(u), "users": u} for d, u in sorted(by_day.items())]
 

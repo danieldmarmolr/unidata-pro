@@ -18,7 +18,11 @@ type DailyPoint = {
 type SignupUser = {
   id: number; nombre: string; email: string; dni: string;
   personeria: string; suscripto: boolean; vence: string | null;
-  revenue_30d: number;
+  plan_name: string;
+  nickname_meli: string;
+  tiene_ml: boolean; ml_orders: number; ml_gmv: number;
+  tiene_tn: boolean; tn_orders: number; tn_gmv: number;
+  revenue_total: number;
 };
 
 type SignupsPerDay = { d: string; count: number; users: SignupUser[] };
@@ -189,21 +193,28 @@ export function MetaImpactChart({
       {selectedDay && (
         <div className="border border-primary/30 bg-primary/5 rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-bold text-text">{selectedDay}</span>
               {signupsDayQ.isLoading ? (
                 <span className="text-xs text-text-muted">cargando...</span>
-              ) : (
-                <span className="text-xs text-text-muted">
-                  {selectedDayData?.count ?? 0} nuevos dropshippers
-                  {selectedDayData && selectedDayData.users.filter(u => u.suscripto).length > 0 && (
-                    <> · <span className="text-emerald-600 font-semibold">{selectedDayData.users.filter(u => u.suscripto).length} activos</span></>
-                  )}
-                  {selectedDayData && selectedDayData.users.filter(u => u.revenue_30d > 0).length > 0 && (
-                    <> · <span className="text-amber-600 font-semibold">{formatCurrency(selectedDayData.users.reduce((s, u) => s + u.revenue_30d, 0))} rev 30d</span></>
-                  )}
-                </span>
-              )}
+              ) : selectedDayData ? (() => {
+                const users = selectedDayData.users;
+                const nSub = users.filter(u => u.suscripto).length;
+                const nMl = users.filter(u => u.tiene_ml).length;
+                const nTn = users.filter(u => u.tiene_tn).length;
+                const gmvTotal = users.reduce((s, u) => s + u.ml_gmv + u.tn_gmv, 0);
+                const revTotal = users.reduce((s, u) => s + u.revenue_total, 0);
+                return (
+                  <span className="flex items-center gap-1.5 flex-wrap text-xs text-text-muted">
+                    <span className="font-semibold text-text">{users.length}</span> signups
+                    {nSub > 0 && <span className="text-emerald-600 font-semibold">· {nSub} activos</span>}
+                    {nMl > 0 && <span className="text-yellow-600 font-semibold">· {nMl} ML</span>}
+                    {nTn > 0 && <span className="text-cyan-600 font-semibold">· {nTn} TN</span>}
+                    {gmvTotal > 0 && <span className="text-amber-600 font-semibold">· GMV {formatCurrency(gmvTotal)}</span>}
+                    {revTotal > 0 && <span className="text-violet-600 font-semibold">· Rev {formatCurrency(revTotal)}</span>}
+                  </span>
+                );
+              })() : null}
             </div>
             <button onClick={() => setSelectedDay(null)}
               className="text-text-muted hover:text-rose-500 text-xs font-bold px-2 py-0.5 rounded border border-border hover:border-rose-300">
@@ -221,10 +232,12 @@ export function MetaImpactChart({
                 <thead className="text-text-muted text-[10px] uppercase tracking-wider sticky top-0 bg-primary/5">
                   <tr className="border-b border-border">
                     <th className="text-left py-1.5 pr-3">Dropshipper</th>
-                    <th className="text-left py-1.5 px-2">Personería</th>
-                    <th className="text-left py-1.5 px-2">Estado</th>
-                    <th className="text-left py-1.5 px-2">Vence</th>
-                    <th className="text-right py-1.5 pl-2">Rev 30d</th>
+                    <th className="text-left py-1.5 px-2">Plan</th>
+                    <th className="text-left py-1.5 px-2">Canales</th>
+                    <th className="text-right py-1.5 px-2">ML órdenes</th>
+                    <th className="text-right py-1.5 px-2">TN órdenes</th>
+                    <th className="text-right py-1.5 px-2">GMV total</th>
+                    <th className="text-right py-1.5 pl-2">Revenue</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -232,29 +245,62 @@ export function MetaImpactChart({
                     <tr key={u.id} className="border-b border-border/40 hover:bg-primary/5">
                       <td className="py-1.5 pr-3">
                         <Link href={`/dashboard/dropshipper/${u.id}`} className="hover:text-primary">
-                          <div className="font-semibold text-text truncate max-w-[180px]">{u.nombre || u.email}</div>
+                          <div className="font-semibold text-text truncate max-w-[160px]">{u.nombre || u.email}</div>
                           <div className="text-[9px] text-text-muted">{u.email}</div>
                         </Link>
                       </td>
                       <td className="py-1.5 px-2">
-                        <span className={"text-[9px] px-1.5 py-0.5 rounded border font-bold " +
-                          (u.personeria === "JURIDICA" ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-slate-50 text-slate-600 border-slate-200")}>
-                          {u.personeria || "—"}
-                        </span>
+                        {u.plan_name ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded border font-bold bg-violet-50 text-violet-700 border-violet-200 truncate max-w-[90px] block">
+                            {u.plan_name.length > 12 ? u.plan_name.slice(0, 12) + "…" : u.plan_name}
+                          </span>
+                        ) : (
+                          <span className="text-[9px] text-text-muted/50">—</span>
+                        )}
                       </td>
                       <td className="py-1.5 px-2">
-                        <span className={"text-[9px] px-1.5 py-0.5 rounded border font-bold " +
-                          (u.suscripto ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200")}>
-                          {u.suscripto ? "Activo" : "Inactivo"}
-                        </span>
+                        <div className="flex gap-1">
+                          {u.tiene_ml ? (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded border font-bold bg-yellow-50 text-yellow-700 border-yellow-200" title={u.nickname_meli || "ML"}>ML</span>
+                          ) : (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded border font-bold bg-slate-50 text-slate-400 border-slate-200">ML</span>
+                          )}
+                          {u.tiene_tn ? (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded border font-bold bg-cyan-50 text-cyan-700 border-cyan-200">TN</span>
+                          ) : (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded border font-bold bg-slate-50 text-slate-400 border-slate-200">TN</span>
+                          )}
+                          <span className={"text-[9px] px-1.5 py-0.5 rounded border font-bold " +
+                            (u.suscripto ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-500 border-rose-200")}>
+                            {u.suscripto ? "✓" : "—"}
+                          </span>
+                        </div>
                       </td>
-                      <td className="py-1.5 px-2 text-[10px] text-text-muted tabular-nums">
-                        {u.vence ? u.vence.slice(0, 10) : "—"}
+                      <td className="py-1.5 px-2 text-right tabular-nums">
+                        {u.ml_orders > 0 ? (
+                          <div>
+                            <div className="font-semibold text-yellow-700">{u.ml_orders}</div>
+                            <div className="text-[9px] text-text-muted">{formatCurrency(u.ml_gmv)}</div>
+                          </div>
+                        ) : <span className="text-text-muted/50">—</span>}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums">
+                        {u.tn_orders > 0 ? (
+                          <div>
+                            <div className="font-semibold text-cyan-700">{u.tn_orders}</div>
+                            <div className="text-[9px] text-text-muted">{formatCurrency(u.tn_gmv)}</div>
+                          </div>
+                        ) : <span className="text-text-muted/50">—</span>}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums font-semibold">
+                        {(u.ml_gmv + u.tn_gmv) > 0
+                          ? <span className="text-amber-700">{formatCurrency(u.ml_gmv + u.tn_gmv)}</span>
+                          : <span className="text-text-muted/50">$0</span>}
                       </td>
                       <td className="py-1.5 pl-2 text-right tabular-nums font-semibold">
-                        {u.revenue_30d > 0
-                          ? <span className="text-emerald-700">{formatCurrency(u.revenue_30d)}</span>
-                          : <span className="text-text-muted/60">$0</span>}
+                        {u.revenue_total > 0
+                          ? <span className="text-emerald-700">{formatCurrency(u.revenue_total)}</span>
+                          : <span className="text-text-muted/50">$0</span>}
                       </td>
                     </tr>
                   ))}
