@@ -124,6 +124,29 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
             "hint": f"{share:.1f}% del GMV del periodo",
         })
 
+    # Pagos Talo (suscripciones + órdenes procesadas por Talo)
+    talo_vol = float(scalar(eng, """
+        SELECT COALESCE(SUM(pt.amount),0)::float
+        FROM public."PaymentTransaction" pt
+        WHERE pt."createdAt" >= NOW() - make_interval(days => :days)
+          AND pt.status::text IN ('completed','succeeded','approved','paid','credited','processed','PROCESSED')
+    """, p) or 0)
+    talo_prev = float(scalar(eng, """
+        SELECT COALESCE(SUM(pt.amount),0)::float
+        FROM public."PaymentTransaction" pt
+        WHERE pt."createdAt" >= NOW() - make_interval(days => :days2)
+          AND pt."createdAt" <  NOW() - make_interval(days => :days)
+          AND pt.status::text IN ('completed','succeeded','approved','paid','credited','processed','PROCESSED')
+    """, p2) or 0)
+    delta_talo = ((talo_vol - talo_prev) / talo_prev * 100) if talo_prev > 0 else None
+    cards.append({
+        "label": f"Pagos Talo ({period})",
+        "value": round(talo_vol, 0),
+        "prefix": "$ ",
+        "delta": round(delta_talo, 1) if delta_talo is not None else None,
+        "hint": "Volumen procesado · ordenes + suscripciones",
+    })
+
     # Tendencia 12m por canal
     series: list[dict] = []
     if include_tn:
@@ -189,18 +212,37 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
         """, p) or []
         payment_status = [{"category": r[0], "value": float(r[1])} for r in rows]
 
-    # Top usuarios (no productos - en Unidrop la "venta" es del cliente, no de TU producto)
+    # Top usuarios: combina TN + ML para ranking unificado por revenue
     top_users = []
+    union_parts: list[str] = []
     if include_tn:
-        rows = q(eng, """
+        union_parts.append("""
             SELECT u.id, COALESCE(u.fantasy_name, u.name, u.email) AS nombre,
-                   COUNT(*)::int AS orders,
-                   COALESCE(SUM(o.total),0)::float AS revenue
+                   COUNT(*)::int AS cnt,
+                   COALESCE(SUM(o.total),0)::float AS rev
             FROM public."User" u
             JOIN public.tienda_nube_orders o ON o.user_id = u.id
             WHERE o.created_at >= NOW() - make_interval(days => :days)
               AND o.payment_status::text = 'paid'
             GROUP BY u.id, u.fantasy_name, u.name, u.email
+        """)
+    if include_ml:
+        union_parts.append("""
+            SELECT u.id, COALESCE(u.fantasy_name, u.name, u.email) AS nombre,
+                   COUNT(*)::int AS cnt,
+                   COALESCE(SUM(oml."totalAmount"),0)::float AS rev
+            FROM public."User" u
+            JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml."userId" = u.id
+            WHERE oml."dateCreated" >= NOW() - make_interval(days => :days)
+              AND oml.status IN ('paid','confirmed','shipped','delivered')
+            GROUP BY u.id, u.fantasy_name, u.name, u.email
+        """)
+    if union_parts:
+        union_sql = " UNION ALL ".join(union_parts)
+        rows = q(eng, f"""
+            SELECT id, nombre, SUM(cnt)::int AS orders, SUM(rev)::float AS revenue
+            FROM ({union_sql}) x
+            GROUP BY id, nombre
             ORDER BY revenue DESC
             LIMIT 15
         """, p) or []
