@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { cn, fmtArDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
+import { fmtArDateTime } from "@/lib/dates";
 import {
   AlertTriangle,
   CheckCircle2,
