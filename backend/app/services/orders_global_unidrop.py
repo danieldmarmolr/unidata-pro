@@ -1,10 +1,12 @@
 """
 Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
-Ancla en PaymentIntent (fuente canónica Unidrop):
-  PaymentIntent.mlOrderIds[]  → OrderMercadoLibre.id
-  PaymentIntent.orderIds[]    → tienda_nube_orders.tienda_nube_id
 
-Usa make_interval server-side para evitar problemas de timezone con datetimes de Python.
+ML: consulta OrderMercadoLibre directamente por number LIKE 'DROP-%',
+    extrae DNI del formato DROP-{dni}-{seq} para unir a User.
+    El join via pi."mlOrderIds" = ANY(oml.id) no funciona porque los IDs
+    en el array no coinciden con oml.id (comportamiento confirmado en logs).
+
+TN: ancla en PaymentIntent PROCESSED con cast text para el join a tienda_nube_orders.
 """
 from __future__ import annotations
 
@@ -19,9 +21,17 @@ log = logging.getLogger("unidata.dashboards")
 PERIOD_DAYS = {"today": 1, "yesterday": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
-def _date_filter(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
-    """Devuelve (cláusula SQL para pi.createdAt, params dict).
-    Usa make_interval o texto ISO para evitar conversión de datetime de Python."""
+def _ml_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
+    if period == "custom" and from_iso and to_iso:
+        return (
+            'oml."dateCreated" >= :from_iso::timestamp AND oml."dateCreated" <= :to_iso::timestamp',
+            {"from_iso": from_iso, "to_iso": to_iso},
+        )
+    days = PERIOD_DAYS.get(period, 30)
+    return 'oml."dateCreated" >= NOW() - make_interval(days => :days)', {"days": days}
+
+
+def _tn_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
     if period == "custom" and from_iso and to_iso:
         return (
             'pi."createdAt" >= :from_iso::timestamp AND pi."createdAt" <= :to_iso::timestamp',
@@ -32,37 +42,36 @@ def _date_filter(period: str, from_iso: str | None, to_iso: str | None) -> tuple
 
 
 def _ml_sub(date_clause: str) -> str:
+    """ML orders: OML por numero DROP-{dni}-* → join User via DNI extraido del numero."""
     return f"""
     SELECT
-        cpa."userId"::int                                   AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email)           AS dropshipper_name,
-        'ml'::text                                          AS origen,
-        COALESCE(oml."number", oml.id::text)                AS "number",
-        oml.id::text                                        AS external_id,
-        oml."dateCreated"                                   AS fecha,
-        COALESCE(oml.status, '')                            AS status,
-        COALESCE(oml."paymentStatus", '')                   AS payment_status,
-        COALESCE(oml."shippingStatus", '')                  AS shipping_status,
-        COALESCE(oml."totalAmount", 0)::float               AS total,
-        COALESCE(oml."merchandise_cost", 0)::float          AS merch_cost,
-        COALESCE(oml."shipping_cost", 0)::float             AS shipping_cost,
-        COALESCE(oml."profit_for_subscription", 0)::float   AS profit_unidrop,
-        COALESCE(oml."buyer_name", '')                      AS buyer_name,
-        ''                                                  AS buyer_city,
-        ''                                                  AS buyer_province,
-        COALESCE(oml."shipping_type", '')                   AS shipping_type,
-        FALSE                                               AS label_downloaded
-    FROM public."PaymentIntent" pi
-    JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
-    JOIN public."User" u ON u.id = cpa."userId"
-    JOIN mercado_libre_dev."OrderMercadoLibre" oml
-         ON oml.id = ANY(pi."mlOrderIds")
-    WHERE pi."status" = 'PROCESSED'
-      AND {date_clause}
-      AND COALESCE(array_length(pi."mlOrderIds", 1), 0) > 0"""
+        u.id::int                                               AS user_id,
+        COALESCE(u.fantasy_name, u.name, u.email)               AS dropshipper_name,
+        'ml'::text                                              AS origen,
+        COALESCE(oml."number", oml.id::text)                    AS "number",
+        oml.id::text                                            AS external_id,
+        oml."dateCreated"                                       AS fecha,
+        COALESCE(oml.status, '')                                AS status,
+        COALESCE(oml."paymentStatus", '')                       AS payment_status,
+        COALESCE(oml."shippingStatus", '')                      AS shipping_status,
+        COALESCE(oml."totalAmount", 0)::float                   AS total,
+        COALESCE(oml."merchandise_cost", 0)::float              AS merch_cost,
+        COALESCE(oml."shipping_cost", 0)::float                 AS shipping_cost,
+        COALESCE(oml."profit_for_subscription", 0)::float       AS profit_unidrop,
+        COALESCE(oml."buyer_name", '')                          AS buyer_name,
+        ''                                                      AS buyer_city,
+        ''                                                      AS buyer_province,
+        COALESCE(oml."shipping_type", '')                       AS shipping_type,
+        FALSE                                                   AS label_downloaded
+    FROM mercado_libre_dev."OrderMercadoLibre" oml
+    JOIN public."User" u
+         ON u.dni::text = regexp_replace(oml."number", '^DROP-([^-]+)-.*$', '\\1')
+    WHERE oml."number" LIKE 'DROP-%'
+      AND {date_clause}"""
 
 
 def _tn_sub(date_clause: str) -> str:
+    """TN orders: PaymentIntent PROCESSED → tienda_nube_orders via text cast."""
     return f"""
     SELECT
         cpa."userId"::int                                       AS user_id,
@@ -87,7 +96,7 @@ def _tn_sub(date_clause: str) -> str:
     JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
     JOIN public."User" u ON u.id = cpa."userId"
     JOIN public.tienda_nube_orders tno
-         ON tno.tienda_nube_id = ANY(pi."orderIds")
+         ON tno.tienda_nube_id::text = ANY(pi."orderIds"::text[])
     WHERE pi."status" = 'PROCESSED'
       AND {date_clause}
       AND COALESCE(array_length(pi."orderIds", 1), 0) > 0"""
@@ -105,22 +114,30 @@ def orders_global_unidrop(
     to_iso: str | None = None,
 ) -> dict:
     eng = get_engine("unidrop")
-    date_clause, date_params = _date_filter(period, from_iso, to_iso)
+
+    ml_date, ml_params = _ml_date_clause(period, from_iso, to_iso)
+    tn_date, tn_params = _tn_date_clause(period, from_iso, to_iso)
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
 
-    parts: list[str] = []
+    parts: list[tuple[str, dict]] = []
     if include_ml:
-        parts.append(_ml_sub(date_clause))
+        parts.append((_ml_sub(ml_date), ml_params))
     if include_tn:
-        parts.append(_tn_sub(date_clause))
+        parts.append((_tn_sub(tn_date), tn_params))
 
     if not parts:
         return {"items": [], "total": 0, "limit": limit, "offset": offset,
                 "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
-    union_sql = " UNION ALL ".join(f"({p})" for p in parts)
+    # ML y TN pueden tener distintos params solo si son mismos keys con mismo valor
+    # (ambos usan :days o ambos usan :from_iso/:to_iso) — safe para UNION ALL
+    merged_params: dict = {}
+    for _, p in parts:
+        merged_params.update(p)
+
+    union_sql = " UNION ALL ".join(f"({sub})" for sub, _ in parts)
 
     where_clauses = ["1=1"]
     extra_params: dict = {}
@@ -168,13 +185,13 @@ def orders_global_unidrop(
         extra_params["search_drop"] = f"%{search_drop.strip()}%"
 
     where_sql = " AND ".join(where_clauses)
-    params: dict = {**date_params, **extra_params}
+    params: dict = {**merged_params, **extra_params}
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
 
-    log.warning("orders_global_unidrop: period=%s days=%s total=%d", period, date_params.get("days"), total)
+    log.warning("orders_global_unidrop: period=%s total=%d", period, total)
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha::text,
