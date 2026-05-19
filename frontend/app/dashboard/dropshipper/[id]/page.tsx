@@ -2228,9 +2228,10 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
   const isDelivered = !!o.delivered_at || !!o.shipment?.entregado || ["delivered", "entregado"].some((v) => (o.shipping_status || "").toLowerCase().includes(v));
   const isShipped = !!o.shipped_at || isDelivered || ["shipped", "transit", "en_camino"].some((v) => (o.shipping_status || "").toLowerCase().includes(v));
 
-  const steps: { active: boolean; label: string; icon: string; iso?: string | null }[] = [
+  const isMl = o.origen === "ml";
+  const steps: { active: boolean; label: string; icon: string; iso?: string | null; sub?: string }[] = [
     { active: true, label: "Creada", icon: "📋", iso: o.fecha },
-    { active: isPaid, label: "Pagada", icon: "💲", iso: o.paid_at || o.intent_fecha },
+    { active: isPaid || isMl, label: "Pagada", icon: "💲", iso: o.paid_at, sub: !o.paid_at && isMl ? "Talo Pay" : undefined },
     { active: isPacked, label: "Empaquetado", icon: "📦", iso: o.packed_at || o.label_downloaded_at },
     { active: isShipped, label: "En camino", icon: "🚚", iso: o.shipped_at },
     { active: isDelivered, label: "Entregada", icon: "✅", iso: o.delivered_at || o.shipment?.entregado },
@@ -2242,7 +2243,7 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
         <div key={s.label} className="flex items-center">
           {i > 0 && <div className={`h-0.5 w-2 ${s.active && steps[i - 1].active ? "bg-emerald-400" : "bg-zinc-200"}`} />}
           <div
-            title={s.iso ? `${s.label} · ${pipelineDateLabel(s.iso)}` : `${s.label} · sin fecha`}
+            title={s.iso ? `${s.label} · ${pipelineDateLabel(s.iso)}` : s.sub ? `${s.label} · ${s.sub}` : `${s.label} · sin fecha`}
             className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] border ${
               s.active
                 ? "bg-emerald-500 text-white border-emerald-500"
@@ -2294,7 +2295,7 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
     <div className="flex items-start gap-1.5">
       {step(true, "Creada", "📋", stepDate(o.fecha))}
       {line(isPaid)}
-      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at || o.intent_fecha || undefined))}
+      {step(isPaid || o.origen === "ml", "Pagada", "💲", stepDate(o.paid_at) || (o.origen === "ml" && !o.paid_at ? "Talo Pay" : undefined))}
       {line(isPacked)}
       {step(isPacked, "Empaquetado", "📦", stepDate(o.packed_at || o.label_downloaded_at))}
       {line(isShipped)}
