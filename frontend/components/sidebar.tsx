@@ -41,6 +41,12 @@ import {
   AlertTriangle,
   Upload,
   X,
+  Kanban,
+  FileText,
+  Wand2,
+  Ticket,
+  BookOpen,
+  Cog,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -117,6 +123,22 @@ const ITEMS: NavItem[] = [
   },
   { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
+  {
+    label: "IT / Data",
+    href: "/dashboard/jira-flow",
+    icon: Kanban,
+    group: "Cross",
+    areas: ["it_data"],
+    children: [
+      { label: "Dashboard Sprint",   href: "/dashboard/jira-flow",            icon: Kanban    },
+      { label: "Crear desde contexto", href: "/dashboard/jira-flow/crear",    icon: Wand2     },
+      { label: "Triage SITU → ITDEV", href: "/dashboard/jira-flow/triage", icon: Ticket    },
+      { label: "Subtareas a ITDEV",  href: "/dashboard/jira-flow/subtareas",  icon: Shapes    },
+      { label: "Confluence",         href: "/dashboard/jira-flow/confluence", icon: BookOpen  },
+      { label: "Auto Docs",          href: "/dashboard/jira-flow/auto-docs",  icon: FileText  },
+      { label: "Config",             href: "/dashboard/jira-flow/config",     icon: Cog       },
+    ],
+  },
   {
     label: "Producto",
     href: "/dashboard/productos",

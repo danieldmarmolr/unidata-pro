@@ -146,6 +146,9 @@ app.include_router(meta_ads_api.router)
 from app.api import logistica as logistica_api
 app.include_router(logistica_api.router)
 
+from app.api import jira_flow as jira_flow_api
+app.include_router(jira_flow_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:
