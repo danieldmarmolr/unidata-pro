@@ -47,6 +47,7 @@ import {
   Ticket,
   BookOpen,
   Cog,
+  Cpu,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -123,7 +124,16 @@ const ITEMS: NavItem[] = [
   },
   { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
-  { label: "IT / Data", href: "/dashboard/jira-flow", icon: Kanban, group: "Cross", areas: ["it_data"] },
+  {
+    label: "IT / Data",
+    href: "/dashboard/jira-flow",
+    icon: Cpu,
+    group: "Cross",
+    areas: ["it_data"],
+    children: [
+      { label: "Jira Flow", href: "/dashboard/jira-flow", icon: Kanban },
+    ],
+  },
   {
     label: "Producto",
     href: "/dashboard/productos",
