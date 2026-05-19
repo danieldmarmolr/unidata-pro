@@ -12,6 +12,7 @@ from app.services import devoluciones as dev_svc
 from app.services import envios as envios_svc
 from app.services import finanzas as finanzas_svc
 from app.services import finanzas_unidrop as finanzas_drp_svc
+from app.services import finanzas_invoices_meli as finanzas_inv_meli_svc
 from app.services import logistica as logistica_svc
 from app.services import logistica_unidrop as logistica_drp_svc
 from app.services import marketing as marketing_svc
@@ -219,6 +220,29 @@ def get_finanzas_unidrop(
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return finanzas_drp_svc.finanzas_unidrop(period, from_iso=from_iso, to_iso=to_iso)
+    return _b()
+
+
+@router.get("/finanzas/invoices-meli")
+def get_finanzas_invoices_meli(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    plan: Annotated[str, Query()] = "all",
+    tipo: Annotated[Literal["all", "FCA", "FCB"], Query()] = "all",
+    search: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Facturas Contabilium emitidas por cobros de suscripcion MELI (Unidrop)."""
+    require_area(user, ["finanzas", "administracion"])
+    key = f"fin-inv-meli:{period}:{plan}:{tipo}:{search}:{limit}:{from_iso}:{to_iso}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return finanzas_inv_meli_svc.finanzas_invoices_meli(
+            period=period, plan=plan, tipo=tipo, search=search,
+            limit=limit, from_iso=from_iso, to_iso=to_iso,
+        )
     return _b()
 
 
