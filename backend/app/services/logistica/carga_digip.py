@@ -682,14 +682,12 @@ def run_meli_db(
         _fecha_cond_oi = f' AND o."dateCreated"::date >= \'{fecha_desde}\'' if fecha_desde else ""
         df_ord   = pd.read_sql(
             'SELECT * FROM mercado_libre_dev."OrderMercadoLibre" '
-            'WHERE status=\'paid\' '
-            'AND ("shipping_option_reference" IS NULL OR UPPER("shipping_option_reference") != \'EMPAQUETADO\')'
+            'WHERE status=\'paid\''
             + _fecha_cond + ' ORDER BY "dateCreated" ASC', engine)
         df_items = pd.read_sql(
             'SELECT oi.* FROM mercado_libre_dev."OrderItemMercadoLibre" oi '
             'INNER JOIN mercado_libre_dev."OrderMercadoLibre" o ON oi."orderId"=o.id '
-            'WHERE o.status=\'paid\' '
-            'AND (o."shipping_option_reference" IS NULL OR UPPER(o."shipping_option_reference") != \'EMPAQUETADO\')'
+            'WHERE o.status=\'paid\''
             + _fecha_cond_oi + ' ORDER BY oi.id ASC', engine)
         df_pi    = pd.read_sql(
             'SELECT * FROM public."PaymentIntent" WHERE status=\'PROCESSED\' AND "mlOrderIds" IS NOT NULL AND "mlOrderIds"::text<>\'{}\'',
