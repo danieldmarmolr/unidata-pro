@@ -205,23 +205,25 @@ def orders_global_unidrop(
     """, {}) or 0)
     log.warning("orders_global DEBUG raw_drop_count=%d (no user join)", _raw_drop)
 
-    # Debug: muestra sample de numbers y el split_part extraido
-    _sample = q(eng, """
-        SELECT oml."number", split_part(oml."number", '-', 2) AS dni_extracted
+    # Debug: verificar si el campo en el numero es user.id (no dni)
+    _id_match = int(scalar(eng, """
+        SELECT COUNT(*)
         FROM mercado_libre_dev."OrderMercadoLibre" oml
+        JOIN public."User" u ON u.id::text = split_part(oml."number", '-', 2)
+        WHERE oml."number" LIKE 'DROP-%'
+          AND oml."dateCreated" >= NOW() - make_interval(days => 90)
+    """, {}) or 0)
+    log.warning("orders_global DEBUG id_match=%d (join via user.id)", _id_match)
+
+    # Debug: muestra los primeros 3 numeros DROP y cual user matchea por id
+    _id_sample = q(eng, """
+        SELECT oml."number", split_part(oml."number", '-', 2) AS extracted, u.id, u.dni
+        FROM mercado_libre_dev."OrderMercadoLibre" oml
+        JOIN public."User" u ON u.id::text = split_part(oml."number", '-', 2)
         WHERE oml."number" LIKE 'DROP-%'
         LIMIT 3
     """, {}) or []
-    log.warning("orders_global DEBUG sample numbers: %s", [(r[0], r[1]) for r in _sample])
-
-    # Debug: cuenta users con dni no nulo
-    _users_with_dni = int(scalar(eng, 'SELECT COUNT(*) FROM public."User" u WHERE u.dni IS NOT NULL', {}) or 0)
-    _users_total = int(scalar(eng, 'SELECT COUNT(*) FROM public."User" u', {}) or 0)
-    log.warning("orders_global DEBUG users_with_dni=%d / total=%d", _users_with_dni, _users_total)
-
-    # Debug: muestra sample de users con su dni
-    _user_sample = q(eng, 'SELECT u.id, u.dni FROM public."User" u WHERE u.dni IS NOT NULL LIMIT 3', {}) or []
-    log.warning("orders_global DEBUG user_dni_sample: %s", [(r[0], r[1]) for r in _user_sample])
+    log.warning("orders_global DEBUG id_sample: %s", [(r[0], r[1], r[2], r[3]) for r in _id_sample])
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
