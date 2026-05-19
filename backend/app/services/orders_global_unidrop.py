@@ -21,7 +21,7 @@ _ML_SUB = """
         'ml'::text                                                           AS origen,
         COALESCE(o."number", o.id::text)                                     AS "number",
         o.id::text                                                           AS external_id,
-        o."dateCreated"                                                      AS fecha,
+        o."dateCreated"::text                                                AS fecha,
         o.status::text                                                       AS status,
         ''::text                                                             AS payment_status,
         ''::text                                                             AS shipping_status,
@@ -48,7 +48,7 @@ _TN_SUB = """
         'tn'::text                                                           AS origen,
         COALESCE(tno."number", tno.tienda_nube_id::text)                     AS "number",
         tno.tienda_nube_id::text                                             AS external_id,
-        tno.created_at                                                       AS fecha,
+        tno.created_at::text                                                 AS fecha,
         tno.payment_status::text                                             AS status,
         tno.payment_status::text                                             AS payment_status,
         ''::text                                                             AS shipping_status,
@@ -150,7 +150,7 @@ def orders_global_unidrop(
     """, params) or 0)
 
     rows = q(eng, f"""
-        SELECT user_id, dropshipper_name, origen, "number", external_id, fecha::text,
+        SELECT user_id, dropshipper_name, origen, "number", external_id, fecha,
                status, payment_status, shipping_status, total, merch_cost, shipping_cost,
                profit_unidrop, buyer_name, buyer_city, buyer_province, shipping_type, label_downloaded
         FROM ({union_sql}) x
