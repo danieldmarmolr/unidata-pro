@@ -1,6 +1,6 @@
 "use client";
 
-import { Inbox, DollarSign, Truck, PackageCheck, AlertCircle, RotateCcw, X, Clock, Check, MapPin, Mail, Package, Bike, Box } from "lucide-react";
+import { Inbox, DollarSign, Truck, PackageCheck, AlertCircle, RotateCcw, X, Clock, Check, MapPin, Mail, Package, Bike, Box, GraduationCap } from "lucide-react";
 
 /**
  * Pipeline visual del progreso de una orden: 5 dots que se desbloquean
@@ -108,6 +108,7 @@ function buildSteps(payment: string, shipping: string, orderStatus: string, pack
 /** Devuelve un icono pequeño para representar el canal/metodo de envio. */
 export function shippingChannelIcon(canal: string | null | undefined) {
   const c = String(canal ?? "").toLowerCase();
+  if (c.includes("producto digital")) return GraduationCap;
   if (c.includes("retiro") || c.includes("pickup") || c.includes("microcentro")) return MapPin;
   if (c.includes("moto") || c.includes("cadeter")) return Bike;
   if (c.includes("oca") || c.includes("andreani") || c.includes("correo")) return Mail;
@@ -126,6 +127,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   "Andreani": "bg-indigo-50 text-indigo-700 border-indigo-200",
   "Personalizado": "bg-amber-50 text-amber-700 border-amber-200",
   "Digital": "bg-purple-50 text-purple-700 border-purple-200",
+  "Producto Digital": "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-300",
   "(sin metodo)": "bg-zinc-50 text-zinc-500 border-zinc-200",
   "Otro": "bg-zinc-50 text-zinc-600 border-zinc-200",
 };
@@ -142,13 +144,19 @@ export function ShippingMethodBadge({
   const cleanMetodo = (metodo ?? "").trim();
   const Icon = shippingChannelIcon(cleanCanal);
   const cls = CHANNEL_COLORS[cleanCanal] ?? CHANNEL_COLORS["Otro"];
+  const isDigitalProduct = cleanCanal === "Producto Digital";
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded border ${cls} max-w-[180px]`}
-      title={cleanMetodo || cleanCanal}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-semibold rounded border ${cls} max-w-[200px]`}
+      title={isDigitalProduct ? "Producto digital Unidrop · sin envío físico" : (cleanMetodo || cleanCanal)}
     >
       <Icon size={10} className="shrink-0" />
       <span className="truncate">{cleanCanal}</span>
+      {isDigitalProduct && (
+        <span className="ml-0.5 px-1 py-px text-[8px] font-bold bg-fuchsia-200 text-fuchsia-800 rounded-sm leading-none shrink-0">
+          UNIDROP
+        </span>
+      )}
     </span>
   );
 }

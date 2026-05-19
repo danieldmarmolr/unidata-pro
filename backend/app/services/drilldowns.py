@@ -49,31 +49,54 @@ def _shipping_type_col(eng) -> str | None:
     return 'f."shippingType"' if "shippingType" in ful_cols else None
 
 
-def _classify_channel_sql(method_alias: str = "metodo_envio", type_alias: str | None = None) -> str:
+def _carrier_col(eng) -> str | None:
+    """Devuelve f."carrierName" si existe en Fulfillment, si no None."""
+    ful_cols = list_columns(eng, "tienda_nube", "Fulfillment")
+    for c in ("carrierName", "carrier", "trackingCompany"):
+        if c in ful_cols:
+            return f'f."{c}"'
+    return None
+
+
+def _classify_channel_sql(
+    method_alias: str = "metodo_envio",
+    type_alias: str | None = None,
+    carrier_alias: str | None = None,
+    pva_alias: str | None = None,
+) -> str:
     """CASE SQL que clasifica el metodo en canales discretos.
-    type_alias: expresion SQL de shippingType ('pickup'/'ship') — si se pasa,
-    los pickups se clasifican directamente sin depender del texto del metodo."""
+    - type_alias: shippingType; 'pickup' → Retiro, 'non-shippable' → Producto Digital
+    - carrier_alias: carrierName — fallback cuando optionName es generico (ej. "Puerta a Puerta")
+    - pva_alias: bool — TRUE si la orden tiene al menos un item con sku ILIKE 'PVA%'"""
+    pva_clause = f"WHEN {pva_alias} = TRUE THEN 'Producto Digital'" if pva_alias else ""
+    non_ship_clause = f"WHEN {type_alias} = 'non-shippable' THEN 'Producto Digital'" if type_alias else ""
     pickup_clause = f"WHEN {type_alias} = 'pickup' THEN 'Retiro presencial'" if type_alias else ""
+    oca_carrier = f"OR {carrier_alias} ILIKE '%oca%'" if carrier_alias else ""
+    andreani_carrier = f"OR {carrier_alias} ILIKE '%andreani%'" if carrier_alias else ""
+    correo_carrier = f"OR {carrier_alias} ILIKE '%correo%'" if carrier_alias else ""
+    unifast_carrier = f"OR {carrier_alias} ILIKE '%unifast%'" if carrier_alias else ""
     return f"""
         CASE
+          {pva_clause}
+          {non_ship_clause}
           {pickup_clause}
-          WHEN {method_alias} ILIKE '%oca%'                                 THEN 'OCA'
+          WHEN {method_alias} ILIKE '%oca%'         {oca_carrier}            THEN 'OCA'
           WHEN {method_alias} ILIKE '%correo argentino%'
             OR {method_alias} ILIKE '%correo nube%'
             OR {method_alias} ILIKE '%envio nube%'
-            OR {method_alias} ILIKE '%envío nube%'                          THEN 'Correo Argentino'
-          WHEN {method_alias} ILIKE '%unifast%'                             THEN 'Unifast'
+            OR {method_alias} ILIKE '%envío nube%'  {correo_carrier}         THEN 'Correo Argentino'
+          WHEN {method_alias} ILIKE '%unifast%'     {unifast_carrier}        THEN 'Unifast'
           WHEN {method_alias} ILIKE '%retiro%'
             OR {method_alias} ILIKE '%pickup%'
             OR {method_alias} ILIKE '%microcentro%'
-            OR {method_alias} ILIKE '%sucursal unistore%'                   THEN 'Retiro presencial'
-          WHEN {method_alias} ILIKE '%moto%'                                THEN 'Moto / Cadeteria'
-          WHEN {method_alias} ILIKE '%andreani%'                            THEN 'Andreani'
+            OR {method_alias} ILIKE '%sucursal unistore%'                    THEN 'Retiro presencial'
+          WHEN {method_alias} ILIKE '%moto%'                                 THEN 'Moto / Cadeteria'
+          WHEN {method_alias} ILIKE '%andreani%'    {andreani_carrier}       THEN 'Andreani'
           WHEN {method_alias} ILIKE '%personalizado%'
             OR {method_alias} ILIKE '%a convenir%'
-            OR {method_alias} ILIKE '%efectivo%'                            THEN 'Personalizado'
-          WHEN {method_alias} ILIKE '%digital%'                             THEN 'Digital'
-          WHEN {method_alias} IS NULL OR {method_alias} = ''                THEN '(sin metodo)'
+            OR {method_alias} ILIKE '%efectivo%'                             THEN 'Personalizado'
+          WHEN {method_alias} ILIKE '%digital%'                              THEN 'Digital'
+          WHEN {method_alias} IS NULL OR {method_alias} = ''                 THEN '(sin metodo)'
           ELSE 'Otro'
         END
     """
@@ -160,15 +183,25 @@ def orders_by_customer_unistore(customer_id: int, period: str = "30d", from_iso:
     win = resolve_window(period, from_iso, to_iso)
     method_expr = _shipping_method_expr(eng)
     type_col = _shipping_type_col(eng)
+    carrier_col = _carrier_col(eng)
     type_select = f", {type_col} AS shipping_type" if type_col else ""
+    carrier_select = f", {carrier_col} AS carrier_name" if carrier_col else ""
     type_alias = "m.shipping_type" if type_col else None
-    canal_sql = _classify_channel_sql("m.metodo_envio", type_alias=type_alias)
+    carrier_alias = "m.carrier_name" if carrier_col else None
+    canal_sql = _classify_channel_sql(
+        "m.metodo_envio", type_alias=type_alias,
+        carrier_alias=carrier_alias, pva_alias="m.is_pva",
+    )
     rows = q(eng, f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
                  o."paymentStatus", o."shippingStatus", o.total::float,
                  COALESCE(NULLIF(TRIM(osa.province),''),'-') AS provincia,
-                 {method_expr}{type_select},
+                 {method_expr}{type_select}{carrier_select},
+                 EXISTS (
+                   SELECT 1 FROM tienda_nube."OrderItem" oi
+                   WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
+                 ) AS is_pva,
                  EXISTS (
                    SELECT 1 FROM digip."DespachoPedido" dp
                    JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
@@ -477,9 +510,15 @@ def _orders_serialize(rows: list) -> dict:
 def _build_order_select(eng) -> str:
     method_expr = _shipping_method_expr(eng)
     type_col = _shipping_type_col(eng)
+    carrier_col = _carrier_col(eng)
     type_select = f", {type_col} AS shipping_type" if type_col else ""
+    carrier_select = f", {carrier_col} AS carrier_name" if carrier_col else ""
     type_alias = "m.shipping_type" if type_col else None
-    canal_sql = _classify_channel_sql("m.metodo_envio", type_alias=type_alias)
+    carrier_alias = "m.carrier_name" if carrier_col else None
+    canal_sql = _classify_channel_sql(
+        "m.metodo_envio", type_alias=type_alias,
+        carrier_alias=carrier_alias, pva_alias="m.is_pva",
+    )
     return f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
@@ -487,7 +526,11 @@ def _build_order_select(eng) -> str:
                  o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
                  COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
                  c.id AS customer_id,
-                 {method_expr}{type_select},
+                 {method_expr}{type_select}{carrier_select},
+                 EXISTS (
+                   SELECT 1 FROM tienda_nube."OrderItem" oi
+                   WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
+                 ) AS is_pva,
                  EXISTS (
                    SELECT 1 FROM digip."DespachoPedido" dp
                    JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
