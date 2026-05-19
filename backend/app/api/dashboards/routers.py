@@ -171,6 +171,65 @@ def get_unidrop_orders_global(
     return result
 
 
+@router.get("/unidrop/orders/debug")
+def debug_unidrop_orders(user: Annotated[dict, Depends(current_user)]) -> dict:
+    from sqlalchemy import text as sa_text
+    from app.db.engines import get_engine
+    eng = get_engine("unidrop")
+    out: dict = {}
+    tests = {
+        "ml_minimal": """
+            SELECT oml.id::text, oml."number", oml."dateCreated"
+            FROM mercado_libre_dev."OrderMercadoLibre" oml
+            WHERE oml."number" LIKE 'DROP-%' LIMIT 1
+        """,
+        "ml_status_cast": """
+            SELECT COALESCE(oml.status::text,''), COALESCE(oml."statusDetail"::text,'')
+            FROM mercado_libre_dev."OrderMercadoLibre" oml
+            WHERE oml."number" LIKE 'DROP-%' LIMIT 1
+        """,
+        "ml_total_cost": """
+            SELECT COALESCE(oml."total_cost",0)::float, COALESCE(oml."profit_for_subscription",0)::float
+            FROM mercado_libre_dev."OrderMercadoLibre" oml
+            WHERE oml."number" LIKE 'DROP-%' LIMIT 1
+        """,
+        "ml_shipping": """
+            SELECT COALESCE(oml."shipping_option_reference"::text,''), COALESCE(oml."label_downloaded",FALSE)
+            FROM mercado_libre_dev."OrderMercadoLibre" oml
+            WHERE oml."number" LIKE 'DROP-%' LIMIT 1
+        """,
+        "ml_user_join": """
+            SELECT u.id, u.fantasy_name FROM mercado_libre_dev."OrderMercadoLibre" oml
+            LEFT JOIN public."User" u ON u.dni::text = split_part(oml."number",'-',2)
+            WHERE oml."number" LIKE 'DROP-%' LIMIT 1
+        """,
+        "tn_minimal": """
+            SELECT tno.tienda_nube_id::text, tno."number", tno.created_at
+            FROM public.tienda_nube_orders tno LIMIT 1
+        """,
+        "tn_payment_status": """
+            SELECT COALESCE(tno.payment_status::text,''), COALESCE(tno.total,0)::float
+            FROM public.tienda_nube_orders tno LIMIT 1
+        """,
+        "tn_shipping": """
+            SELECT COALESCE(tno.shipping_status::text,''), COALESCE(tno.shipping_carrier,''), COALESCE(tno.label_downloaded,FALSE)
+            FROM public.tienda_nube_orders tno LIMIT 1
+        """,
+        "tn_user_join": """
+            SELECT u.id, u.fantasy_name FROM public.tienda_nube_orders tno
+            LEFT JOIN public."User" u ON u.id = tno.user_id LIMIT 1
+        """,
+    }
+    for name, sql in tests.items():
+        try:
+            with eng.connect() as c:
+                rows = c.execute(sa_text(sql)).all()
+                out[name] = {"ok": True, "rows": len(rows)}
+        except Exception as e:
+            out[name] = {"ok": False, "error": str(e)[:400]}
+    return out
+
+
 @router.get("/logistica/unidrop")
 def get_logistica_unidrop(
     user: Annotated[dict, Depends(current_user)],
