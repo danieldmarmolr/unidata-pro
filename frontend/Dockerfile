@@ -3,6 +3,7 @@
 
 FROM node:20-alpine AS deps
 WORKDIR /app
+ARG CACHEBUST=2
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --legacy-peer-deps
 
