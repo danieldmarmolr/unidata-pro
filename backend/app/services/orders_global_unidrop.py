@@ -205,25 +205,27 @@ def orders_global_unidrop(
     """, {}) or 0)
     log.warning("orders_global DEBUG raw_drop_count=%d (no user join)", _raw_drop)
 
-    # Debug: verificar si el campo en el numero es user.id (no dni)
-    _id_match = int(scalar(eng, """
+    # Debug: DNI join sin filtro de fecha — confirmar si EXISTE algún match
+    _dni_any = int(scalar(eng, """
         SELECT COUNT(*)
         FROM mercado_libre_dev."OrderMercadoLibre" oml
-        JOIN public."User" u ON u.id::text = split_part(oml."number", '-', 2)
+        JOIN public."User" u ON u.dni::text = split_part(oml."number", '-', 2)
         WHERE oml."number" LIKE 'DROP-%'
-          AND oml."dateCreated" >= NOW() - make_interval(days => 90)
     """, {}) or 0)
-    log.warning("orders_global DEBUG id_match=%d (join via user.id)", _id_match)
+    log.warning("orders_global DEBUG dni_match_no_date=%d", _dni_any)
 
-    # Debug: muestra los primeros 3 numeros DROP y cual user matchea por id
-    _id_sample = q(eng, """
-        SELECT oml."number", split_part(oml."number", '-', 2) AS extracted, u.id, u.dni
-        FROM mercado_libre_dev."OrderMercadoLibre" oml
-        JOIN public."User" u ON u.id::text = split_part(oml."number", '-', 2)
-        WHERE oml."number" LIKE 'DROP-%'
-        LIMIT 3
+    # Debug: contar DROP orders totales sin fecha
+    _all_drop = int(scalar(eng, """
+        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE 'DROP-%'
+    """, {}) or 0)
+    log.warning("orders_global DEBUG all_drop_total=%d", _all_drop)
+
+    # Debug: ver qué columnas tiene User que podrían linkar con el número
+    _user_cols = q(eng, """
+        SELECT column_name, data_type FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='User' ORDER BY ordinal_position LIMIT 20
     """, {}) or []
-    log.warning("orders_global DEBUG id_sample: %s", [(r[0], r[1], r[2], r[3]) for r in _id_sample])
+    log.warning("orders_global DEBUG User cols: %s", [(r[0], r[1]) for r in _user_cols])
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
