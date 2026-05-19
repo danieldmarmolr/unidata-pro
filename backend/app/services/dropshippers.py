@@ -1255,7 +1255,7 @@ def dropshipper_unified_orders(
           AND pi."status" = 'PROCESSED'
           {intent_filter}
         ORDER BY pi."createdAt" DESC NULLS LAST
-        LIMIT 200
+        LIMIT 2000
     """, {"uid": int(user_id), "intent_id": intent_id}) or []
 
     if not intents:
@@ -1425,7 +1425,7 @@ def dropshipper_unified_orders(
                 ) p ON p."orderId" = o.id
                 WHERE o."number" LIKE :num_pfx
                 ORDER BY o."dateCreated" DESC NULLS LAST
-                LIMIT 200
+                LIMIT 2000
             """, {"num_pfx": _num_pfx}) or []
 
             if sup_erows:
@@ -1772,7 +1772,7 @@ def dropshipper_unified_orders(
                 {base_select}
                 WHERE tno.user_id = {uid_int}
                 ORDER BY tno.created_at DESC NULLS LAST
-                LIMIT 200
+                LIMIT 2000
             """) or []
         except Exception as e:
             log.warning("unified_orders TN by_user fail uid=%s: %s", user_id, str(e)[:200])
@@ -1783,7 +1783,7 @@ def dropshipper_unified_orders(
             erows_by_intent = q(eng, f"""
                 {base_select}
                 WHERE tno.tienda_nube_id::text = ANY({tn_ids_lit})
-                LIMIT 200
+                LIMIT 2000
             """) or []
         except Exception as e:
             log.warning("unified_orders TN by_intent fail uid=%s: %s", user_id, str(e)[:200])
@@ -1795,7 +1795,7 @@ def dropshipper_unified_orders(
         if k in seen_ids: continue
         seen_ids.add(k)
         erows.append(er)
-    erows = erows[:200]
+    erows = erows[:2000]
     log.info("unified_orders TN uid=%s by_user=%d by_intent=%d total_dedup=%d",
              user_id, len(erows_by_user), len(erows_by_intent), len(erows))
     try:

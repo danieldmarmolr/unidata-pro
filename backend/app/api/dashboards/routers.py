@@ -365,7 +365,7 @@ def get_dropshipper_unified_orders(
     user_id: int,
     user: Annotated[dict, Depends(current_user)],
     intent_id: Annotated[int | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    limit: Annotated[int, Query(ge=1, le=2000)] = 2000,
 ) -> dict:
     """Vista unificada de ordenes ML + TN. Si intent_id es no-null, filtra a las
     ordenes de ese PaymentIntent (click-to-filter del frontend)."""

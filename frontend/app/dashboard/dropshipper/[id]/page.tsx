@@ -319,9 +319,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
     staleTime: 60_000,
   });
 
-  // Click-to-filter: cuando se selecciona un PaymentIntent en la tabla derecha,
-  // refetcheamos unified_orders pasandole intent_id. Sin seleccion usamos los
-  // unified_orders que vienen en data (top 50 sin filtro).
+  // Siempre cargamos TODAS las órdenes del dropshipper desde el endpoint dedicado
+  // (no usamos data?.unified_orders que viene con límite del detail).
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
   const [comboFilter, setComboFilter] = useState<"all" | "combo" | "individual">("all");
@@ -331,15 +330,26 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
   const toggleExpand = (key: string) =>
     setExpandedOrders((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  // Query principal: todas las órdenes (sin filtro de intent)
+  const allOrdersQuery = useQuery<{ items: UnifiedOrder[]; total: number }>({
+    queryKey: ["dropshipper-unified-all", id],
+    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders`),
+    enabled: !!data,
+    staleTime: 120_000,
+  });
+
+  // Query para filtro por PaymentIntent específico
   const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
     queryKey: ["dropshipper-unified", id, selectedIntent],
-    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders?intent_id=${selectedIntent}&limit=200`),
+    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders?intent_id=${selectedIntent}`),
     enabled: !!selectedIntent,
     staleTime: 60_000,
   });
+
   const unifiedAll: UnifiedOrder[] = selectedIntent
     ? (filteredQuery.data?.items ?? [])
-    : (data?.unified_orders ?? []);
+    : (allOrdersQuery.data?.items ?? data?.unified_orders ?? []);
   const unifiedFiltered: UnifiedOrder[] = unifiedAll
     .filter((o) => channelFilter === "all" || o.origen === channelFilter)
     .filter((o) => comboFilter === "all" || (comboFilter === "combo" ? !!o.is_combo : !o.is_combo));
@@ -1648,10 +1658,15 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               <div>
                 <h3 className="text-sm font-bold text-text">Ventas dropshipper (vista unificada)</h3>
                 <p className="text-[11px] text-text-muted">
-                  {unifiedOrders.length} órdenes {channelFilter === "all" ? "ML + TN" : channelFilter.toUpperCase()} · click en número para abrir en panel Unidrop
+                  {allOrdersQuery.isLoading && !selectedIntent
+                    ? "Cargando órdenes..."
+                    : `${unifiedOrders.length} órdenes ${channelFilter === "all" ? "ML + TN" : channelFilter.toUpperCase()} · click en número para abrir en panel Unidrop`}
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                {(allOrdersQuery.isFetching && !selectedIntent) && (
+                  <span className="text-[10px] text-text-muted italic">cargando...</span>
+                )}
                 {selectedIntent != null && filteredQuery.isFetching && (
                   <span className="text-[10px] text-text-muted italic">actualizando...</span>
                 )}
