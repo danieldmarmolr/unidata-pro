@@ -19,7 +19,7 @@ function parseToDate(s: string): Date | null {
   return d;
 }
 
-/** Devuelve "08/05/2026 05:48" (DD/MM/YYYY HH:mm en AR). */
+/** Devuelve "08/05/2026 05:48" (DD/MM/YYYY HH:mm en AR, formato 24h). */
 export function fmtArDateTime(s: string | null | undefined, opts?: { withSeconds?: boolean }): string {
   if (!s) return "—";
   const d = parseToDate(s);
@@ -31,6 +31,7 @@ export function fmtArDateTime(s: string | null | undefined, opts?: { withSeconds
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
   };
   if (opts?.withSeconds) fmt.second = "2-digit";
   return d.toLocaleString("es-AR", fmt).replace(",", "");
