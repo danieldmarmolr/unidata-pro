@@ -43,8 +43,12 @@ export default function VentasPage() {
 
  const { data, isLoading, isFetching, error } = useQuery<SalesOverview & { top_users?: { category: string; value: number; extra?: Record<string, number | string | null> | null }[] }>({
  queryKey: ["dashboards", "sales", unit, period, customFrom, customTo, channel],
- queryFn: () =>
- api(`/api/dashboards/sales/${unit}?${_qs}&channel=${channel}`),
+ queryFn: () => {
+  const salesQs = period === "custom" && customFrom && customTo
+   ? `period=custom&from_iso=${customFrom}&to_iso=${customTo}`
+   : `period=${period}`;
+  return api(`/api/dashboards/sales/${unit}?${salesQs}&channel=${channel}`);
+ },
  staleTime: 60_000,
  });
 
