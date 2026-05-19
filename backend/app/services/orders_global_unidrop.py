@@ -205,6 +205,24 @@ def orders_global_unidrop(
     """, {}) or 0)
     log.warning("orders_global DEBUG raw_drop_count=%d (no user join)", _raw_drop)
 
+    # Debug: muestra sample de numbers y el split_part extraido
+    _sample = q(eng, """
+        SELECT oml."number", split_part(oml."number", '-', 2) AS dni_extracted
+        FROM mercado_libre_dev."OrderMercadoLibre" oml
+        WHERE oml."number" LIKE 'DROP-%'
+        LIMIT 3
+    """, {}) or []
+    log.warning("orders_global DEBUG sample numbers: %s", [(r[0], r[1]) for r in _sample])
+
+    # Debug: cuenta users con dni no nulo
+    _users_with_dni = int(scalar(eng, 'SELECT COUNT(*) FROM public."User" u WHERE u.dni IS NOT NULL', {}) or 0)
+    _users_total = int(scalar(eng, 'SELECT COUNT(*) FROM public."User" u', {}) or 0)
+    log.warning("orders_global DEBUG users_with_dni=%d / total=%d", _users_with_dni, _users_total)
+
+    # Debug: muestra sample de users con su dni
+    _user_sample = q(eng, 'SELECT u.id, u.dni FROM public."User" u WHERE u.dni IS NOT NULL LIMIT 3', {}) or []
+    log.warning("orders_global DEBUG user_dni_sample: %s", [(r[0], r[1]) for r in _user_sample])
+
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
