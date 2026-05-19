@@ -3,13 +3,14 @@
 
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --legacy-peer-deps
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY . .
+ARG CACHEBUST=1
+COPY frontend/ .
 ENV NEXT_TELEMETRY_DISABLED=1
 # NEXT_PUBLIC_* se bakea en build time. Railway lo inyecta como build arg.
 ARG NEXT_PUBLIC_API_URL
