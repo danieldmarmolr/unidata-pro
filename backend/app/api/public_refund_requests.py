@@ -195,4 +195,22 @@ def submit(request: Request, body: SubmitBody) -> dict:
         "id": created["id"],
         "status": created["status"],
         "created_at": created["created_at"],
+        "display_code": _format_display_code(
+            dni=created["dropshipper_dni"],
+            plan=created.get("subscription_plan_name"),
+            created_at_iso=created["created_at"],
+        ),
     }
+
+
+def _format_display_code(*, dni: str, plan: str | None, created_at_iso: str) -> str:
+    """UDEV-{dni}-{plan_normalizado}-{ddmmaa}. Ej: UDEV-37145200-COMBOXXL-190526."""
+    import re as _re
+    from datetime import datetime as _dt
+    plan_clean = _re.sub(r"[^A-Z0-9]", "", (plan or "GEN").upper()) or "GEN"
+    try:
+        d = _dt.fromisoformat(created_at_iso.replace("Z", "+00:00"))
+        dd = f"{d.day:02d}"; mm = f"{d.month:02d}"; aa = f"{d.year % 100:02d}"
+    except Exception:
+        dd = mm = aa = "00"
+    return f"UDEV-{dni}-{plan_clean}-{dd}{mm}{aa}"

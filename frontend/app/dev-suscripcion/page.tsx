@@ -133,6 +133,7 @@ export default function DevSuscripcionPage() {
 
   // Step 3
   const [requestId, setRequestId] = useState<number | null>(null);
+  const [displayCode, setDisplayCode] = useState<string | null>(null);
 
   async function handleIdentify(e: React.FormEvent) {
     e.preventDefault();
@@ -223,7 +224,7 @@ export default function DevSuscripcionPage() {
 
     setLoading(true);
     try {
-      const data = await fetchJson<{ ok: true; id: number; status: string }>(
+      const data = await fetchJson<{ ok: true; id: number; status: string; display_code?: string }>(
         "/api/public/refund-requests",
         {
           dni,
@@ -239,6 +240,7 @@ export default function DevSuscripcionPage() {
         },
       );
       setRequestId(data.id);
+      setDisplayCode(data.display_code ?? null);
       setStep("success");
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo enviar la solicitud");
@@ -525,11 +527,13 @@ export default function DevSuscripcionPage() {
                   El equipo de Finanzas la va a procesar y te vamos a contactar por WhatsApp.
                 </p>
                 <div className="bg-bg border border-border rounded-lg px-4 py-3 inline-block">
-                  <div className="text-[11px] uppercase tracking-wider text-text-muted">ID de solicitud</div>
-                  <div className="text-2xl font-bold text-primary">#{requestId}</div>
+                  <div className="text-[11px] uppercase tracking-wider text-text-muted">Código de solicitud</div>
+                  <div className="text-lg font-bold text-primary font-mono break-all">
+                    {displayCode ?? `#${requestId}`}
+                  </div>
                 </div>
                 <p className="mt-6 text-xs text-text-muted">
-                  Guardá este número por si necesitás hacer un seguimiento.
+                  Guardá este código por si necesitás hacer un seguimiento.
                 </p>
               </div>
             )}

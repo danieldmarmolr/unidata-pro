@@ -105,6 +105,20 @@ function fmtMoney(v: number | null | undefined): string {
   }).format(v);
 }
 
+function displayCode(r: Request): string {
+  const plan = (r.subscription_plan_name ?? "GEN").toUpperCase().replace(/[^A-Z0-9]/g, "") || "GEN";
+  let dd = "00", mm = "00", aa = "00";
+  try {
+    const d = new Date(r.created_at);
+    if (!Number.isNaN(d.getTime())) {
+      dd = String(d.getDate()).padStart(2, "0");
+      mm = String(d.getMonth() + 1).padStart(2, "0");
+      aa = String(d.getFullYear() % 100).padStart(2, "0");
+    }
+  } catch {}
+  return `UDEV-${r.dropshipper_dni}-${plan}-${dd}${mm}${aa}`;
+}
+
 export default function DevSuscripcionesPage() {
   const [filter, setFilter] = useState<"all" | Status>("pending");
 
@@ -254,8 +268,12 @@ function RequestCard({ request: r }: { request: Request }) {
                 <span className="text-text-muted font-normal"> · {r.dropshipper_fantasy_name}</span>
               )}
             </div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
-              {meta.label} · #{r.id} · {fmtDate(r.created_at)}
+            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold flex items-center gap-2 flex-wrap justify-end">
+              <span>{meta.label}</span>
+              <span className="font-mono normal-case tracking-normal bg-bg border border-border rounded px-1.5 py-0.5 text-[10px]">
+                {displayCode(r)}
+              </span>
+              <span>· {fmtDate(r.created_at)}</span>
             </div>
           </div>
           <div className="text-xs text-text-muted">
