@@ -37,6 +37,9 @@ class RunParams(BaseModel):
     fecha_meli: str | None = None
     fecha_desde: str | None = None
     tn_uni_despacho: list[Literal["RETIRA", "OTROS"]] | None = None
+    meli_db_modo_lote: Literal[
+        "TODOS", "SOLO_INDIVIDUALES", "SOLO_LOTES", "SOLO_LOTES_FLEX", "SOLO_LOTES_PR"
+    ] = "TODOS"
 
 
 # ── Worker thread ─────────────────────────────────────────────────────────

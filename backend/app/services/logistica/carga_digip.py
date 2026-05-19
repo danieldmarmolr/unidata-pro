@@ -18,7 +18,7 @@ import os
 import re
 import time
 import traceback
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -308,6 +308,45 @@ def _crear_ubicacion(cli_cod, ubi_cod, direccion, reintentos=3):
     return False
 
 
+def _truncar_obs_smart(obs: str, limite: int = 250) -> str:
+    s = str(obs or "")
+    if len(s) <= limite:
+        return s
+    truncado = s[:limite]
+    pipe = truncado.rfind("|")
+    return truncado[:pipe] if pipe > 0 else truncado
+
+
+def _es_error_observacion(resp) -> bool:
+    if resp is None:
+        return False
+    try:
+        body = resp.json()
+    except Exception:
+        return False
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, dict):
+        return False
+    return any("observacion" in str(k).lower() for k in errors.keys())
+
+
+def _resumir_error_api(resp) -> str:
+    if resp is None:
+        return "sin_respuesta"
+    try:
+        body = resp.json()
+    except Exception:
+        return (resp.text or "")[:120].strip() or f"HTTP {resp.status_code}"
+    if isinstance(body, dict):
+        errs = body.get("errors")
+        if isinstance(errs, dict) and errs:
+            return "campos_invalidos:" + ",".join(sorted(errs.keys()))
+        title = body.get("title") or body.get("message")
+        if title:
+            return str(title)[:120]
+    return (resp.text or "")[:120].strip() or f"HTTP {resp.status_code}"
+
+
 def _post_pedido(codigo, cli_ubi, fecha_iso, despacho, obs, items, importe=1, max_retry=3):
     payload = {
         "codigo": codigo, "clienteUbicacionCodigo": cli_ubi,
@@ -317,6 +356,7 @@ def _post_pedido(codigo, cli_ubi, fecha_iso, despacho, obs, items, importe=1, ma
         "servicioDeEnvioTipo": "Propio", "ordenPreparacion": 0,
         "items": items, "tags": [],
     }
+    r = None
     for attempt in range(max_retry):
         r = _dpost("https://api.v2.digipwms.com/api/v2/Pedidos", payload)
         if r is None:
@@ -325,16 +365,26 @@ def _post_pedido(codigo, cli_ubi, fecha_iso, despacho, obs, items, importe=1, ma
                 continue
             return None
         if r.status_code < 500:
-            return r
+            break
         if attempt < max_retry - 1:
             log.warning("  %s: HTTP %d — reintento %d/%d", codigo, r.status_code, attempt + 1, max_retry)
             time.sleep(2 ** attempt)
+
+    if r is not None and r.status_code in (400, 422) and _es_error_observacion(r) and str(obs) != "1":
+        log.warning("  %s: DigiP rechazó Observacion — reintento con obs='1'", codigo)
+        payload["observacion"] = "1"
+        r2 = _dpost("https://api.v2.digipwms.com/api/v2/Pedidos", payload)
+        if r2 is not None:
+            return r2
     return r
 
 
 # =========================================================================
 # NÚCLEO DE CARGA
 # =========================================================================
+
+MAX_SUFIJOS_LOTE = 9
+
 
 def _procesar_df_digip(df, fuente: str, dry_run: bool, pedido_tipo: str = "TODOS") -> dict:
     """Itera el df normalizado y carga cada pedido en DigiP."""
@@ -350,6 +400,8 @@ def _procesar_df_digip(df, fuente: str, dry_run: bool, pedido_tipo: str = "TODOS
     ok = ya = omit = err = 0
     created_codes:     set = set()
     ya_existian_codes: set = set()
+    renamed_codes:     dict = {}
+    errors_by_type:    Counter = Counter()
 
     for pedido_cod, grupo in grouped:
         pedido_cod = str(pedido_cod)
@@ -416,34 +468,73 @@ def _procesar_df_digip(df, fuente: str, dry_run: bool, pedido_tipo: str = "TODOS
         log.info("  [%s][%s] %s | cli=%s | %d ud(s) | desp=%s",
                  fuente, tipo, pedido_cod, cli_cod, total_uds, row["CodigoDespacho"])
 
-        r = _post_pedido(
-            pedido_cod, ubi_final, _parse_fecha(row["PedidoFecha"]),
-            str(row["CodigoDespacho"]), obs, items,
-            float(row.get("PedidoImporte") or 1),
-        )
+        despacho_cod = str(row["CodigoDespacho"])
+        fecha_iso    = _parse_fecha(row["PedidoFecha"])
+        importe      = float(row.get("PedidoImporte") or 1)
+
+        r = _post_pedido(pedido_cod, ubi_final, fecha_iso, despacho_cod, obs, items, importe)
         if r is None:
             err += 1
+            errors_by_type["sin_respuesta"] += 1
             continue
+
+        ya_existe = "Ya existe" in r.text or "exist" in r.text.lower()
+        es_lote_sin_sufijo = (
+            pedido_cod.startswith("UDMELI")
+            and "-" not in pedido_cod.split("UDMELI", 1)[1]
+        )
+
+        if ya_existe and es_lote_sin_sufijo and not dry_run:
+            sufijo_ganador = None
+            for n in range(1, MAX_SUFIJOS_LOTE + 1):
+                cod_alt = f"{pedido_cod}-{n}"
+                if cod_alt in ya_cargados:
+                    continue
+                log.info("  %s ya existe en DigiP — reintento con sufijo %s", pedido_cod, cod_alt)
+                r_alt = _post_pedido(cod_alt, ubi_final, fecha_iso, despacho_cod, obs, items, importe)
+                if r_alt is None:
+                    continue
+                if r_alt.status_code in (200, 201):
+                    r = r_alt
+                    sufijo_ganador = cod_alt
+                    break
+                if "Ya existe" in r_alt.text or "exist" in r_alt.text.lower():
+                    continue
+                r = r_alt
+                break
+            if sufijo_ganador:
+                renamed_codes[pedido_cod] = sufijo_ganador
+                pedido_cod = sufijo_ganador
+                ya_existe = False
+
         if r.status_code in (200, 201):
             carga_digip_db.append_processed(fuente, [pedido_cod])
             ya_cargados.add(pedido_cod)
             created_codes.add(pedido_cod)
             log.info("  OK %s — %d ítem(s)", pedido_cod, len(items))
             ok += 1
-        elif "Ya existe" in r.text or "exist" in r.text.lower():
+        elif ya_existe or "Ya existe" in r.text or "exist" in r.text.lower():
             carga_digip_db.append_processed(fuente, [pedido_cod])
             ya_cargados.add(pedido_cod)
             ya_existian_codes.add(pedido_cod)
             ya += 1
         else:
+            resumen = _resumir_error_api(r)
+            errors_by_type[resumen] += 1
             log.error("  ERR %s: HTTP %s — %s", pedido_cod, r.status_code, r.text[:200])
             err += 1
 
         time.sleep(0.05)
 
+    if errors_by_type:
+        top = errors_by_type.most_common(5)
+        resumen_txt = " · ".join(f"{tipo}: {cnt}" for tipo, cnt in top)
+        log.info("  Errores agrupados: %s", resumen_txt)
+
     return {
         "total": total, "creados": ok, "ya_existian": ya, "omitidos": omit, "errores": err,
         "created_codes": created_codes, "ya_existian_codes": ya_existian_codes,
+        "renamed_codes": renamed_codes,
     }
 
 
@@ -576,7 +667,11 @@ def run_tn(dry_run: bool, pedido_tipo: str = "TODOS", tipo: str = "TODOS") -> di
 # =========================================================================
 
 def run_meli_db(
-    dry_run: bool, tipo: str = "TODOS", pedido_tipo: str = "TODOS", fecha_desde: str | None = None
+    dry_run: bool,
+    tipo: str = "TODOS",
+    pedido_tipo: str = "TODOS",
+    fecha_desde: str | None = None,
+    modo_lote: str = "TODOS",
 ) -> dict | None:
     log.info("=" * 60)
     log.info("  FLUJO MELI-DB → DigiPWMS")
@@ -683,17 +778,21 @@ def run_meli_db(
     prefijo_db = f"UDMELI{_ahora_db.strftime('%d%m')}"
     fecha_hoy  = _ahora_db.strftime("%m/%d/%Y")
 
-    def _sufijo_db(base):
-        pat  = re.compile(rf"^{re.escape(base)}(-(\d+))?$")
+    def _proximo_contador(prefijo_tipo: str) -> int:
+        """Devuelve el próximo N libre para un prefijo dado (ej. UDMELI0519FLEX → 1, 2, 3...).
+
+        Considera lotes ya en pedidos_por_lotes con el patrón {prefijo_tipo}{N}[-{sufijo}].
+        """
+        pat  = re.compile(rf"^{re.escape(prefijo_tipo)}(\d+)(?:-\d+)?$")
         used = set()
         for n in ya_lotes_en_db:
             m = pat.match(str(n))
             if m:
-                used.add(int(m.group(2)) if m.group(2) else 0)
-        counter = 0
+                used.add(int(m.group(1)))
+        counter = 1
         while counter in used:
             counter += 1
-        return "" if counter == 0 else f"-{counter}"
+        return counter
 
     uds_por_pedido  = df_digip.groupby("PedidoCodigo")["PedidoUnidades"].sum().to_dict()
     desp_por_pedido = df_digip.groupby("PedidoCodigo")["CodigoDespacho"].first().to_dict()
@@ -706,32 +805,16 @@ def run_meli_db(
             "cantidad": int(_rows["PedidoUnidades"].sum()),
         }
 
-    MAX_UDS_LOTE    = 40
-    _lote_state:    dict = {}
+    _lote_state:    dict = {}   # prefijo_tipo (ej UDMELI0519FLEX) → código asignado
     lotes_origenes: dict = {}
 
-    def _lote_code(base, counter):
-        return base if counter == 0 else f"{base}-{counter}"
-
-    def _asignar_lote(orig_cod, desp, uds):
-        tipo_e    = "FLEX" if "FLEX" in str(desp).upper() else "PR"
-        base      = f"{prefijo_db}{tipo_e}{int(uds)}"
-        order_uds = int(uds)
-
-        if base not in _lote_state:
-            suf     = _sufijo_db(base)
-            counter = 0 if suf == "" else int(suf.lstrip("-"))
-            _lote_state[base] = {"code": _lote_code(base, counter), "uds": 0, "counter": counter}
-
-        state = _lote_state[base]
-        if state["uds"] + order_uds > MAX_UDS_LOTE and state["uds"] > 0:
-            state["counter"] += 1
-            state["code"]     = _lote_code(base, state["counter"])
-            state["uds"]      = 0
-            log.info("  Nuevo chunk: %s (límite %d uds)", state["code"], MAX_UDS_LOTE)
-
-        lc = state["code"]
-        state["uds"] += order_uds
+    def _asignar_lote(orig_cod, desp):
+        tipo_e = "FLEX" if "FLEX" in str(desp).upper() else "PR"
+        prefijo_tipo = f"{prefijo_db}{tipo_e}"
+        if prefijo_tipo not in _lote_state:
+            n = _proximo_contador(prefijo_tipo)
+            _lote_state[prefijo_tipo] = f"{prefijo_tipo}{n}"
+        lc = _lote_state[prefijo_tipo]
         lotes_origenes.setdefault(lc, set()).add(str(orig_cod))
         return lc
 
@@ -740,7 +823,7 @@ def run_meli_db(
         uds  = uds_por_pedido.get(str(orig_cod), 0)
         desp = desp_por_pedido.get(str(orig_cod), "")
         if int(uds) == 1:
-            lc = _asignar_lote(str(orig_cod), desp, uds)
+            lc = _asignar_lote(str(orig_cod), desp)
             lote_assignments[str(orig_cod)] = lc
 
     for lc, origs in list(lotes_origenes.items()):
@@ -764,8 +847,23 @@ def run_meli_db(
         df_digip.loc[mask, "PedidoImporte"]             = 1.0
 
     for lc, origs in lotes_origenes.items():
-        obs = "|".join(sorted(origs))[:280]
+        obs = _truncar_obs_smart("|".join(sorted(origs)), 250)
         df_digip.loc[df_digip["PedidoCodigo"] == lc, "PedidoObservacion"] = obs
+
+    if modo_lote != "TODOS":
+        es_lote_mask = df_digip["PedidoCodigo"].astype(str).str.startswith("UDMELI")
+        if modo_lote == "SOLO_INDIVIDUALES":
+            df_digip = df_digip[~es_lote_mask].copy()
+        elif modo_lote == "SOLO_LOTES":
+            df_digip = df_digip[es_lote_mask].copy()
+        elif modo_lote == "SOLO_LOTES_FLEX":
+            df_digip = df_digip[es_lote_mask & df_digip["PedidoCodigo"].astype(str).str.contains("FLEX")].copy()
+        elif modo_lote == "SOLO_LOTES_PR":
+            df_digip = df_digip[es_lote_mask & df_digip["PedidoCodigo"].astype(str).str.contains("PR")].copy()
+        log.info("  Filtro modo_lote=%s → %d filas restantes", modo_lote, len(df_digip))
+        if df_digip.empty:
+            log.info("MELI_DB: sin pedidos tras filtro modo_lote=%s", modo_lote)
+            return {"total": 0, "creados": 0, "ya_existian": 0, "omitidos": 0, "errores": 0}
 
     df_digip = (df_digip.groupby([
         "PedidoFecha", "PedidoCodigo", "ArticuloCodigo", "ArticuloDescripcion",
@@ -775,6 +873,11 @@ def run_meli_db(
 
     res     = _procesar_df_digip(df_digip, "MELI_DB", dry_run, pedido_tipo=pedido_tipo)
     created = res.get("created_codes", set())
+
+    # Si _procesar_df_digip aplicó sufijos por colisión con DigiP, re-mapear lotes_origenes
+    for orig_code, final_code in res.get("renamed_codes", {}).items():
+        if orig_code in lotes_origenes:
+            lotes_origenes[final_code] = lotes_origenes.pop(orig_code)
 
     if not dry_run:
         codes_to_save = []
@@ -1539,6 +1642,7 @@ def execute_run(params: dict, log_list: list) -> dict:
     fecha_meli   = params.get("fecha_meli")
     fecha_desde  = params.get("fecha_desde")
     tn_desps     = params.get("tn_uni_despacho")
+    meli_db_modo_lote = params.get("meli_db_modo_lote", "TODOS")
 
     reset_digip_caches()
     resultados: dict = {}
@@ -1560,7 +1664,13 @@ def execute_run(params: dict, log_list: list) -> dict:
 
         if "MELI_DB" in fuentes:
             try:
-                resultados["MELI_DB"] = run_meli_db(dry_run, tipo=tipo_envio, pedido_tipo=pedido_tipo, fecha_desde=fecha_desde)
+                resultados["MELI_DB"] = run_meli_db(
+                    dry_run,
+                    tipo=tipo_envio,
+                    pedido_tipo=pedido_tipo,
+                    fecha_desde=fecha_desde,
+                    modo_lote=meli_db_modo_lote,
+                )
             except Exception as e:
                 log.error("MELI_DB falló: %s\n%s", e, traceback.format_exc())
                 resultados["MELI_DB"] = None

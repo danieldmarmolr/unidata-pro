@@ -22,6 +22,13 @@ import {
 
 type Fuente = "TN" | "TN_UNI" | "MELI_DB" | "MELI_API";
 
+type MeliDbModoLote =
+  | "TODOS"
+  | "SOLO_INDIVIDUALES"
+  | "SOLO_LOTES"
+  | "SOLO_LOTES_FLEX"
+  | "SOLO_LOTES_PR";
+
 interface RunConfig {
   fuentes: Fuente[];
   dry_run: boolean;
@@ -30,6 +37,7 @@ interface RunConfig {
   fecha_meli: string;
   fecha_desde: string;
   tn_uni_despacho: ("RETIRA" | "OTROS")[];
+  meli_db_modo_lote: MeliDbModoLote;
 }
 
 interface Run {
@@ -112,13 +120,14 @@ function DryBadge({ dry_run }: { dry_run: boolean }) {
 
 export default function CargaDigipPage() {
   const [config, setConfig] = useState<RunConfig>({
-    fuentes:         ["TN_UNI"],
-    dry_run:         true,
-    pedido_tipo:     "TODOS",
-    tipo_envio:      "TODOS",
-    fecha_meli:      "",
-    fecha_desde:     "",
-    tn_uni_despacho: [],
+    fuentes:           ["TN_UNI"],
+    dry_run:           true,
+    pedido_tipo:       "TODOS",
+    tipo_envio:        "TODOS",
+    fecha_meli:        "",
+    fecha_desde:       "",
+    tn_uni_despacho:   [],
+    meli_db_modo_lote: "TODOS",
   });
   const [runs,          setRuns]          = useState<Run[]>([]);
   const [activeRunId,   setActiveRunId]   = useState<string | null>(null);
@@ -128,6 +137,7 @@ export default function CargaDigipPage() {
   const [submitting,    setSubmitting]    = useState(false);
   const [error,         setError]         = useState<string | null>(null);
   const [showAdvanced,  setShowAdvanced]  = useState(false);
+  const [showMeliDbAdv, setShowMeliDbAdv] = useState(false);
   const logsRef = useRef<HTMLPreElement>(null);
 
   const hasMeli = config.fuentes.some((f) => f === "MELI_DB" || f === "MELI_API");
@@ -193,6 +203,9 @@ export default function CargaDigipPage() {
       if (config.fecha_meli)             body.fecha_meli        = config.fecha_meli;
       if (config.fecha_desde)            body.fecha_desde       = config.fecha_desde;
       if (config.tn_uni_despacho?.length) body.tn_uni_despacho  = config.tn_uni_despacho;
+      if (config.meli_db_modo_lote && config.meli_db_modo_lote !== "TODOS") {
+        body.meli_db_modo_lote = config.meli_db_modo_lote;
+      }
 
       const res = await api<{ run_id: string; status: string }>(
         "/api/logistica/carga/run",
@@ -424,6 +437,61 @@ export default function CargaDigipPage() {
                         );
                       })}
                     </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Opciones MELI_DB */}
+            {config.fuentes.includes("MELI_DB") && (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowMeliDbAdv((v) => !v)}
+                  className="flex items-center gap-1 text-xs text-text-muted hover:text-text transition"
+                >
+                  {showMeliDbAdv ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  Opciones MELI_DB
+                </button>
+                {showMeliDbAdv && (
+                  <div className="mt-3">
+                    <label className="text-xs text-text-muted mb-2 block">Modo de carga</label>
+                    <div className="flex flex-wrap gap-2">
+                      {(
+                        [
+                          { v: "TODOS",              l: "Todos" },
+                          { v: "SOLO_INDIVIDUALES",  l: "Solo individuales" },
+                          { v: "SOLO_LOTES",         l: "Solo lotes" },
+                          { v: "SOLO_LOTES_FLEX",    l: "Solo lotes FLEX" },
+                          { v: "SOLO_LOTES_PR",      l: "Solo lotes PR" },
+                        ] as { v: MeliDbModoLote; l: string }[]
+                      ).map(({ v, l }) => {
+                        const active = config.meli_db_modo_lote === v;
+                        return (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() =>
+                              !isRunning && setConfig((c) => ({ ...c, meli_db_modo_lote: v }))
+                            }
+                            disabled={isRunning}
+                            className={cn(
+                              "px-3 py-2 rounded-lg text-xs font-semibold border transition",
+                              active
+                                ? "bg-primary/10 text-primary border-primary/30"
+                                : "border-border text-text-muted hover:bg-soft",
+                              isRunning && "opacity-50 cursor-not-allowed"
+                            )}
+                          >
+                            {l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[11px] text-text-muted mt-2">
+                      Filtra qué armar antes de mandar a DigiP. El loteado siempre usa{" "}
+                      <code>UDMELI&#123;DDMM&#125;&#123;TIPO&#125;&#123;N&#125;</code> con contador secuencial.
+                    </p>
                   </div>
                 )}
               </div>

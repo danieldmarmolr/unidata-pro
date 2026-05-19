@@ -38,6 +38,7 @@ def init() -> None:
                 fecha_meli       TEXT,
                 fecha_desde      TEXT,
                 tn_uni_despacho  TEXT[],
+                meli_db_modo_lote TEXT       DEFAULT 'TODOS',
                 status           TEXT        NOT NULL DEFAULT 'running',
                 creados          INT         DEFAULT 0,
                 ya_existian      INT         DEFAULT 0,
@@ -51,6 +52,9 @@ def init() -> None:
                 started_by_email   TEXT
             )
         """)
+        cur.execute(
+            "ALTER TABLE carga_digip_runs ADD COLUMN IF NOT EXISTS meli_db_modo_lote TEXT DEFAULT 'TODOS'"
+        )
 
 
 # ── Antidup ───────────────────────────────────────────────────────────────
@@ -91,9 +95,9 @@ def create_run(
             """
             INSERT INTO carga_digip_runs
                 (run_id, fuentes, pedido_tipo, tipo_envio, dry_run,
-                 fecha_meli, fecha_desde, tn_uni_despacho,
+                 fecha_meli, fecha_desde, tn_uni_despacho, meli_db_modo_lote,
                  status, started_by_user_id, started_by_email)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running', %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', %s, %s)
             RETURNING *
             """,
             (
@@ -105,6 +109,7 @@ def create_run(
                 params.get("fecha_meli"),
                 params.get("fecha_desde"),
                 params.get("tn_uni_despacho"),
+                params.get("meli_db_modo_lote", "TODOS"),
                 user_id,
                 user_email,
             ),
@@ -152,6 +157,7 @@ def list_runs(limit: int = 50) -> list[dict]:
         cur.execute(
             """
             SELECT id, run_id, fuentes, pedido_tipo, tipo_envio, dry_run,
+                   meli_db_modo_lote,
                    status, creados, ya_existian, omitidos, errores,
                    duracion_seg, started_at, finished_at, started_by_email
             FROM carga_digip_runs
