@@ -17,6 +17,7 @@ import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { UnidropOrdersGlobal } from "@/components/unidrop-orders-global";
+import { UnistoreOrdersTable } from "@/components/unistore-orders-table";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { fmtArDateTime } from "@/lib/dates";
@@ -134,10 +135,22 @@ export default function VentasPage() {
  ) : (
  <InteractiveMetricChart
  points={data.daily_revenue as any[]}
- metrics={[{ key: "value", label: "Revenue diario", kind: "currency", color: "#7a3eae" }]}
+ metrics={[
+   { key: "value", label: "Revenue total", kind: "currency", color: "#7a3eae" },
+   { key: "revenue_tn", label: "Revenue TN", kind: "currency", color: "#10b981" },
+   { key: "revenue_ml", label: "Revenue ML", kind: "currency", color: "#f59e0b" },
+   { key: "orders", label: "Órdenes", kind: "number", color: "#3b82f6" },
+   { key: "orders_tn", label: "Órdenes TN", kind: "number", color: "#06b6d4" },
+   { key: "orders_ml", label: "Órdenes ML", kind: "number", color: "#f97316" },
+   { key: "units", label: "Unidades", kind: "number", color: "#84cc16" },
+   { key: "ticket_avg", label: "Ticket Promedio", kind: "currency", color: "#8b5cf6" },
+   { key: "skus", label: "SKUs distintos", kind: "number", color: "#ec4899" },
+   { key: "devoluciones", label: "Devoluciones", kind: "number", color: "#ef4444" },
+ ]}
  defaultPrimary="value"
- caption={`Revenue diario · ultimos ${period}`}
- subtitle="Suma de TN (paid) + ML (paid/confirmed/shipped/delivered)"
+ defaultSecondary="orders"
+ caption={`Métricas diarias · ${period}`}
+ subtitle="Activá/desactivá series · cambiá tipo de gráfico y eje por serie"
  height={320}
  />
  )}
@@ -270,6 +283,13 @@ export default function VentasPage() {
  }}
  />
  )
+ )}
+
+ {/* Tabla de órdenes Unistore (solo Unistore) */}
+ {unit === "unistore" && (
+ <div className="mb-6">
+ <UnistoreOrdersTable />
+ </div>
  )}
  </div>
 
