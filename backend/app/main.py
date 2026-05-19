@@ -154,6 +154,12 @@ app.include_router(logistica_api.router)
 from app.api import jira_flow as jira_flow_api
 app.include_router(jira_flow_api.router)
 
+from app.api import refund_requests as refund_requests_api
+app.include_router(refund_requests_api.router)
+
+from app.api import public_refund_requests as public_refund_requests_api
+app.include_router(public_refund_requests_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

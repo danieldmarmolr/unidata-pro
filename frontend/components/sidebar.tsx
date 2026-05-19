@@ -122,7 +122,18 @@ const ITEMS: NavItem[] = [
       { label: "Carga DigiP",  href: "/dashboard/logistica/carga-digip", icon: Upload  },
     ],
   },
-  { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
+  {
+    label: "Finanzas",
+    href: "/dashboard/finanzas",
+    icon: Wallet,
+    group: "Cross",
+    roles: ONLY_GERENCIA,
+    areas: ["finanzas", "administracion"],
+    children: [
+      { label: "Vista general",       href: "/dashboard/finanzas",                   icon: Wallet    },
+      { label: "Dev. Suscripciones",  href: "/dashboard/finanzas/dev-suscripciones", icon: RotateCcw },
+    ],
+  },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
   {
     label: "IT / Data",
