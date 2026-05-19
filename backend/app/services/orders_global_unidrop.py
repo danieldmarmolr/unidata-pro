@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+from sqlalchemy import text
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
 
@@ -176,6 +177,15 @@ def orders_global_unidrop(
 
     where_sql = " AND ".join(where_clauses)
     params: dict = {**merged_params, **extra_params}
+
+    # DEBUG: bypass q() para ver el error SQL real
+    for _label, _sub, _p in [("ML", _ml_sub(ml_date), ml_params), ("TN", _tn_sub(tn_date), tn_params)]:
+        try:
+            with eng.connect() as _c:
+                _r = _c.execute(text(_sub + " LIMIT 1"), _p).all()
+                log.warning("DEBUG %s sub OK rows=%d", _label, len(_r))
+        except Exception as _e:
+            log.warning("DEBUG %s sub ERROR: %s", _label, str(_e)[:600])
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
