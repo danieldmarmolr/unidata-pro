@@ -20,12 +20,14 @@ def get_sales_unistore(
     user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> SalesOverview:
     require_area(user, ["ventas"])
-    key = f"sales-uni:{period}:{channel}"
+    key = f"sales-uni:{period}:{channel}:{from_iso}:{to_iso}"
 
     @cached(_cache, key=lambda: key)
     def _build() -> dict:
-        return sales_unistore(period, channel)
+        return sales_unistore(period, channel, from_iso, to_iso)
 
     return SalesOverview(**_build())

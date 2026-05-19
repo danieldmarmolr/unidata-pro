@@ -105,7 +105,7 @@ class SalesOverview(BaseModel):
     payment_status: list[CategoryValue]
     top_products: list[TopProduct]
     top_provinces: list[CategoryValue]
-    daily_revenue: list[TimeSeriesPoint]
+    daily_revenue: list[dict[str, Any]]
     # ERP-alineado
     by_region: list[CategoryValue] | None = None
     top_markup: list[CategoryValue] | None = None

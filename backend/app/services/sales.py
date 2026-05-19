@@ -11,21 +11,32 @@ from typing import Any
 from sqlalchemy.engine import Engine
 
 from app.db.engines import get_engine
-from app.services._utils import q as _q, scalar as _scalar
+from app.services._utils import q as _q, scalar as _scalar, resolve_window
 
 log = logging.getLogger("unidata.sales")
 
 PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
-def sales_unistore(period: str = "30d", channel: str = "all") -> dict:
+def sales_unistore(
+    period: str = "30d",
+    channel: str = "all",
+    from_iso: str | None = None,
+    to_iso: str | None = None,
+) -> dict:
     """
-    period: 7d | 30d | 90d | 12m
+    period: today | yesterday | 7d | 30d | 90d | 12m | custom
     channel: all | tn | ml
+    from_iso / to_iso: ISO date strings for period='custom'
     """
     days = PERIOD_DAYS.get(period, 30)
     eng = get_engine("unistore")
-    p = {"days": days}
+
+    window = resolve_window(period, from_iso, to_iso)
+    from_ts = window["from_ts"]
+    to_ts = window["to_ts"]
+
+    p = {"days": days, "from_ts": from_ts, "to_ts": to_ts}
 
     include_tn = channel in ("all", "tn")
     include_ml = channel in ("all", "ml")
@@ -184,32 +195,97 @@ def sales_unistore(period: str = "30d", channel: str = "all") -> dict:
             "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in rows],
         })
 
-    # ---------- Daily revenue del periodo (TN + ML combinado, segun canal) ----------
-    daily: list[dict] = []
-    parts: list[str] = []
+    # ---------- Daily revenue del periodo (enriquecido por canal) ----------
+    # Usamos from_ts/to_ts para mayor precision en custom/today/yesterday.
+    daily_params = {"from_ts": from_ts, "to_ts": to_ts}
+
+    # Acumular por fecha (str YYYY-MM-DD)
+    daily_map: dict[str, dict] = {}
+
     if include_tn:
-        parts.append("""
-            SELECT date_trunc('day', "createdAt") AS day,
-                   CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END AS rev
-            FROM tienda_nube."Order"
-            WHERE "createdAt" >= NOW() - make_interval(days => :days)
-        """)
+        tn_rows = _q(eng, """
+            WITH orders AS (
+              SELECT date_trunc('day', o."createdAt")::date AS day,
+                     COUNT(*) FILTER (WHERE o."paymentStatus"='paid')::int AS orders_paid,
+                     COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN o.total ELSE 0 END), 0)::float AS revenue,
+                     COUNT(*) FILTER (WHERE o."paymentStatus" IN ('refunded','voided','abandoned'))::int AS devoluciones
+              FROM tienda_nube."Order" o
+              WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+              GROUP BY 1
+            ),
+            items AS (
+              SELECT date_trunc('day', o."createdAt")::date AS day,
+                     COALESCE(SUM(oi.quantity), 0)::int AS units,
+                     COUNT(DISTINCT oi.sku)::int AS skus
+              FROM tienda_nube."OrderItem" oi
+              JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+              WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+                AND o."paymentStatus" = 'paid'
+              GROUP BY 1
+            )
+            SELECT COALESCE(ord.day, it.day) AS day,
+                   COALESCE(ord.revenue, 0) AS revenue_tn,
+                   COALESCE(ord.orders_paid, 0) AS orders_tn,
+                   COALESCE(ord.devoluciones, 0) AS devoluciones,
+                   COALESCE(it.units, 0) AS units,
+                   COALESCE(it.skus, 0) AS skus,
+                   CASE WHEN COALESCE(ord.orders_paid, 0) > 0
+                        THEN COALESCE(ord.revenue, 0) / ord.orders_paid
+                        ELSE 0 END AS ticket_avg_tn
+            FROM orders ord FULL OUTER JOIN items it ON it.day = ord.day
+            ORDER BY 1
+        """, daily_params) or []
+        for r in tn_rows:
+            if not r[0]:
+                continue
+            d = r[0].strftime("%Y-%m-%d")
+            daily_map[d] = {
+                "date": d,
+                "revenue_tn": float(r[1] or 0),
+                "orders_tn": int(r[2] or 0),
+                "devoluciones": int(r[3] or 0),
+                "units": int(r[4] or 0),
+                "skus": int(r[5] or 0),
+                "ticket_avg": float(r[6] or 0),
+                "revenue_ml": 0.0,
+                "orders_ml": 0,
+            }
+
     if include_ml:
-        parts.append("""
-            SELECT date_trunc('day', date_created) AS day,
-                   COALESCE(total_amount,0) AS rev
+        ml_rows = _q(eng, """
+            SELECT date_trunc('day', date_created)::date AS day,
+                   COALESCE(SUM(total_amount), 0)::float AS revenue_ml,
+                   COUNT(*)::int AS orders_ml
             FROM meli.meli_orders
-            WHERE date_created >= NOW() - make_interval(days => :days)
+            WHERE date_created >= :from_ts AND date_created < :to_ts
               AND status IN ('paid','confirmed','shipped','delivered')
-        """)
-    if parts:
-        body = " UNION ALL ".join(parts)
-        daily_rows = _q(eng, f"""
-            SELECT day::date, COALESCE(SUM(rev),0)::float
-            FROM ({body}) x
             GROUP BY 1 ORDER BY 1
-        """, p) or []
-        daily = [{"date": r[0].strftime("%Y-%m-%d") if r[0] else "", "value": float(r[1] or 0)} for r in daily_rows]
+        """, daily_params) or []
+        for r in ml_rows:
+            if not r[0]:
+                continue
+            d = r[0].strftime("%Y-%m-%d")
+            if d in daily_map:
+                daily_map[d]["revenue_ml"] = float(r[1] or 0)
+                daily_map[d]["orders_ml"] = int(r[2] or 0)
+            else:
+                daily_map[d] = {
+                    "date": d,
+                    "revenue_tn": 0.0,
+                    "orders_tn": 0,
+                    "devoluciones": 0,
+                    "units": 0,
+                    "skus": 0,
+                    "ticket_avg": 0.0,
+                    "revenue_ml": float(r[1] or 0),
+                    "orders_ml": int(r[2] or 0),
+                }
+
+    daily: list[dict] = []
+    for pt in sorted(daily_map.values(), key=lambda x: x["date"]):
+        pt["value"] = pt["revenue_tn"] + pt["revenue_ml"]
+        pt["orders"] = pt["orders_tn"] + pt["orders_ml"]
+        daily.append(pt)
 
     # ---------- Distribucion paymentStatus (TN) ----------
     payment_status: list[dict] = []
