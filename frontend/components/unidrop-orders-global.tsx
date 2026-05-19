@@ -222,7 +222,7 @@ export function UnidropOrdersGlobal() {
         <div>
           <div className="text-sm font-bold text-text">Todas las ventas Unidrop</div>
           <div className="text-xs text-text-muted mt-0.5">
-            {isLoading ? "Cargando..." : `${total.toLocaleString("es-AR")} órdenes ML + TN · ${period}`}
+            {isLoading ? "Cargando..." : `${total.toLocaleString("es-AR")} órdenes ML + TN`}
             {isFetching && !isLoading && " · actualizando..."}
           </div>
         </div>
