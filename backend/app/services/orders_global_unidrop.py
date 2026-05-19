@@ -23,7 +23,9 @@ def orders_global_unidrop(
     to_iso: str | None = None,
 ) -> dict:
     eng = get_engine("unidrop")
-    days = resolve_window(period, from_iso, to_iso)["days"]
+    window = resolve_window(period, from_iso, to_iso)
+    from_ts = window["from_ts"]
+    to_ts = window["to_ts"]
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
@@ -53,7 +55,7 @@ def orders_global_unidrop(
                 FALSE AS label_downloaded
             FROM mercado_libre_dev."OrderMercadoLibre" oml
             JOIN public."User" u ON u.id = oml."userId"
-            WHERE oml."dateCreated" >= NOW() - make_interval(days => :days)
+            WHERE oml."dateCreated" >= :from_ts AND oml."dateCreated" < :to_ts
               AND oml.status IN ('paid','confirmed','shipped','delivered')
         """)
 
@@ -80,7 +82,7 @@ def orders_global_unidrop(
                 COALESCE(tno.label_downloaded, FALSE) AS label_downloaded
             FROM public.tienda_nube_orders tno
             JOIN public."User" u ON u.id = tno.user_id
-            WHERE tno.created_at >= NOW() - make_interval(days => :days)
+            WHERE tno.created_at >= :from_ts AND tno.created_at < :to_ts
         """)
 
     if not parts:
@@ -137,7 +139,7 @@ def orders_global_unidrop(
         extra_params["search_drop"] = f"%{search_drop.strip()}%"
 
     where_sql = " AND ".join(where_clauses)
-    params: dict = {"days": days, **extra_params}
+    params: dict = {"from_ts": from_ts, "to_ts": to_ts, **extra_params}
 
     total = int(scalar(eng, f"SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}", params) or 0)
 

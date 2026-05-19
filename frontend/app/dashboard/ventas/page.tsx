@@ -105,6 +105,13 @@ export default function VentasPage() {
  </div>
  )}
 
+ {/* Tabla global de órdenes — sección principal para Unidrop */}
+ {unit === "unidrop" && (
+ <div className="mb-6">
+ <UnidropOrdersGlobal />
+ </div>
+ )}
+
  {/* Cards */}
  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
  {isLoading || !data ? (
@@ -119,9 +126,9 @@ export default function VentasPage() {
  )}
  </div>
 
- {/* Daily revenue + Payment status donut */}
- <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
- <div className="xl:col-span-2">
+ {/* Daily revenue + Payment status donut (Unistore) | Daily revenue full-width (Unidrop) */}
+ <div className={`grid grid-cols-1 gap-4 mb-6 ${unit === "unistore" ? "xl:grid-cols-3" : ""}`}>
+ <div className={unit === "unistore" ? "xl:col-span-2" : ""}>
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
@@ -135,6 +142,7 @@ export default function VentasPage() {
  />
  )}
  </div>
+ {unit === "unistore" && (
  <div>
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
@@ -145,9 +153,10 @@ export default function VentasPage() {
  />
  )}
  </div>
+ )}
  </div>
 
- {/* Tendencia 12m + Provincias */}
+ {/* Tendencia 12m + Provincias (Unistore) | Tendencia 12m + Top dropshippers (Unidrop) */}
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[360px] animate-pulse" />
@@ -155,7 +164,8 @@ export default function VentasPage() {
  <RevenueChart series={data.revenue_by_channel} height={300} />
  )}
 
- {isLoading || !data ? (
+ {unit === "unistore" ? (
+ isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[360px] animate-pulse" />
  ) : (
  <CategoryTable
@@ -166,6 +176,25 @@ export default function VentasPage() {
  extraColumns={[{ key: "orders", label: "Ord", format: "number" }]}
  onRowClick={(r) => setDrill({ kind: "province", province: r.category })}
  />
+ )
+ ) : (
+ isLoading || !data ? (
+ <div className="bg-surface border border-border rounded-xl p-5 h-[360px] animate-pulse" />
+ ) : (
+ <CategoryTable
+ caption={`Top 15 dropshippers por revenue (${channel === "all" ? "TN + ML" : channel === "tn" ? "Tienda Nube" : "Mercado Libre"})`}
+ subtitle="Ordenes pagadas en el periodo · click para ver perfil 360"
+ data={data.top_users ?? []}
+ formatter="currency"
+ extraColumns={[{ key: "orders", label: "Ord", format: "number" }]}
+ onRowClick={(r) => {
+ const id = r.extra?.user_id;
+ if (typeof id === "number" && id > 0) {
+ router.push(`/dashboard/dropshipper/${id}`);
+ }
+ }}
+ />
+ )
  )}
  </div>
 
@@ -225,41 +254,22 @@ export default function VentasPage() {
  </div>
  )}
 
- {/* Vista global de ordenes Unidrop (todas las ventas) */}
- {unit === "unidrop" && (
- <div className="mb-6">
- <UnidropOrdersGlobal />
- </div>
- )}
-
- {/* Top products (Unistore) o Top users (Unidrop) */}
- {isLoading || !data ? (
+ {/* Top products (solo Unistore) */}
+ {unit === "unistore" && (
+ isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
- ) : unit === "unistore" ? (
+ ) : (
  <TopProductsTable
  data={data.top_products ?? []}
  onRowClick={(p) => {
- if (unit === "unistore" && p.sku) {
+ if (p.sku) {
  router.push(`/dashboard/productos/${encodeURIComponent(p.sku)}`);
  } else if (p.product_id) {
  setDrill({ kind: "product", productId: p.product_id, name: p.name });
  }
  }}
  />
- ) : (
- <CategoryTable
- caption={`Top 15 dropshippers por revenue (${channel === "all" ? "TN + ML" : channel === "tn" ? "Tienda Nube" : "Mercado Libre"})`}
- subtitle="Ordenes pagadas en el periodo · click para ver perfil 360"
- data={data.top_users ?? []}
- formatter="currency"
- extraColumns={[{ key: "orders", label: "Ord", format: "number" }]}
- onRowClick={(r) => {
- const id = r.extra?.user_id;
- if (typeof id === "number" && id > 0) {
- router.push(`/dashboard/dropshipper/${id}`);
- }
- }}
- />
+ )
  )}
  </div>
 
