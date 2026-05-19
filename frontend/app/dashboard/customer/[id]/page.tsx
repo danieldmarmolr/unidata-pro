@@ -118,7 +118,7 @@ function ExpandableOrderRow({ order, idx, onOpenDetail }: { order: CategoryValue
     shipping={e.shipping}
     orderStatus={e.status}
     packed={e.empaquetada}
-    canal={e.canal}
+    canal={e.canal != null ? String(e.canal) : undefined}
     compact
   />
  </td>
