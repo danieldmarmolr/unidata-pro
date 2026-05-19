@@ -3,15 +3,36 @@ Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
 Ancla en PaymentIntent (fuente canónica Unidrop):
   PaymentIntent.mlOrderIds[]  → OrderMercadoLibre.id
   PaymentIntent.orderIds[]    → tienda_nube_orders.tienda_nube_id
+
+Usa make_interval server-side para evitar problemas de timezone con datetimes de Python.
 """
 from __future__ import annotations
 
 import datetime as dt
+import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar, resolve_window
+from app.services._utils import q, scalar
 
-_ML_SUB = """
+log = logging.getLogger("unidata.dashboards")
+
+PERIOD_DAYS = {"today": 1, "yesterday": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
+
+
+def _date_filter(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
+    """Devuelve (cláusula SQL para pi.createdAt, params dict).
+    Usa make_interval o texto ISO para evitar conversión de datetime de Python."""
+    if period == "custom" and from_iso and to_iso:
+        return (
+            'pi."createdAt" >= :from_iso::timestamp AND pi."createdAt" <= :to_iso::timestamp',
+            {"from_iso": from_iso, "to_iso": to_iso},
+        )
+    days = PERIOD_DAYS.get(period, 30)
+    return 'pi."createdAt" >= NOW() - make_interval(days => :days)', {"days": days}
+
+
+def _ml_sub(date_clause: str) -> str:
+    return f"""
     SELECT
         cpa."userId"::int                                   AS user_id,
         COALESCE(u.fantasy_name, u.name, u.email)           AS dropshipper_name,
@@ -37,11 +58,12 @@ _ML_SUB = """
     JOIN mercado_libre_dev."OrderMercadoLibre" oml
          ON oml.id = ANY(pi."mlOrderIds")
     WHERE pi."status" = 'PROCESSED'
-      AND pi."createdAt" >= :from_ts
-      AND pi."createdAt" < :to_ts
-      AND array_length(pi."mlOrderIds", 1) > 0"""
+      AND {date_clause}
+      AND COALESCE(array_length(pi."mlOrderIds", 1), 0) > 0"""
 
-_TN_SUB = """
+
+def _tn_sub(date_clause: str) -> str:
+    return f"""
     SELECT
         cpa."userId"::int                                       AS user_id,
         COALESCE(u.fantasy_name, u.name, u.email)               AS dropshipper_name,
@@ -67,9 +89,8 @@ _TN_SUB = """
     JOIN public.tienda_nube_orders tno
          ON tno.tienda_nube_id = ANY(pi."orderIds")
     WHERE pi."status" = 'PROCESSED'
-      AND pi."createdAt" >= :from_ts
-      AND pi."createdAt" < :to_ts
-      AND array_length(pi."orderIds", 1) > 0"""
+      AND {date_clause}
+      AND COALESCE(array_length(pi."orderIds", 1), 0) > 0"""
 
 
 def orders_global_unidrop(
@@ -84,18 +105,16 @@ def orders_global_unidrop(
     to_iso: str | None = None,
 ) -> dict:
     eng = get_engine("unidrop")
-    window = resolve_window(period, from_iso, to_iso)
-    from_ts = window["from_ts"]
-    to_ts = window["to_ts"]
+    date_clause, date_params = _date_filter(period, from_iso, to_iso)
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
 
     parts: list[str] = []
     if include_ml:
-        parts.append(_ML_SUB)
+        parts.append(_ml_sub(date_clause))
     if include_tn:
-        parts.append(_TN_SUB)
+        parts.append(_tn_sub(date_clause))
 
     if not parts:
         return {"items": [], "total": 0, "limit": limit, "offset": offset,
@@ -149,11 +168,13 @@ def orders_global_unidrop(
         extra_params["search_drop"] = f"%{search_drop.strip()}%"
 
     where_sql = " AND ".join(where_clauses)
-    params: dict = {"from_ts": from_ts, "to_ts": to_ts, **extra_params}
+    params: dict = {**date_params, **extra_params}
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
+
+    log.warning("orders_global_unidrop: period=%s days=%s total=%d", period, date_params.get("days"), total)
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha::text,
