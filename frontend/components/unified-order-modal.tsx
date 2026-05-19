@@ -198,10 +198,12 @@ export function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
   const isDelivered = !!o.delivered_at || ["delivered", "entregado"].some((v) => ss.includes(v)) || !!o.shipment?.entregado;
   const isShipped = !!o.shipped_at || ["shipped", "transit", "en_camino"].some((v) => ss.includes(v)) || isDelivered;
 
-  const stepDate = (iso?: string) => {
+  const stepDate = (iso?: string | null) => {
     if (!iso) return null;
     try {
-      const d = new Date(iso);
+      let s = iso.trim().replace(" ", "T");
+      if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
+      const d = new Date(s);
       if (isNaN(d.getTime())) return null;
       return d.toLocaleDateString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" });
     } catch {

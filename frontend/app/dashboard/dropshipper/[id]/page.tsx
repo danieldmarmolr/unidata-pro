@@ -1514,9 +1514,11 @@ function methodEnvioDisplay(o: UnifiedOrder): string {
 function pipelineDateLabel(iso?: string | null): string | null {
   if (!iso) return null;
   try {
-    const d = new Date(iso);
+    let s = iso.trim().replace(" ", "T");
+    if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) s += "Z";
+    const d = new Date(s);
     if (isNaN(d.getTime())) return null;
-    return d.toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Argentina/Buenos_Aires" });
+    return d.toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Argentina/Buenos_Aires" });
   } catch {
     return null;
   }
