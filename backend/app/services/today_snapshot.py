@@ -19,6 +19,29 @@ import logging
 from app.db.engines import get_engine
 from app.services._utils import scalar
 
+_UTC = dt.timezone.utc
+
+
+def _day_bounds(days_back: int) -> tuple[dt.datetime, dt.datetime]:
+    """
+    UTC naive bounds para el dia N dias atras (en hora Argentina).
+
+    from_ts = medianoche Argentina de ese dia convertida a UTC
+    to_ts   = mismo momento relativo N dias atras en UTC
+
+    Necesario porque las columnas createdAt/dateCreated en RDS son
+    TIMESTAMP WITHOUT TIME ZONE almacenadas en UTC.  Si usaramos
+    CURRENT_DATE - N (naive) o datetime Argentina naive, la comparacion
+    seria literal y UTC midnight (= 21:00 ART) quedaría incluido en "hoy".
+    """
+    now_tz = now_ar()
+    now_utc = now_tz.astimezone(_UTC).replace(tzinfo=None)
+    day_ar = now_tz - dt.timedelta(days=days_back)
+    day_start_ar = day_ar.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_start_utc = day_start_ar.astimezone(_UTC).replace(tzinfo=None)
+    day_end_utc = now_utc - dt.timedelta(days=days_back)
+    return day_start_utc, day_end_utc
+
 log = logging.getLogger("unidata.today")
 
 ANCHORS_DAYS = {
@@ -84,19 +107,18 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
     if show_unistore and uni is not None:
         # --- GMV Unistore (TN paid + ML paid/conf/ship/del) por dia ---
         def gmv_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             tn = float(scalar(uni, """
                 SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END),0)
                 FROM tienda_nube."Order"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
             ml = float(scalar(uni, """
                 SELECT COALESCE(SUM(COALESCE(total_amount,0)),0)
                 FROM meli.meli_orders
-                WHERE date_created >= (CURRENT_DATE - :d)
-                  AND date_created < NOW() - make_interval(days => :d)
+                WHERE date_created >= :from_ts AND date_created < :to_ts
                   AND status IN ('paid','confirmed','shipped','delivered')
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
             return tn + ml
 
         blocks.append(_kpi_block(
@@ -108,16 +130,15 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
 
         # --- Ordenes Unistore por dia ---
         def orders_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             tn = int(scalar(uni, """
                 SELECT COUNT(*) FROM tienda_nube."Order"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
             ml = int(scalar(uni, """
                 SELECT COUNT(*) FROM meli.meli_orders
-                WHERE date_created >= (CURRENT_DATE - :d)
-                  AND date_created < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE date_created >= :from_ts AND date_created < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
             return tn + ml
 
         blocks.append(_kpi_block(
@@ -128,13 +149,13 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
 
         # --- AOV Unistore (TN paid del dia) ---
         def aov_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return float(scalar(uni, """
                 SELECT COALESCE(AVG(NULLIF(total,0)),0)
                 FROM tienda_nube."Order"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
                   AND "paymentStatus"='paid'
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Ticket promedio (TN)",
@@ -147,13 +168,13 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
     if show_unidrop and drop is not None:
         # --- Pagos Talo Unidrop por dia ---
         def talo_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return float(scalar(drop, """
                 SELECT COALESCE(SUM(amount),0)
                 FROM public."PaymentTransaction"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
                   AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Pagos Talo (Unidrop)",
@@ -164,11 +185,11 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
 
         # --- Usuarios nuevos Unidrop por dia ---
         def new_users_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(drop, """
                 SELECT COUNT(*) FROM public."User"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Usuarios nuevos (Unidrop)",
@@ -181,11 +202,11 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
         try:
             dev = get_engine("unidev")
             def dev_for_day(days_back: int) -> float:
+                from_ts, to_ts = _day_bounds(days_back)
                 return int(scalar(dev, """
                     SELECT COUNT(*) FROM public.devoluciones
-                    WHERE fecha_creacion >= (CURRENT_DATE - :d)
-                      AND fecha_creacion < NOW() - make_interval(days => :d)
-                """, {"d": days_back}) or 0)
+                    WHERE fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+                """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
             blocks.append(_kpi_block(
                 "Devoluciones (Unidev)",
                 {k: dev_for_day(d) for k, d in ANCHORS_DAYS.items()},
@@ -221,6 +242,7 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
 
         # Customers nuevos del dia (primera compra paid)
         def new_customers(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 WITH first_orders AS (
                     SELECT "customerId", MIN("createdAt") AS first_at
@@ -229,9 +251,8 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
                     GROUP BY "customerId"
                 )
                 SELECT COUNT(*) FROM first_orders
-                WHERE first_at >= (CURRENT_DATE - :d)
-                  AND first_at < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE first_at >= :from_ts AND first_at < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Customers nuevos (Unistore)",
@@ -241,20 +262,20 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
 
         # Customers recurrentes que volvieron hoy (paid orders del dia con cliente que ya tenia historial)
         def returning_customers(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COUNT(DISTINCT o."customerId")
                 FROM tienda_nube."Order" o
                 WHERE o."paymentStatus" = 'paid'
                   AND o."customerId" IS NOT NULL
-                  AND o."createdAt" >= (CURRENT_DATE - :d)
-                  AND o."createdAt" < NOW() - make_interval(days => :d)
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
                   AND EXISTS (
                     SELECT 1 FROM tienda_nube."Order" o2
                     WHERE o2."customerId" = o."customerId"
                       AND o2."paymentStatus" = 'paid'
                       AND o2."createdAt" < o."createdAt"
                   )
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Customers recurrentes (Unistore)",
@@ -264,12 +285,13 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
 
         # Cancelaciones del dia
         def cancellations(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COUNT(*) FROM tienda_nube."Order"
                 WHERE "status" = 'cancelled'
-                  AND COALESCE("cancelledAt", "createdAt") >= (CURRENT_DATE - :d)
-                  AND COALESCE("cancelledAt", "createdAt") < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                  AND COALESCE("cancelledAt", "createdAt") >= :from_ts
+                  AND COALESCE("cancelledAt", "createdAt") < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Cancelaciones del dia",
@@ -279,12 +301,13 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
 
         # Refunds (paymentStatus refunded)
         def refunds_amount(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return float(scalar(uni, """
                 SELECT COALESCE(SUM(total),0) FROM tienda_nube."Order"
                 WHERE "paymentStatus" = 'refunded'
-                  AND COALESCE("cancelledAt", "createdAt") >= (CURRENT_DATE - :d)
-                  AND COALESCE("cancelledAt", "createdAt") < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                  AND COALESCE("cancelledAt", "createdAt") >= :from_ts
+                  AND COALESCE("cancelledAt", "createdAt") < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Refunds (monto)",
@@ -313,14 +336,14 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
 
         # Distintos SKUs vendidos hoy (paid)
         def skus_vendidos(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COUNT(DISTINCT oi.sku) FROM tienda_nube."OrderItem" oi
                 JOIN tienda_nube."Order" o ON o.id = oi."orderId"
                 WHERE o."paymentStatus" = 'paid'
-                  AND o."createdAt" >= (CURRENT_DATE - :d)
-                  AND o."createdAt" < NOW() - make_interval(days => :d)
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
                   AND oi.sku IS NOT NULL
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "SKUs distintos vendidos",
@@ -330,13 +353,13 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
 
         # Unidades vendidas
         def unidades(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COALESCE(SUM(oi.quantity),0) FROM tienda_nube."OrderItem" oi
                 JOIN tienda_nube."Order" o ON o.id = oi."orderId"
                 WHERE o."paymentStatus" = 'paid'
-                  AND o."createdAt" >= (CURRENT_DATE - :d)
-                  AND o."createdAt" < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Unidades vendidas",
@@ -394,12 +417,12 @@ def _today_snapshot_logistica(unit: str | None = None) -> dict:
 
         # Pedidos creados hoy
         def created(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COUNT(*) FROM tienda_nube."Order"
-                WHERE "createdAt" >= (CURRENT_DATE - :d)
-                  AND "createdAt" < NOW() - make_interval(days => :d)
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
                   AND "paymentStatus" = 'paid'
-            """, {"d": days_back}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Ordenes pagadas (a despachar)",
@@ -409,12 +432,12 @@ def _today_snapshot_logistica(unit: str | None = None) -> dict:
 
         # Despachos hoy
         def despachados(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
             return int(scalar(uni, """
                 SELECT COUNT(DISTINCT dp."pedidoCodigo")
                 FROM digip."DespachoPedido" dp
-                WHERE dp.fecha >= (CURRENT_DATE - :d)
-                  AND dp.fecha < NOW() - make_interval(days => :d)
-            """, {"d": days_back}) or 0)
+                WHERE dp.fecha >= :from_ts AND dp.fecha < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
 
         blocks.append(_kpi_block(
             "Despachos Digip",

@@ -27,35 +27,49 @@ def resolve_window(
     - period='yesterday' → desde medianoche anterior hasta medianoche de hoy
     - period='custom' + from_iso/to_iso → esas fechas
     - cualquier otro     → últimos N días rolling desde ahora
-    Garantiza from_ts < to_ts. Siempre usa zona horaria Argentina (UTC-3)
-    para que 'today' coincida con el dia que ve el usuario, no con UTC.
+    Garantiza from_ts < to_ts.
+
+    IMPORTANTE: Las columnas createdAt/dateCreated en AWS RDS se almacenan como
+    TIMESTAMP WITHOUT TIME ZONE en UTC. Para comparar correctamente devolvemos
+    datetimes naive en UTC — la medianoche Argentina (UTC-3) es las 03:00 UTC,
+    no las 00:00 UTC (que corresponde a las 21:00 ART del dia anterior).
     """
+    _UTC = dt.timezone.utc
     now_tz = now_ar()
-    # Naive Argentina datetimes — sin timezone info para que PostgreSQL los trate
-    # como timestamps locales en la session timezone (America/Argentina/Buenos_Aires).
-    # Esto es equivalente a CURRENT_DATE::timestamp en SQL puro y evita el drift UTC
-    # que ocurre cuando se pasan datetimes timezone-aware a columnas TIMESTAMP naive.
-    now = now_tz.replace(tzinfo=None)
+    # UTC naive — base de todas las comparaciones contra columnas TIMESTAMP UTC
+    now = now_tz.astimezone(_UTC).replace(tzinfo=None)
+    AR_TZ = now_tz.tzinfo
+
     if period == "today":
-        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ar = now_tz.replace(hour=0, minute=0, second=0, microsecond=0)
+        start = start_ar.astimezone(_UTC).replace(tzinfo=None)
         return {"days": 1, "from_ts": start, "to_ts": now, "label": "today"}
     if period == "yesterday":
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        yesterday_start = today_start - dt.timedelta(days=1)
-        return {"days": 1, "from_ts": yesterday_start, "to_ts": today_start, "label": "yesterday"}
+        today_start_ar = now_tz.replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_start_ar = today_start_ar - dt.timedelta(days=1)
+        return {
+            "days": 1,
+            "from_ts": yesterday_start_ar.astimezone(_UTC).replace(tzinfo=None),
+            "to_ts": today_start_ar.astimezone(_UTC).replace(tzinfo=None),
+            "label": "yesterday",
+        }
     if period == "custom" and from_iso and to_iso:
         try:
             f = dt.datetime.fromisoformat(from_iso)
-            if f.tzinfo is not None:
-                f = f.astimezone(now_tz.tzinfo).replace(tzinfo=None)
+            if f.tzinfo is None:
+                f = f.replace(tzinfo=AR_TZ)
+            f_utc = f.astimezone(_UTC).replace(tzinfo=None)
+
             t = dt.datetime.fromisoformat(to_iso)
-            if t.tzinfo is not None:
-                t = t.astimezone(now_tz.tzinfo).replace(tzinfo=None)
-            t = t + dt.timedelta(days=1)
-            if t <= f:
-                t = f + dt.timedelta(days=1)
-            days = max(1, (t - f).days)
-            return {"days": days, "from_ts": f, "to_ts": t, "label": f"{from_iso} → {to_iso}"}
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=AR_TZ)
+            t = t + dt.timedelta(days=1)  # incluir el dia completo
+            t_utc = t.astimezone(_UTC).replace(tzinfo=None)
+
+            if t_utc <= f_utc:
+                t_utc = f_utc + dt.timedelta(days=1)
+            days = max(1, int((t_utc - f_utc).total_seconds() / 86400))
+            return {"days": days, "from_ts": f_utc, "to_ts": t_utc, "label": f"{from_iso} → {to_iso}"}
         except Exception:
             pass
     days = PERIOD_DAYS_DEFAULT.get(period, 30)

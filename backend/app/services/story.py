@@ -44,13 +44,21 @@ def _delta_phrase(now: float, prev: float) -> str:
 # "Ayer misma hora": mismo intervalo corrido 24h hacia atras
 
 def _tw(col: str) -> str:
-    """Fragmento WHERE para hoy hasta NOW() sobre la columna dada."""
-    return f"{col} >= CURRENT_DATE::timestamp AND {col} <= NOW()"
+    """Fragmento WHERE para hoy hasta NOW() sobre la columna dada (UTC-aware).
+    Las columnas TIMESTAMP sin TZ almacenan UTC, por eso convertimos
+    medianoche Argentina a UTC antes de comparar."""
+    return (
+        f"{col} >= (CURRENT_DATE::timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires' AT TIME ZONE 'UTC')"
+        f" AND {col} < (NOW() AT TIME ZONE 'UTC')"
+    )
 
 
 def _yw(col: str) -> str:
-    """Fragmento WHERE para ayer hasta la misma hora de NOW()."""
-    return f"{col} >= (CURRENT_DATE - 1)::timestamp AND {col} <= NOW() - INTERVAL '1 day'"
+    """Fragmento WHERE para ayer hasta la misma hora de NOW() (UTC-aware)."""
+    return (
+        f"{col} >= ((CURRENT_DATE - 1)::timestamp AT TIME ZONE 'America/Argentina/Buenos_Aires' AT TIME ZONE 'UTC')"
+        f" AND {col} < ((NOW() - INTERVAL '1 day') AT TIME ZONE 'UTC')"
+    )
 
 
 def today_story() -> dict:

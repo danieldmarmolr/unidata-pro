@@ -654,6 +654,13 @@ def unidrop_orders_combined_paid(period: str = "30d", from_iso: str | None = Non
 
 def unidrop_dropshippers_active_today() -> dict:
     """Dropshippers con al menos una venta hoy (TN o MELI Unidrop), ordenados por GMV desc."""
+    import datetime as dt
+    from app.utils.tz import now_ar
+    _UTC = dt.timezone.utc
+    now_tz = now_ar()
+    today_start_utc = now_tz.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(_UTC).replace(tzinfo=None)
+    now_utc = now_tz.astimezone(_UTC).replace(tzinfo=None)
+
     eng = get_engine("unidrop")
     rows = q(eng, """
         SELECT
@@ -668,12 +675,12 @@ def unidrop_dropshippers_active_today() -> dict:
         FROM public."User" u
         LEFT JOIN public.tienda_nube_orders tn
             ON tn.user_id = u.id
-            AND tn.created_at >= CURRENT_DATE::timestamp AND tn.created_at <= NOW()
+            AND tn.created_at >= :today_start AND tn.created_at <= :now_utc
             AND tn.payment_status = 'paid'
         LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla ON mla."userId" = u.id
         LEFT JOIN mercado_libre_dev."OrderMercadoLibre" ml
             ON ml."sellerId"::text = mla."mlUserId"::text
-            AND ml."dateCreated" >= CURRENT_DATE::timestamp AND ml."dateCreated" <= NOW()
+            AND ml."dateCreated" >= :today_start AND ml."dateCreated" <= :now_utc
             AND ml.status IN ('paid','confirmed','shipped','delivered')
         WHERE (
             (tn.tienda_nube_id IS NOT NULL)
@@ -682,7 +689,7 @@ def unidrop_dropshippers_active_today() -> dict:
         GROUP BY u.id, u.fantasy_name, u.name, u.email, u.dni
         ORDER BY (COALESCE(SUM(tn.total), 0) + COALESCE(SUM(ml."totalAmount"), 0)) DESC
         LIMIT 500
-    """) or []
+    """, {"today_start": today_start_utc, "now_utc": now_utc}) or []
     return _serialize(rows, [
         "dropshipper_id", "nombre", "email", "dni",
         "gmv_tn", "ordenes_tn", "gmv_ml", "ordenes_ml",
