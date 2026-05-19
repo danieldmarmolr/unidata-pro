@@ -81,7 +81,7 @@ export function CellRenderer({
     if (orderId) {
       return (
         <a
-          href={tnAdminUrl(orderId)}
+          href={tnAdminUrl(String(orderId))}
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-1 text-primary hover:underline font-mono"
