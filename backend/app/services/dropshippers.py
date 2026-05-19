@@ -1130,7 +1130,7 @@ def dropshipper_detail(
 
     # Vista unificada estilo Unidrop panel (filas ML + TN combinadas por fecha)
     try:
-        unified_orders = dropshipper_unified_orders(int(user_id), limit=200, dni=drop_dni or None)
+        unified_orders = dropshipper_unified_orders(int(user_id), limit=2000, dni=drop_dni or None)
     except Exception as e:
         log.warning("dropshipper unified_orders fail uid=%s: %s", user_id, e)
         unified_orders = []
@@ -1188,7 +1188,7 @@ def dropshipper_detail(
         "ultimas_ventas": orders,
         "ultimas_ventas_tn": tn_orders_list,
         "ultimos_pagos": pagos_list,
-        "unified_orders": unified_orders,
+        "unified_orders": [],  # siempre vacío: el frontend los carga via /unified-orders
         "combo_analytics": combo_analytics,
         "top_clientes_finales": top_clientes_finales,
         "suscripciones": {

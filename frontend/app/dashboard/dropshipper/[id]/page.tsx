@@ -404,6 +404,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const recencyD = recencyDays(v.ultima_venta);
   const tokenDays = recencyDays(u.token_expira);
   const subActiva = u.sub_status?.toLowerCase() === "active" || (u.dias_al_vencimiento ?? -1) > 0;
+  const gmvMl = v.gmv;
+  const gmvTn = data.ventas_tn?.gmv ?? 0;
+  const gmvTotal = gmvMl + gmvTn;
+  const ventasTotalCnt = v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0);
+  const hasMl = gmvMl > 0 || v.ventas_pagadas > 0;
+  const hasTn = gmvTn > 0 || (data.ventas_tn?.ventas_pagadas ?? 0) > 0;
+  const gananciaDrop = gmvTotal - (pg.pagado_total_period ?? 0);
 
   return (
     <>
@@ -548,81 +555,40 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               </span>
             )}
           </div>
-        </div>
 
-        {/* KPIs principales */}
-        {(() => {
-          const gmvMl = v.gmv;
-          const gmvTn = data.ventas_tn?.gmv ?? 0;
-          const gmvTotal = gmvMl + gmvTn;
-          const ventasTotalCnt = v.ventas_pagadas + (data.ventas_tn?.ventas_pagadas ?? 0);
-          const hasMl = gmvMl > 0 || v.ventas_pagadas > 0;
-          const hasTn = gmvTn > 0 || (data.ventas_tn?.ventas_pagadas ?? 0) > 0;
-          const mixHint = hasMl && hasTn
-            ? `ML ${formatCurrency(gmvMl)} · TN ${formatCurrency(gmvTn)}`
-            : hasTn ? "Solo TN" : hasMl ? "Solo MELI" : "Sin ventas";
-          return <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
-          <KpiBox
-            icon={DollarSign}
-            label="Ingreso omnicanal"
-            value={formatCurrency(gmvTotal)}
-            accent="emerald"
-            hint={mixHint}
-          />
-          {(() => {
-            const gananciaDrop = gmvTotal - (pg.pagado_total_period ?? 0);
-            return (
-              <KpiBox icon={Wallet} label="Ganancia dropshipper" value={formatCurrency(gananciaDrop)} accent="primary"
-                      hint={`Ingreso ${formatCurrency(gmvTotal)} − pagado a Unidrop ${formatCurrency(pg.pagado_total_period ?? 0)} (sin suscripción)`} />
-            );
-          })()}
-          <KpiBox
-            icon={TrendingUp}
-            label="Ticket a Unidrop"
-            value={formatCurrency(v.ticket_promedio_intent ?? v.ticket_promedio)}
-            accent="amber"
-            hint={
-              v.ticket_promedio_intent !== undefined && v.ticket_promedio_intent > 0
-                ? `Promedio pagado por orden (PI / ${formatNumber(v.ventas_pagadas_intent ?? v.ventas_pagadas)} órd)`
-                : "Promedio GMV por venta MELI"
-            }
-          />
-          <KpiBox
-            icon={ShoppingBag}
-            label="Órdenes pagadas"
-            value={formatNumber(ventasTotalCnt)}
-            accent="primary"
-            hint={hasMl && hasTn
-              ? `ML ${formatNumber(v.ventas_pagadas)} · TN ${formatNumber(data.ventas_tn!.ventas_pagadas)}`
-              : v.canceladas > 0 ? `${v.canceladas} canceladas (${v.tasa_cancelacion_pct}%)` : `${formatNumber(v.ventas_pagadas)} ML · ${formatNumber(data.ventas_tn?.ventas_pagadas ?? 0)} TN`}
-          />
-          <KpiBox
-            icon={Calendar}
-            label="Última venta"
-            value={v.ultima_venta_number || (recencyD === null ? "Sin ventas" : recencyD === 0 ? "Hoy" : `${recencyD}d atrás`)}
-            accent={recencyD === null ? "rose" : recencyD <= 30 ? "emerald" : "amber"}
-            hint={v.ultima_venta?.slice(0, 16) || "Aún no vendió"}
-            mono={!!v.ultima_venta_number}
-          />
-          <KpiBox
-            icon={CreditCard}
-            label="Deuda Talo"
-            value={formatCurrency(pg.deuda_pendiente)}
-            accent={pg.deuda_pendiente > 0 ? "rose" : "emerald"}
-            hint={pg.pagos_con_deuda > 0 ? `${pg.pagos_con_deuda} intents pendientes` : "Al día"}
-          />
-        </div>
-
-        {/* KPIs secundarios */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-          <KpiBox icon={CreditCard} label="Pagado a Unidrop (total)" value={formatCurrency(pg.pagado_total)} accent="emerald"
-                  hint={`Histórico · ${pg.procesados} pagos PROCESSED de ${pg.total_intents}`} />
-          <KpiBox icon={Wallet} label="Margen Unidrop (ML)" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="profit_for_subscription: lo que gana Unidrop por cada orden ML pagada" />
-          <KpiBox icon={DollarSign} label="Costo mercadería" value={formatCurrency(v.costo_mercaderia)} accent="amber"
-                  hint="Suma costos de mercadería en órdenes ML pagadas" />
-          <KpiBox icon={Package} label="Publicaciones activas" value={formatNumber(pubs.activas)} accent="primary"
-                  hint={`${pubs.totales} totales · max ${u.plan_pub_max}`} />
+          {/* KPIs rápidos del período */}
+          <div className="mt-4 pt-4 border-t border-border/40 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-4 gap-y-3">
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Ingreso Omnicanal</div>
+              <div className="text-sm font-extrabold text-emerald-700 tabular-nums">{formatCurrency(gmvTotal)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Pago Mercadería</div>
+              <div className="text-sm font-extrabold text-text tabular-nums">{formatCurrency(v.costo_mercaderia)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Pago Envíos</div>
+              <div className="text-sm font-extrabold text-text tabular-nums">{formatCurrency(v.costo_envio)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Ganancia Drop.</div>
+              <div className="text-sm font-extrabold text-primary tabular-nums">{formatCurrency(gananciaDrop)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Órdenes Pagadas</div>
+              <div className="text-sm font-extrabold text-text tabular-nums">{formatNumber(ventasTotalCnt)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Ticket a Unidrop</div>
+              <div className="text-sm font-extrabold text-amber-700 tabular-nums">{formatCurrency(v.ticket_promedio_intent ?? v.ticket_promedio)}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Última Venta</div>
+              <div className={`text-sm font-extrabold tabular-nums ${recencyD === null ? "text-rose-600" : recencyD <= 30 ? "text-emerald-700" : "text-amber-600"}`}>
+                {v.ultima_venta_number || (recencyD === null ? "Sin ventas" : recencyD === 0 ? "Hoy" : `${recencyD}d atrás`)}
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Segmentación omnicanal — ML vs TN, visible siempre aunque uno sea 0 */}
@@ -665,8 +631,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               })()}
             </div>
           </div>
-        </div>;
-        })()}
+        </div>
 
         {/* Ventas pagadas a Unidrop (PaymentIntent) - desglose TN/ML + suscripciones */}
         {(pg.pagado_total_period !== undefined && (pg.pagado_total_period > 0 || (data.suscripciones?.total_pagado ?? 0) > 0)) && (
