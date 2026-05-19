@@ -11,7 +11,52 @@ type Dropshipper = {
   subscription_plan_name: string | null;
 };
 
+type BankHints = {
+  source: string;
+  cbu: string;
+  alias: string | null;
+  bank_name: string | null;
+  holder_name: string | null;
+};
+
+type PaidSubscription = {
+  total_arg: number;
+  count: number;
+};
+
+type ValidateResp = {
+  ok: true;
+  dropshipper: Dropshipper;
+  bank_hints: BankHints | null;
+  paid_subscription: PaidSubscription | null;
+};
+
 type Step = "identify" | "bank_data" | "success";
+
+const ABANDONMENT_REASONS: Array<{ value: string; label: string }> = [
+  { value: "costo_muy_alto",            label: "El costo es muy alto para mis ventas" },
+  { value: "sin_ventas_suficientes",    label: "No tuve ventas suficientes" },
+  { value: "mala_experiencia_meli",     label: "Mala experiencia con Mercado Libre" },
+  { value: "solo_tn",                   label: "Voy a operar solo por Tienda Nube" },
+  { value: "cierro_emprendimiento",     label: "Cierro mi emprendimiento" },
+  { value: "problemas_tecnicos_unidrop", label: "Problemas técnicos con Unidrop" },
+  { value: "otra",                      label: "Otra (escribir abajo)" },
+];
+
+function fmtMoney(v: number): string {
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency", currency: "ARS", maximumFractionDigits: 0,
+  }).format(v);
+}
+
+function matchBank(talo: string | null, list: string[]): string {
+  if (!talo) return "";
+  const t = talo.toLowerCase();
+  for (const b of list) {
+    if (t.includes(b.toLowerCase()) || b.toLowerCase().includes(t)) return b;
+  }
+  return "";
+}
 
 const BANCOS_AR = [
   "Galicia",
@@ -71,6 +116,9 @@ export default function DevSuscripcionPage() {
   const [dni, setDni] = useState("");
   const [email, setEmail] = useState("");
   const [dropshipper, setDropshipper] = useState<Dropshipper | null>(null);
+  const [bankHints, setBankHints] = useState<BankHints | null>(null);
+  const [paidSub, setPaidSub] = useState<PaidSubscription | null>(null);
+  const [hintsApplied, setHintsApplied] = useState(false);
 
   // Step 2
   const [bankHolderName, setBankHolderName] = useState("");
@@ -80,6 +128,7 @@ export default function DevSuscripcionPage() {
   const [bankCbu, setBankCbu] = useState("");
   const [bankAlias, setBankAlias] = useState("");
   const [refundAmount, setRefundAmount] = useState("");
+  const [abandonmentReason, setAbandonmentReason] = useState("");
   const [reason, setReason] = useState("");
 
   // Step 3
@@ -99,12 +148,29 @@ export default function DevSuscripcionPage() {
     }
     setLoading(true);
     try {
-      const data = await fetchJson<{ ok: true; dropshipper: Dropshipper }>(
+      const data = await fetchJson<ValidateResp>(
         "/api/public/refund-requests/validate",
         { dni: cleanDni, email: email.trim() },
       );
       setDni(cleanDni);
       setDropshipper(data.dropshipper);
+      setBankHints(data.bank_hints);
+      setPaidSub(data.paid_subscription);
+      // Pre-rellena Step 2 con los datos de la cuenta Talo si existen.
+      if (data.bank_hints && !hintsApplied) {
+        const h = data.bank_hints;
+        if (h.holder_name) setBankHolderName(h.holder_name);
+        if (h.cbu) setBankCbu(h.cbu.replace(/\D/g, "").slice(0, 22));
+        if (h.alias) setBankAlias(h.alias);
+        const matched = matchBank(h.bank_name, BANCOS_AR.filter((b) => b !== "Otro"));
+        if (matched) {
+          setBankName(matched);
+        } else if (h.bank_name) {
+          setBankName("Otro");
+          setBankNameOther(h.bank_name);
+        }
+        setHintsApplied(true);
+      }
       setStep("bank_data");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error de validación");
@@ -146,6 +212,14 @@ export default function DevSuscripcionPage() {
       setError("Monto inválido.");
       return;
     }
+    if (!abandonmentReason) {
+      setError("Decinos por qué cancelás, así sabemos cómo mejorar.");
+      return;
+    }
+    if (abandonmentReason === "otra" && reason.trim().length < 5) {
+      setError("Si elegís 'Otra', contanos brevemente en el comentario (mín 5 caracteres).");
+      return;
+    }
 
     setLoading(true);
     try {
@@ -160,6 +234,7 @@ export default function DevSuscripcionPage() {
           bank_cbu: cleanCbu,
           bank_alias: cleanAlias || null,
           refund_amount_arg: amount,
+          abandonment_reason: abandonmentReason,
           reason: reason.trim() || null,
         },
       );
@@ -261,9 +336,24 @@ export default function DevSuscripcionPage() {
                   )}
                   .
                 </p>
-                <p className="text-xs text-text-muted mb-6">
+                <p className="text-xs text-text-muted mb-4">
                   Completá los datos de la cuenta donde querés recibir la devolución.
                 </p>
+
+                {paidSub && paidSub.count > 0 && (
+                  <div className="mb-4 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2.5 text-xs text-text">
+                    Hasta hoy pagaste{" "}
+                    <span className="font-bold text-primary">{fmtMoney(paidSub.total_arg)}</span>{" "}
+                    en suscripción ({paidSub.count} cobro{paidSub.count > 1 ? "s" : ""} procesado{paidSub.count > 1 ? "s" : ""}).
+                  </div>
+                )}
+
+                {bankHints && (
+                  <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-text">
+                    Pre-cargamos los datos de tu cuenta Talo registrada.
+                    Verificalos antes de enviar — podés editarlos si querés cobrar en otra cuenta.
+                  </div>
+                )}
 
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div>
@@ -365,7 +455,23 @@ export default function DevSuscripcionPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">
-                      Motivo (opcional)
+                      ¿Por qué cancelás? <span className="text-error">*</span>
+                    </label>
+                    <select
+                      value={abandonmentReason}
+                      onChange={(e) => setAbandonmentReason(e.target.value)}
+                      required
+                      className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg text-text outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
+                    >
+                      <option value="">Seleccioná una opción...</option>
+                      {ABANDONMENT_REASONS.map((r) => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">
+                      Comentario adicional {abandonmentReason === "otra" ? <span className="text-error">*</span> : "(opcional)"}
                     </label>
                     <textarea
                       value={reason}
@@ -373,7 +479,11 @@ export default function DevSuscripcionPage() {
                       maxLength={2000}
                       rows={3}
                       className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg text-text outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition resize-none"
-                      placeholder="Contanos por qué cancelás (no es obligatorio)"
+                      placeholder={
+                        abandonmentReason === "otra"
+                          ? "Contanos qué motivo es"
+                          : "Cualquier detalle adicional (opcional)"
+                      }
                     />
                   </div>
 

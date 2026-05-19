@@ -29,6 +29,16 @@ _DNI_RE = re.compile(r"^\d{7,8}$")
 _CBU_RE = re.compile(r"^\d{22}$")
 _CUIT_RE = re.compile(r"^\d{11}$")
 
+ABANDONMENT_REASONS = (
+    "costo_muy_alto",
+    "sin_ventas_suficientes",
+    "mala_experiencia_meli",
+    "solo_tn",
+    "cierro_emprendimiento",
+    "problemas_tecnicos_unidrop",
+    "otra",
+)
+
 
 class ValidateBody(BaseModel):
     dni: str = Field(..., min_length=7, max_length=8)
@@ -52,7 +62,18 @@ class SubmitBody(BaseModel):
     bank_cbu: str = Field(..., min_length=22, max_length=22)
     bank_alias: str | None = Field(default=None, max_length=50)
     refund_amount_arg: float | None = Field(default=None, ge=0)
+    abandonment_reason: str = Field(..., min_length=1, max_length=80)
     reason: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("abandonment_reason")
+    @classmethod
+    def _abandon(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in ABANDONMENT_REASONS:
+            raise ValueError(
+                f"abandonment_reason invalido. Validos: {', '.join(ABANDONMENT_REASONS)}"
+            )
+        return v
 
     @field_validator("dni")
     @classmethod
@@ -114,6 +135,8 @@ def validate(request: Request, body: ValidateBody) -> dict:
             "subscription_id": ds["subscription_id"],
             "subscription_plan_name": ds["subscription_plan_name"],
         },
+        "bank_hints": ds.get("bank_hints"),
+        "paid_subscription": ds.get("paid_subscription"),
     }
 
 
@@ -136,6 +159,8 @@ def submit(request: Request, body: SubmitBody) -> dict:
 
     submitter_ip = request.client.host if request.client else None
 
+    paid_sub = ds.get("paid_subscription") or {}
+
     try:
         created = refund_requests_db.create_request(
             dropshipper_user_id=ds["id"],
@@ -151,6 +176,9 @@ def submit(request: Request, body: SubmitBody) -> dict:
             bank_cbu=body.bank_cbu,
             bank_alias=body.bank_alias,
             refund_amount_arg=body.refund_amount_arg,
+            paid_subscription_total_arg=paid_sub.get("total_arg"),
+            paid_subscription_count=paid_sub.get("count"),
+            abandonment_reason=body.abandonment_reason,
             reason=(body.reason or "").strip() or None,
             submitter_ip=submitter_ip,
         )

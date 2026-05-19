@@ -46,6 +46,9 @@ def init() -> None:
                     bank_cbu                         TEXT NOT NULL,
                     bank_alias                       TEXT,
                     refund_amount_arg                NUMERIC(12,2),
+                    paid_subscription_total_arg      NUMERIC(12,2),
+                    paid_subscription_count          INT,
+                    abandonment_reason               TEXT NOT NULL DEFAULT 'no_especificada',
                     reason                           TEXT,
                     status                           TEXT NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','transferred','integration_cancelled','rejected')),
@@ -65,6 +68,14 @@ def init() -> None:
                     created_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
+            """)
+            # Migracion idempotente: ADD COLUMN IF NOT EXISTS para tablas
+            # ya creadas con la version anterior (sin abandonment_reason).
+            cur.execute("""
+                ALTER TABLE subscription_refund_requests
+                ADD COLUMN IF NOT EXISTS paid_subscription_total_arg NUMERIC(12,2),
+                ADD COLUMN IF NOT EXISTS paid_subscription_count     INT,
+                ADD COLUMN IF NOT EXISTS abandonment_reason          TEXT NOT NULL DEFAULT 'no_especificada'
             """)
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_refundreq_status "
@@ -97,6 +108,9 @@ def create_request(
     bank_cbu: str,
     bank_alias: str | None,
     refund_amount_arg: float | None,
+    paid_subscription_total_arg: float | None,
+    paid_subscription_count: int | None,
+    abandonment_reason: str,
     reason: str | None,
     submitter_ip: str | None,
 ) -> dict:
@@ -111,8 +125,10 @@ def create_request(
                      dropshipper_name, dropshipper_fantasy_name,
                      subscription_id, subscription_plan_name,
                      bank_holder_name, bank_holder_cuit, bank_name, bank_cbu, bank_alias,
-                     refund_amount_arg, reason, submitter_ip)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     refund_amount_arg,
+                     paid_subscription_total_arg, paid_subscription_count,
+                     abandonment_reason, reason, submitter_ip)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -120,7 +136,9 @@ def create_request(
                     dropshipper_name, dropshipper_fantasy_name,
                     subscription_id, subscription_plan_name,
                     bank_holder_name, bank_holder_cuit, bank_name, bank_cbu, bank_alias,
-                    refund_amount_arg, reason, submitter_ip,
+                    refund_amount_arg,
+                    paid_subscription_total_arg, paid_subscription_count,
+                    abandonment_reason, reason, submitter_ip,
                 ),
             )
             return _to_dict(cur.fetchone())
@@ -261,6 +279,7 @@ def _to_dict(row: dict | None) -> dict:
     ):
         if k in d and d[k] is not None and not isinstance(d[k], str):
             d[k] = d[k].isoformat()
-    if "refund_amount_arg" in d and d["refund_amount_arg"] is not None:
-        d["refund_amount_arg"] = float(d["refund_amount_arg"])
+    for k in ("refund_amount_arg", "paid_subscription_total_arg"):
+        if k in d and d[k] is not None:
+            d[k] = float(d[k])
     return d

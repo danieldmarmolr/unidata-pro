@@ -26,6 +26,9 @@ type Request = {
   bank_cbu: string;
   bank_alias: string | null;
   refund_amount_arg: number | null;
+  paid_subscription_total_arg: number | null;
+  paid_subscription_count: number | null;
+  abandonment_reason: string | null;
   reason: string | null;
   status: Status;
   transferred_at: string | null;
@@ -43,6 +46,17 @@ type Request = {
 };
 
 type Resp = { items: Request[]; count: number };
+
+const ABANDONMENT_LABELS: Record<string, string> = {
+  costo_muy_alto:               "Costo muy alto",
+  sin_ventas_suficientes:       "Sin ventas suficientes",
+  mala_experiencia_meli:        "Mala experiencia MELI",
+  solo_tn:                      "Solo opera por TN",
+  cierro_emprendimiento:        "Cierra emprendimiento",
+  problemas_tecnicos_unidrop:   "Problemas técnicos Unidrop",
+  otra:                         "Otra",
+  no_especificada:              "No especificada (legacy)",
+};
 
 const STATUS_META: Record<Status, { label: string; color: string; bg: string; border: string }> = {
   pending: {
@@ -247,8 +261,14 @@ function RequestCard({ request: r }: { request: Request }) {
           <div className="text-xs text-text-muted">
             DNI {r.dropshipper_dni} · {r.dropshipper_email}
             {r.subscription_plan_name && <> · plan {r.subscription_plan_name}</>}
+            {r.paid_subscription_total_arg != null && r.paid_subscription_total_arg > 0 && (
+              <> · pagó <span className="font-semibold text-text">{fmtMoney(r.paid_subscription_total_arg)}</span> ({r.paid_subscription_count} cobros)</>
+            )}
             {r.refund_amount_arg != null && (
               <> · solicita <span className="font-semibold text-text">{fmtMoney(r.refund_amount_arg)}</span></>
+            )}
+            {r.abandonment_reason && (
+              <> · <span className="font-semibold text-text">{ABANDONMENT_LABELS[r.abandonment_reason] ?? r.abandonment_reason}</span></>
             )}
           </div>
         </div>
@@ -275,13 +295,29 @@ function RequestCard({ request: r }: { request: Request }) {
               <Field label="CBU/CVU" value={r.bank_cbu} copyable mono />
               <Field label="Alias" value={r.bank_alias ?? "—"} copyable={!!r.bank_alias} />
               <Field label="Monto solicitado" value={fmtMoney(r.refund_amount_arg)} />
+              <Field
+                label="Total pagado en suscripción"
+                value={
+                  r.paid_subscription_total_arg != null
+                    ? `${fmtMoney(r.paid_subscription_total_arg)} (${r.paid_subscription_count ?? 0} cobros)`
+                    : "—"
+                }
+              />
+              <Field
+                label="Causa de abandono"
+                value={
+                  r.abandonment_reason
+                    ? (ABANDONMENT_LABELS[r.abandonment_reason] ?? r.abandonment_reason)
+                    : "—"
+                }
+              />
             </div>
           </div>
 
           {r.reason && (
             <div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">
-                Motivo del dropshipper
+                Comentario adicional del dropshipper
               </div>
               <div className="text-xs text-text bg-bg border border-border rounded p-2 italic whitespace-pre-line">
                 "{r.reason}"
