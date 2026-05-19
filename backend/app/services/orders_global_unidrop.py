@@ -151,15 +151,20 @@ def orders_global_unidrop(
     where_sql = " AND ".join(where_clauses)
     params: dict = {**date_params, **extra_params}
 
-    # Diagnostic: count DROP orders without date filter to verify data exists
-    _ml_total = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
-    _tn_total = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders")
-    log.warning("orders_global_unidrop DIAG: ml_drop_total=%s tn_total=%s", _ml_total, _tn_total)
+    # Diagnostic: test each source independently with date filter
+    _ml_nd = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
+    _ml_d = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\' AND "dateCreated" >= :from_ts AND "dateCreated" < :to_ts', date_params)
+    _ml_max = scalar(eng, 'SELECT MAX("dateCreated")::text FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
+    _tn_nd = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders")
+    _tn_d = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders WHERE created_at >= :from_ts AND created_at < :to_ts", date_params)
+    _tn_max = scalar(eng, "SELECT MAX(created_at)::text FROM public.tienda_nube_orders")
+    log.warning("DIAG ML: no_date=%s with_date=%s max_date=%s", _ml_nd, _ml_d, _ml_max)
+    log.warning("DIAG TN: no_date=%s with_date=%s max_date=%s", _tn_nd, _tn_d, _tn_max)
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
-    log.warning("orders_global_unidrop RESULT: total_with_filter=%d params=%s", total, params)
+    log.warning("orders_global_unidrop RESULT: total=%d from=%s to=%s", total, win["from_ts"], win["to_ts"])
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha,
