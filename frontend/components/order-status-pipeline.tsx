@@ -112,7 +112,8 @@ export function shippingChannelIcon(canal: string | null | undefined) {
   if (c.includes("moto") || c.includes("cadeter")) return Bike;
   if (c.includes("oca") || c.includes("andreani") || c.includes("correo")) return Mail;
   if (c.includes("unifast")) return Truck;
-  if (c.includes("personalizado") || c.includes("convenir")) return Package;
+  if (c.includes("personalizado") || c.includes("convenir") || c.includes("efectivo")) return Package;
+  if (c.includes("digital")) return Box;
   return Truck;
 }
 
@@ -124,6 +125,7 @@ const CHANNEL_COLORS: Record<string, string> = {
   "Moto / Cadeteria": "bg-violet-50 text-violet-700 border-violet-200",
   "Andreani": "bg-indigo-50 text-indigo-700 border-indigo-200",
   "Personalizado": "bg-amber-50 text-amber-700 border-amber-200",
+  "Digital": "bg-purple-50 text-purple-700 border-purple-200",
   "(sin metodo)": "bg-zinc-50 text-zinc-500 border-zinc-200",
   "Otro": "bg-zinc-50 text-zinc-600 border-zinc-200",
 };

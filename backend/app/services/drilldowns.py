@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, col_or_null
+from app.services._utils import q, col_or_null, list_columns
 from app.services._utils import resolve_window
 
 log = logging.getLogger("unidata.drilldowns")
@@ -16,44 +16,52 @@ PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 
 def _shipping_method_expr(eng) -> str:
-    """Detecta dinamicamente la columna que mejor represente el metodo de envio
-    en TN. Devuelve un fragmento SQL que se puede usar directamente como columna
-    derivada llamada `metodo_envio`. Soporta:
-        - Order.shippingOption (string descriptivo TN, ej "Envio Nube - Correo Argentino Clasico")
-        - Order.shippingPickupType (pickup vs ship)
-        - Fulfillment.trackingCompany (carrier real)
-    Si nada existe devuelve NULL::text.
+    """Detecta dinamicamente la columna que mejor represente el metodo de envio en TN.
+    Prioridad: Fulfillment.optionName (label exacto de TN) > carrierName > Order fallbacks.
+    Si nada existe devuelve NULL::text AS metodo_envio.
     """
     parts = []
-    o = col_or_null(eng, "tienda_nube", "Order", "o", [
-        "shippingOption", "shipping_option",
-        "shippingMethod", "shipping_method",
-        "shippingPickupType", "shipping_pickup_type",
+    # optionName = etiqueta canonoca TN ("OCA - Puerta a Puerta", "Microcentro Unistore", etc.)
+    opt = col_or_null(eng, "tienda_nube", "Fulfillment", "f", ["optionName", "option_name"])
+    if opt != "NULL::text":
+        parts.append(opt)
+    # carrierName = carrier real post-despacho
+    carrier = col_or_null(eng, "tienda_nube", "Fulfillment", "f", [
+        "carrierName", "carrier", "trackingCompany", "tracking_company",
     ])
-    if o != "NULL::text":
-        parts.append(o)
-    f = col_or_null(eng, "tienda_nube", "Fulfillment", "f", [
-        "trackingCompany", "tracking_company", "carrierName", "carrier",
+    if carrier != "NULL::text":
+        parts.append(carrier)
+    # Order fallbacks (actualmente no existen en el schema pero defensivo)
+    o_ship = col_or_null(eng, "tienda_nube", "Order", "o", [
+        "shippingOption", "shipping_option", "shippingMethod", "shipping_method",
     ])
-    if f != "NULL::text":
-        parts.append(f)
+    if o_ship != "NULL::text":
+        parts.append(o_ship)
     if not parts:
         return "NULL::text AS metodo_envio"
-    # COALESCE primero el carrier real (Fulfillment), luego el option de Order
-    expr = "COALESCE(" + ", ".join(reversed(parts)) + ")"
+    expr = "COALESCE(" + ", ".join(parts) + ")"
     return f"NULLIF(TRIM({expr}::text), '') AS metodo_envio"
 
 
-def _classify_channel_sql(method_alias: str = "metodo_envio") -> str:
-    """Devuelve un CASE SQL que clasifica el metodo en canales discretos:
-    OCA / Correo Argentino / Unifast / Retiro presencial / Personalizado / Otro.
-    Recibe el alias de la columna ya calculada."""
+def _shipping_type_col(eng) -> str | None:
+    """Devuelve f."shippingType" si la columna existe en Fulfillment, si no None."""
+    ful_cols = list_columns(eng, "tienda_nube", "Fulfillment")
+    return 'f."shippingType"' if "shippingType" in ful_cols else None
+
+
+def _classify_channel_sql(method_alias: str = "metodo_envio", type_alias: str | None = None) -> str:
+    """CASE SQL que clasifica el metodo en canales discretos.
+    type_alias: expresion SQL de shippingType ('pickup'/'ship') — si se pasa,
+    los pickups se clasifican directamente sin depender del texto del metodo."""
+    pickup_clause = f"WHEN {type_alias} = 'pickup' THEN 'Retiro presencial'" if type_alias else ""
     return f"""
         CASE
+          {pickup_clause}
           WHEN {method_alias} ILIKE '%oca%'                                 THEN 'OCA'
           WHEN {method_alias} ILIKE '%correo argentino%'
             OR {method_alias} ILIKE '%correo nube%'
-            OR {method_alias} ILIKE '%envio nube%'                          THEN 'Correo Argentino'
+            OR {method_alias} ILIKE '%envio nube%'
+            OR {method_alias} ILIKE '%envío nube%'                          THEN 'Correo Argentino'
           WHEN {method_alias} ILIKE '%unifast%'                             THEN 'Unifast'
           WHEN {method_alias} ILIKE '%retiro%'
             OR {method_alias} ILIKE '%pickup%'
@@ -62,7 +70,9 @@ def _classify_channel_sql(method_alias: str = "metodo_envio") -> str:
           WHEN {method_alias} ILIKE '%moto%'                                THEN 'Moto / Cadeteria'
           WHEN {method_alias} ILIKE '%andreani%'                            THEN 'Andreani'
           WHEN {method_alias} ILIKE '%personalizado%'
-            OR {method_alias} ILIKE '%a convenir%'                          THEN 'Personalizado'
+            OR {method_alias} ILIKE '%a convenir%'
+            OR {method_alias} ILIKE '%efectivo%'                            THEN 'Personalizado'
+          WHEN {method_alias} ILIKE '%digital%'                             THEN 'Digital'
           WHEN {method_alias} IS NULL OR {method_alias} = ''                THEN '(sin metodo)'
           ELSE 'Otro'
         END
@@ -149,13 +159,16 @@ def orders_by_customer_unistore(customer_id: int, period: str = "30d", from_iso:
     eng = get_engine("unistore")
     win = resolve_window(period, from_iso, to_iso)
     method_expr = _shipping_method_expr(eng)
-    canal_sql = _classify_channel_sql("m.metodo_envio")
+    type_col = _shipping_type_col(eng)
+    type_select = f", {type_col} AS shipping_type" if type_col else ""
+    type_alias = "m.shipping_type" if type_col else None
+    canal_sql = _classify_channel_sql("m.metodo_envio", type_alias=type_alias)
     rows = q(eng, f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
                  o."paymentStatus", o."shippingStatus", o.total::float,
                  COALESCE(NULLIF(TRIM(osa.province),''),'-') AS provincia,
-                 {method_expr},
+                 {method_expr}{type_select},
                  EXISTS (
                    SELECT 1 FROM digip."DespachoPedido" dp
                    JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
@@ -463,10 +476,10 @@ def _orders_serialize(rows: list) -> dict:
 
 def _build_order_select(eng) -> str:
     method_expr = _shipping_method_expr(eng)
-    canal_sql = _classify_channel_sql("m.metodo_envio")
-    # empaquetada = la orden tiene un registro de despacho en Digip
-    # (los Pedidos Digip que llegaron a DespachoPedido salieron del deposito empaquetados).
-    # Sirve para distinguir el paso "Pagada" → "Empaquetada" antes del envio TN.
+    type_col = _shipping_type_col(eng)
+    type_select = f", {type_col} AS shipping_type" if type_col else ""
+    type_alias = "m.shipping_type" if type_col else None
+    canal_sql = _classify_channel_sql("m.metodo_envio", type_alias=type_alias)
     return f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
@@ -474,7 +487,7 @@ def _build_order_select(eng) -> str:
                  o.total::float, COALESCE(c.name, c.email, '')::text AS cliente,
                  COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
                  c.id AS customer_id,
-                 {method_expr},
+                 {method_expr}{type_select},
                  EXISTS (
                    SELECT 1 FROM digip."DespachoPedido" dp
                    JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
