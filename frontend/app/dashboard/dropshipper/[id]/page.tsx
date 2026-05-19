@@ -2294,7 +2294,7 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
     <div className="flex items-start gap-1.5">
       {step(true, "Creada", "📋", stepDate(o.fecha))}
       {line(isPaid)}
-      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at || o.intent_fecha))}
+      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at || o.intent_fecha || undefined))}
       {line(isPacked)}
       {step(isPacked, "Empaquetado", "📦", stepDate(o.packed_at || o.label_downloaded_at))}
       {line(isShipped)}
