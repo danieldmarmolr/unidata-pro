@@ -65,7 +65,7 @@ def _ml_sub(date_clause: str) -> str:
         FALSE                                                   AS label_downloaded
     FROM mercado_libre_dev."OrderMercadoLibre" oml
     JOIN public."User" u
-         ON u.dni::text = regexp_replace(oml."number", '^DROP-([^-]+)-.*$', '\\1')
+         ON u.dni::text = split_part(oml."number", '-', 2)
     WHERE oml."number" LIKE 'DROP-%'
       AND {date_clause}"""
 
