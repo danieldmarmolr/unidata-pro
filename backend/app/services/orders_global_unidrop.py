@@ -1,14 +1,79 @@
 """
 Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
-Sin pipeline de enriquecimiento completo — datos directos de DB para performance.
+Ancla en PaymentIntent (fuente canónica Unidrop) para el linkage correcto:
+  PaymentIntent → mlOrderIds[] → OrderMercadoLibre.id
+  PaymentIntent → orderIds[]   → tienda_nube_orders.tienda_nube_id
 """
 from __future__ import annotations
 
 import datetime as dt
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar
-from app.services._utils import resolve_window
+from app.services._utils import q, scalar, resolve_window
+
+_ML_CTE = """
+    ml AS (
+        SELECT DISTINCT ON (oml.id)
+            cpa."userId"::int                                   AS user_id,
+            COALESCE(u.fantasy_name, u.name, u.email)           AS dropshipper_name,
+            'ml'::text                                          AS origen,
+            COALESCE(oml."number", oml.id::text)                AS "number",
+            oml.id::text                                        AS external_id,
+            oml."dateCreated"                                   AS fecha,
+            COALESCE(oml.status, '')                            AS status,
+            COALESCE(oml."paymentStatus", '')                   AS payment_status,
+            COALESCE(oml."shippingStatus", '')                  AS shipping_status,
+            COALESCE(oml."totalAmount", 0)::float               AS total,
+            COALESCE(oml."merchandise_cost", 0)::float          AS merch_cost,
+            COALESCE(oml."shipping_cost", 0)::float             AS shipping_cost,
+            COALESCE(oml."profit_for_subscription", 0)::float   AS profit_unidrop,
+            COALESCE(oml."buyer_name", '')                      AS buyer_name,
+            ''                                                  AS buyer_city,
+            ''                                                  AS buyer_province,
+            COALESCE(oml."shipping_type", '')                   AS shipping_type,
+            FALSE                                               AS label_downloaded
+        FROM public."PaymentIntent" pi
+        JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        JOIN public."User" u ON u.id = cpa."userId"
+        CROSS JOIN LATERAL unnest(COALESCE(pi."mlOrderIds", ARRAY[]::bigint[])) AS ml_id
+        JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml.id = ml_id
+        WHERE pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= :from_ts
+          AND pi."createdAt" < :to_ts
+        ORDER BY oml.id, pi."createdAt" DESC
+    )"""
+
+_TN_CTE = """
+    tn AS (
+        SELECT DISTINCT ON (tno.tienda_nube_id)
+            cpa."userId"::int                                       AS user_id,
+            COALESCE(u.fantasy_name, u.name, u.email)               AS dropshipper_name,
+            'tn'::text                                              AS origen,
+            COALESCE(tno."number", tno.tienda_nube_id::text)        AS "number",
+            tno.tienda_nube_id::text                                AS external_id,
+            tno.created_at                                          AS fecha,
+            tno.payment_status::text                                AS status,
+            tno.payment_status::text                                AS payment_status,
+            COALESCE(tno.shipping_status, '')                       AS shipping_status,
+            COALESCE(tno.total, 0)::float                           AS total,
+            0::float                                                AS merch_cost,
+            0::float                                                AS shipping_cost,
+            0::float                                                AS profit_unidrop,
+            COALESCE(tno.contact_name, '')                          AS buyer_name,
+            COALESCE(tno.billing_city, '')                          AS buyer_city,
+            COALESCE(tno.billing_province, '')                      AS buyer_province,
+            COALESCE(tno.shipping_carrier, '')                      AS shipping_type,
+            COALESCE(tno.label_downloaded, FALSE)                   AS label_downloaded
+        FROM public."PaymentIntent" pi
+        JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        JOIN public."User" u ON u.id = cpa."userId"
+        CROSS JOIN LATERAL unnest(COALESCE(pi."orderIds", ARRAY[]::bigint[])) AS tn_id
+        JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = tn_id
+        WHERE pi."status" = 'PROCESSED'
+          AND pi."createdAt" >= :from_ts
+          AND pi."createdAt" < :to_ts
+        ORDER BY tno.tienda_nube_id, pi."createdAt" DESC
+    )"""
 
 
 def orders_global_unidrop(
@@ -30,68 +95,22 @@ def orders_global_unidrop(
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
 
-    parts: list[str] = []
-
+    cte_parts: list[str] = []
+    union_parts: list[str] = []
     if include_ml:
-        parts.append("""
-            SELECT
-                u.id AS user_id,
-                COALESCE(u.fantasy_name, u.name, u.email) AS dropshipper_name,
-                'ml'::text AS origen,
-                COALESCE(oml."number", oml.id::text) AS "number",
-                oml.id::text AS external_id,
-                oml."dateCreated" AS fecha,
-                COALESCE(oml.status, '') AS status,
-                COALESCE(oml."paymentStatus", '') AS payment_status,
-                COALESCE(oml."shippingStatus", '') AS shipping_status,
-                COALESCE(oml."totalAmount", 0)::float AS total,
-                COALESCE(oml."merchandise_cost", 0)::float AS merch_cost,
-                COALESCE(oml."shipping_cost", 0)::float AS shipping_cost,
-                COALESCE(oml."profit_for_subscription", 0)::float AS profit_unidrop,
-                COALESCE(oml."buyer_name", '') AS buyer_name,
-                '' AS buyer_city,
-                '' AS buyer_province,
-                COALESCE(oml."shipping_type", '') AS shipping_type,
-                FALSE AS label_downloaded
-            FROM mercado_libre_dev."OrderMercadoLibre" oml
-            JOIN public."User" u ON u.id = oml."userId"
-            WHERE oml."dateCreated" >= :from_ts AND oml."dateCreated" < :to_ts
-              AND oml.status IN ('paid','confirmed','shipped','delivered')
-        """)
-
+        cte_parts.append(_ML_CTE)
+        union_parts.append("SELECT * FROM ml")
     if include_tn:
-        parts.append("""
-            SELECT
-                u.id AS user_id,
-                COALESCE(u.fantasy_name, u.name, u.email) AS dropshipper_name,
-                'tn'::text AS origen,
-                COALESCE(tno."number", tno.tienda_nube_id::text) AS "number",
-                tno.tienda_nube_id::text AS external_id,
-                tno.created_at AS fecha,
-                tno.payment_status::text AS status,
-                tno.payment_status::text AS payment_status,
-                COALESCE(tno.shipping_status, '') AS shipping_status,
-                COALESCE(tno.total, 0)::float AS total,
-                0::float AS merch_cost,
-                0::float AS shipping_cost,
-                0::float AS profit_unidrop,
-                COALESCE(tno.contact_name, '') AS buyer_name,
-                COALESCE(tno.billing_city, '') AS buyer_city,
-                COALESCE(tno.billing_province, '') AS buyer_province,
-                COALESCE(tno.shipping_carrier, '') AS shipping_type,
-                COALESCE(tno.label_downloaded, FALSE) AS label_downloaded
-            FROM public.tienda_nube_orders tno
-            JOIN public."User" u ON u.id = tno.user_id
-            WHERE tno.created_at >= :from_ts AND tno.created_at < :to_ts
-        """)
+        cte_parts.append(_TN_CTE)
+        union_parts.append("SELECT * FROM tn")
 
-    if not parts:
+    if not cte_parts:
         return {"items": [], "total": 0, "limit": limit, "offset": offset,
                 "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
-    union_sql = " UNION ALL ".join(f"({p})" for p in parts)
+    cte_block = "WITH " + ",\n".join(cte_parts)
+    union_sql = " UNION ALL ".join(union_parts)
 
-    # Outer WHERE filters — values validated by FastAPI Literal types in the router
     where_clauses = ["1=1"]
     extra_params: dict = {}
 
@@ -120,7 +139,6 @@ def orders_global_unidrop(
 
     if status_filter and status_filter.lower() not in ("all", ""):
         sf = status_filter.lower()
-        # Map pipeline step labels to raw DB values
         STATUS_MAP = {
             "paid": "paid",
             "confirmed": "confirmed",
@@ -141,18 +159,21 @@ def orders_global_unidrop(
     where_sql = " AND ".join(where_clauses)
     params: dict = {"from_ts": from_ts, "to_ts": to_ts, **extra_params}
 
-    total = int(scalar(eng, f"SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}", params) or 0)
+    total = int(scalar(eng, f"""
+        {cte_block}
+        SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
+    """, params) or 0)
 
-    rows_sql = f"""
+    rows = q(eng, f"""
+        {cte_block}
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha::text,
                status, payment_status, shipping_status, total, merch_cost, shipping_cost,
                profit_unidrop, buyer_name, buyer_city, buyer_province, shipping_type, label_downloaded
         FROM ({union_sql}) x
         WHERE {where_sql}
-        ORDER BY fecha DESC
+        ORDER BY fecha DESC NULLS LAST
         LIMIT :lim OFFSET :off
-    """
-    rows = q(eng, rows_sql, {**params, "lim": limit, "off": offset}) or []
+    """, {**params, "lim": limit, "off": offset}) or []
 
     items = [{
         "user_id": int(r[0]) if r[0] else 0,
