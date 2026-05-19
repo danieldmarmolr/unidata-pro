@@ -108,6 +108,11 @@ def _startup() -> None:
     areas_db.init()
     from app.db import carga_digip_db as _carga_db
     _carga_db.init()
+    from app.db import jira_flow_db as _jira_flow_db
+    try:
+        _jira_flow_db.init()
+    except Exception as e:
+        logging.warning("jira_flow_db init: %s", e)
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)

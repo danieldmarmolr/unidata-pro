@@ -5,16 +5,18 @@ import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { ProposalEditor } from "../_components/ProposalEditor";
+import { FileUploader, type ProcessedFiles } from "../_components/FileUploader";
 import type { AssignableUser, BatchProposalResp, ConfluenceSpace, Epic, ProposalWrapper, Sprint } from "../types";
 import { Wand2, Loader2 } from "lucide-react";
 
 export default function CrearPage() {
   const [contextText, setContextText] = useState("");
   const [extraInst, setExtraInst] = useState("");
+  const [files, setFiles] = useState<ProcessedFiles | null>(null);
   const [batch, setBatch] = useState<BatchProposalResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<Record<number, { itdev_key: string; url: string }>>({});
+  const [created, setCreated] = useState<Record<number, { itdev_key: string; url: string; teams_notified?: boolean }>>({});
 
   const epics = useQuery<{ items: Epic[] }>({ queryKey: ["jira-flow", "epics"], queryFn: () => api("/api/jira-flow/epics"), staleTime: 5 * 60_000 });
   const users = useQuery<{ items: AssignableUser[] }>({ queryKey: ["jira-flow", "users"], queryFn: () => api("/api/jira-flow/users"), staleTime: 5 * 60_000 });
@@ -23,12 +25,19 @@ export default function CrearPage() {
   const labels = useQuery<{ items: string[] }>({ queryKey: ["jira-flow", "labels"], queryFn: () => api("/api/jira-flow/labels"), staleTime: 10 * 60_000 });
 
   async function propose() {
-    if (!contextText.trim()) return;
+    if (!contextText.trim() && !files) return;
     setLoading(true); setError(null); setBatch(null); setCreated({});
     try {
-      const resp = await api<BatchProposalResp>("/api/jira-flow/llm/propose-batch", {
+      const resp = await api<BatchProposalResp>("/api/jira-flow/llm/propose-batch-with-files", {
         method: "POST",
-        body: JSON.stringify({ context: contextText, extra_instructions: extraInst, include_situ_open: true }),
+        body: JSON.stringify({
+          context: contextText,
+          extra_instructions: extraInst,
+          include_situ_open: true,
+          images: files?.images ?? [],
+          pdfs: files?.pdfs ?? [],
+          extracted_texts: files?.texts ?? [],
+        }),
       });
       setBatch(resp);
     } catch (e) {
@@ -40,10 +49,13 @@ export default function CrearPage() {
 
   return (
     <>
-      <Topbar title="Jira Flow · Crear desde contexto" subtitle="Pegá una transcripción · Gemini detecta tareas · creás ITDEVs vinculados" hidePeriod />
+      <Topbar title="Jira Flow · Crear desde contexto" subtitle="Pegá una transcripción · adjuntá imágenes/PDFs · Gemini detecta tareas · creás ITDEVs vinculados" hidePeriod />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
         <div className="border border-border rounded-xl p-5 bg-white space-y-3">
-          <div className="font-semibold">1️⃣ Contexto</div>
+          <div className="font-semibold flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center font-bold">1</span>
+            Contexto
+          </div>
           <textarea
             className="w-full border border-border rounded px-3 py-2 text-sm font-mono"
             rows={10}
@@ -51,13 +63,14 @@ export default function CrearPage() {
             value={contextText}
             onChange={(e) => setContextText(e.target.value)}
           />
+          <FileUploader onProcessed={setFiles} hint="Imágenes (PNG/JPG/WebP), PDF, DOCX, XLSX, TXT, MD — se mandan a Gemini" />
           <input
             className="w-full border border-border rounded px-3 py-2 text-sm"
             placeholder="Instrucciones extra para Gemini (opcional)"
             value={extraInst}
             onChange={(e) => setExtraInst(e.target.value)}
           />
-          <button onClick={propose} disabled={loading || !contextText.trim() || !ready} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
+          <button onClick={propose} disabled={loading || (!contextText.trim() && !files) || !ready} className="px-4 py-2 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
             Proponer con Gemini
           </button>
@@ -76,7 +89,10 @@ export default function CrearPage() {
               const c = created[idx];
               if (c) return (
                 <div key={idx} className="border border-green-300 bg-green-50 rounded-xl p-4">
-                  <div className="text-sm font-semibold text-green-800">✅ Creado: <a href={c.url} target="_blank" rel="noreferrer" className="underline">{c.itdev_key}</a></div>
+                  <div className="text-sm font-semibold text-green-800">
+                    ✅ Creado: <a href={c.url} target="_blank" rel="noreferrer" className="underline">{c.itdev_key}</a>
+                    {c.teams_notified && <span className="ml-2 text-xs px-2 py-0.5 rounded bg-red-100 text-red-700">📢 Teams notificado</span>}
+                  </div>
                 </div>
               );
               if (prop.es_solo_coordinacion || prop.needs_itdev === false) {
@@ -96,6 +112,7 @@ export default function CrearPage() {
                     <ProposalEditor
                       initial={prop}
                       situKey={prop.situ_existente_key || null}
+                      extraFiles={files}
                       epics={epics.data!.items}
                       users={users.data!.items}
                       sprints={sprints.data!.items}

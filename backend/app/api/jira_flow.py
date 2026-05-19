@@ -2,20 +2,24 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.auth.security import current_user, require_area
+from app.db import jira_flow_db
 from app.services.jira_flow import (
     confluence_client as conf,
     doc_automation as docs,
+    file_context as fctx,
     jira_client as jira,
     llm_client as llm,
+    teams_client as teams,
 )
 from app.services.jira_flow.prompts import render_description_markdown, render_subtask_description
 
@@ -517,6 +521,8 @@ class CreateITDEVBody(BaseModel):
     confluence_space_id: str | None = None
     subtasks: list[dict] = Field(default_factory=list)
     copy_attachments_from_situ: list[dict] = Field(default_factory=list)
+    extra_attachments: list[dict] = Field(default_factory=list)  # [{name, mime, bytes_b64}]
+    teams_notify_on_highest: bool = True
 
 
 @router.post("/itdev/create")
@@ -565,6 +571,14 @@ def create_itdev(
         except Exception as ae:
             warnings.append(f"No pude copiar {a.get('filename','?')}: {ae}")
 
+    # Adjuntar archivos extra (uploaded por el usuario)
+    for a in body.extra_attachments:
+        try:
+            data = base64.b64decode(a["bytes_b64"])
+            jira.add_attachment(itdev_key, data, a["name"], a.get("mime") or "application/octet-stream")
+        except Exception as ae:
+            warnings.append(f"No pude adjuntar {a.get('name','?')}: {ae}")
+
     # Vincular páginas Confluence
     cf_icon = "https://wac-cdn.atlassian.com/dam/jcr:e2a6f06f-b3d5-4002-aed3-73538c7025af/Confluence-icon-blue-rgb-32px.png"
     for p in body.confluence_page_links:
@@ -610,6 +624,24 @@ def create_itdev(
         except Exception as he:
             warnings.append(f"Subtask '{h.get('summary','?')}' falló: {he}")
 
+    # Teams notify on Highest priority
+    teams_notified = False
+    if body.teams_notify_on_highest and body.priority == "Highest" and os.getenv("TEAMS_WEBHOOK_URL"):
+        try:
+            extra_facts = [{"name": "SITU origen", "value": body.link_to_situ}] if body.link_to_situ else []
+            teams.notify_urgent_ticket(
+                issue_key=itdev_key,
+                title=body.summary,
+                assignee_name=user.get("name", "Sin asignar"),
+                priority="Highest",
+                issue_type=itype,
+                issue_url=f"{base_url}/browse/{itdev_key}",
+                extra_facts=extra_facts,
+            )
+            teams_notified = True
+        except Exception as te:
+            warnings.append(f"Teams notify falló: {te}")
+
     return {
         "ok": True,
         "itdev_key": itdev_key,
@@ -617,6 +649,7 @@ def create_itdev(
         "confluence_url": confluence_url,
         "subtasks": subtasks_created,
         "warnings": warnings,
+        "teams_notified": teams_notified,
     }
 
 
@@ -702,14 +735,25 @@ def _map_issue_rows(issues: list[dict]) -> list[dict]:
     return out
 
 
-# ---------- Auto Docs ----------
+# ---------- Auto Docs (state persistido en Supabase) ----------
 class AutoDocsBody(BaseModel):
-    since_iso: str | None = None
-    processed_keys: list[str] = Field(default_factory=list)
     enable_postmortem: bool = True
     enable_runbook: bool = True
     enable_adr: bool = True
     dry_run: bool = False
+
+
+@router.get("/auto-docs/state")
+def auto_docs_state(user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    return jira_flow_db.get_state()
+
+
+@router.post("/auto-docs/reset")
+def auto_docs_reset(user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    jira_flow_db.reset_state()
+    return {"ok": True}
 
 
 @router.post("/auto-docs/run")
@@ -718,15 +762,223 @@ def auto_docs_run(
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
     _guard(user)
+    state = jira_flow_db.get_state()
     try:
         result = docs.run_polling_cycle(
-            since_iso=body.since_iso,
+            since_iso=state.get("last_run_iso"),
             enable_postmortem=body.enable_postmortem,
             enable_runbook=body.enable_runbook,
             enable_adr=body.enable_adr,
             dry_run=body.dry_run,
-            processed_keys=set(body.processed_keys),
+            processed_keys=set(state.get("processed_keys") or []),
         )
+        if not body.dry_run and not result.get("error"):
+            jira_flow_db.save_state(
+                last_run_iso=result.get("now"),
+                processed_keys=result.get("processed_keys", []),
+                last_results=result.get("results", []),
+            )
         return result
     except Exception as e:
         raise HTTPException(502, str(e))
+
+
+# ---------- Upload files (multimodal Gemini + adjuntos diferidos) ----------
+class FileProcessResp(BaseModel):
+    """Resultado de procesar archivos. Cada attachment vuelve base64 para
+    que el frontend lo guarde en memoria y lo reenvíe al endpoint /itdev/create
+    o /llm/propose-batch sin necesitar storage temporal en el backend."""
+    images: list[dict] = Field(default_factory=list)
+    pdfs: list[dict] = Field(default_factory=list)
+    texts: list[dict] = Field(default_factory=list)
+    all_attachments: list[dict] = Field(default_factory=list)
+
+
+@router.post("/files/process", response_model=FileProcessResp)
+async def files_process(
+    user: Annotated[dict, Depends(current_user)],
+    files: list[UploadFile] = File(...),
+) -> FileProcessResp:
+    _guard(user)
+    items: list[dict] = []
+    for f in files:
+        data = await f.read()
+        items.append({"name": f.filename, "mime": f.content_type, "bytes": data})
+    processed = fctx.process_files(items)
+    return FileProcessResp(
+        images=[
+            {"name": next((n for (b, m, n) in processed["all_attachments"] if b == d and mi == m), "image"),
+             "mime": mi, "bytes_b64": base64.b64encode(d).decode("ascii")}
+            for d, mi in processed["images_for_gemini"]
+        ],
+        pdfs=[
+            {"name": n, "mime": mi, "bytes_b64": base64.b64encode(d).decode("ascii")}
+            for d, mi, n in processed["pdfs_for_gemini"]
+        ],
+        texts=[{"name": n, "text": t} for n, t in processed["extracted_texts"]],
+        all_attachments=[
+            {"name": n, "mime": mi, "bytes_b64": base64.b64encode(d).decode("ascii")}
+            for d, mi, n in processed["all_attachments"]
+        ],
+    )
+
+
+# ---------- Propose batch con archivos (multimodal) ----------
+class ProposeBatchWithFilesBody(BaseModel):
+    context: str = Field(min_length=1)
+    extra_instructions: str = ""
+    include_situ_open: bool = True
+    images: list[dict] = Field(default_factory=list)  # [{name, mime, bytes_b64}]
+    pdfs: list[dict] = Field(default_factory=list)
+    extracted_texts: list[dict] = Field(default_factory=list)  # [{name, text}]
+
+
+@router.post("/llm/propose-batch-with-files")
+def propose_batch_with_files(
+    body: ProposeBatchWithFilesBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    _guard(user)
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(400, "GEMINI_API_KEY no está configurado")
+
+    # SITU open
+    situ_open = []
+    if body.include_situ_open:
+        try:
+            issues = jira.search(
+                f'project = {_situ_key()} AND statusCategory != Done ORDER BY created DESC',
+                fields=["summary", "issuelinks"],
+                max_results=80,
+            )
+            itdev_prefix = f"{_itdev_key()}-"
+            for i in issues:
+                has_itdev = any(
+                    (link.get("outwardIssue") or link.get("inwardIssue") or {}).get("key", "").startswith(itdev_prefix)
+                    for link in (i["fields"].get("issuelinks") or [])
+                )
+                if not has_itdev:
+                    situ_open.append({"key": i["key"], "summary": i["fields"]["summary"]})
+        except Exception:
+            pass
+
+    images = [(base64.b64decode(im["bytes_b64"]), im["mime"]) for im in body.images]
+    pdfs = [(base64.b64decode(p["bytes_b64"]), p["mime"], p["name"]) for p in body.pdfs]
+
+    enriched = body.context
+    if body.extracted_texts:
+        enriched += "\n\n---\nARCHIVOS DE CONTEXTO (texto extraído):\n"
+        for t in body.extracted_texts:
+            enriched += f"\n### 📎 {t['name']}\n{(t.get('text','') or '')[:8000]}\n"
+    try:
+        return llm.propose_batch(enriched, situ_open, body.extra_instructions, images=images or None, pdfs=pdfs or None)
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# ---------- Propose from SITU con archivos ----------
+class ProposeFromSituWithFilesBody(BaseModel):
+    situ_key: str
+    extra_instructions: str = ""
+    confluence_page_ids: list[str] = Field(default_factory=list)
+    images: list[dict] = Field(default_factory=list)
+    pdfs: list[dict] = Field(default_factory=list)
+    extracted_texts: list[dict] = Field(default_factory=list)
+
+
+@router.post("/llm/propose-from-situ-with-files")
+def propose_from_situ_with_files(
+    body: ProposeFromSituWithFilesBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    _guard(user)
+    if not os.getenv("GEMINI_API_KEY"):
+        raise HTTPException(400, "GEMINI_API_KEY no está configurado")
+    try:
+        issue = jira.get_issue(body.situ_key)
+        desc = jira.adf_to_text(issue["fields"].get("description"))
+        comments = jira.get_comments(body.situ_key)
+        attachments = [
+            {"id": a.get("id"), "filename": a.get("filename"), "size": a.get("size"),
+             "mimeType": a.get("mimeType"), "content": a.get("content")}
+            for a in (issue["fields"].get("attachment") or [])
+        ]
+        cf_pages = []
+        for pid in body.confluence_page_ids[:5]:
+            try:
+                p = conf.get_page(pid)
+                cf_pages.append({
+                    "title": p.get("title", ""),
+                    "url": conf.page_url(p),
+                    "body": conf.page_body_text(p)[:2000],
+                })
+            except Exception:
+                pass
+        images = [(base64.b64decode(im["bytes_b64"]), im["mime"]) for im in body.images]
+        pdfs = [(base64.b64decode(p["bytes_b64"]), p["mime"], p["name"]) for p in body.pdfs]
+        extracted = [(t["name"], t.get("text", "")) for t in body.extracted_texts]
+        prop = llm.propose_itdev_from_situ(
+            body.situ_key, issue["fields"]["summary"], desc,
+            body.extra_instructions, comments=comments,
+            attachments=attachments, confluence_pages=cf_pages,
+            images=images or None, pdfs=pdfs or None,
+            extracted_texts=extracted or None,
+        )
+        return {"propuesta": prop}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# ---------- Teams notify (Highest priority) ----------
+class TeamsNotifyBody(BaseModel):
+    issue_key: str
+    title: str
+    assignee_name: str = "Sin asignar"
+    priority: str = "Highest"
+    issue_type: str = "Task"
+    extra_facts: list[dict] = Field(default_factory=list)
+
+
+@router.post("/teams/notify-urgent")
+def teams_notify_urgent(
+    body: TeamsNotifyBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    _guard(user)
+    if not os.getenv("TEAMS_WEBHOOK_URL"):
+        raise HTTPException(400, "TEAMS_WEBHOOK_URL no configurado")
+    try:
+        teams.notify_urgent_ticket(
+            issue_key=body.issue_key,
+            title=body.title,
+            assignee_name=body.assignee_name,
+            priority=body.priority,
+            issue_type=body.issue_type,
+            issue_url=f"{_base_url()}/browse/{body.issue_key}",
+            extra_facts=body.extra_facts,
+        )
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(502, str(e))
+
+
+# ---------- Adjuntar archivos a ITDEV (post-creación) ----------
+@router.post("/itdev/{issue_key}/attach")
+async def attach_files(
+    issue_key: str,
+    user: Annotated[dict, Depends(current_user)],
+    files: list[UploadFile] = File(...),
+) -> dict:
+    _guard(user)
+    uploaded = []
+    warnings = []
+    for f in files:
+        data = await f.read()
+        try:
+            jira.add_attachment(issue_key, data, f.filename, f.content_type or "application/octet-stream")
+            uploaded.append(f.filename)
+        except Exception as e:
+            warnings.append(f"No pude adjuntar {f.filename}: {e}")
+    return {"ok": True, "uploaded": uploaded, "warnings": warnings}

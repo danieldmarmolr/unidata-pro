@@ -115,6 +115,7 @@ def propose_itdev_from_situ(
     confluence_pages: list[dict] | None = None,
     images: list[tuple[bytes, str]] | None = None,
     pdfs: list[tuple[bytes, str, str]] | None = None,
+    extracted_texts: list[tuple[str, str]] | None = None,
 ) -> dict:
     ctx = f"""SITU EXISTENTE: {situ_key}
 Título: {situ_summary}
@@ -134,6 +135,10 @@ Descripción:
         ctx += "\nPÁGINAS DE CONFLUENCE DE REFERENCIA:\n"
         for p in confluence_pages:
             ctx += f"\n### {p.get('title','(sin título)')}\n{p.get('url','')}\n{(p.get('body','') or '')[:1500]}\n"
+    if extracted_texts:
+        ctx += "\n\n---\nARCHIVOS DE CONTEXTO (texto extraído):\n"
+        for name, txt in extracted_texts:
+            ctx += f"\n### 📎 {name}\n{(txt or '')[:8000]}\n"
     ctx += f"\nNecesito que generes UNA propuesta de ITDEV para implementar lo que pide este SITU. El SITU ya está creado, no propongas crear otro. El ITDEV se va a vincular automáticamente a {situ_key}."
     batch = propose_batch(ctx, [{"key": situ_key, "summary": situ_summary}], extra_instructions, images=images, pdfs=pdfs)
     propuestas = batch.get("propuestas", [])

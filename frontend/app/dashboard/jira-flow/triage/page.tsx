@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { ProposalEditor } from "../_components/ProposalEditor";
+import { FileUploader, type ProcessedFiles } from "../_components/FileUploader";
 import type { AssignableUser, ConfluencePage, ConfluenceSpace, Epic, ProposalWrapper, SituOpenItem, Sprint } from "../types";
 import { Search, RefreshCw, UserPlus, Wand2, Loader2, FileText } from "lucide-react";
 
@@ -84,7 +85,7 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
 }) {
   const [loadedIssue, setLoadedIssue] = useState<IssueFull | null>(null);
   const [proposal, setProposal] = useState<ProposalWrapper | null>(null);
-  const [created, setCreated] = useState<{ itdev_key: string; url: string } | null>(null);
+  const [created, setCreated] = useState<{ itdev_key: string; url: string; teams_notified?: boolean } | null>(null);
   const [loadingIssue, setLoadingIssue] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +93,7 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
   const [cfQuery, setCfQuery] = useState("");
   const [cfResults, setCfResults] = useState<ConfluencePage[]>([]);
   const [selectedCfIds, setSelectedCfIds] = useState<Set<string>>(new Set());
+  const [files, setFiles] = useState<ProcessedFiles | null>(null);
 
   async function loadIssue() {
     setLoadingIssue(true); setError(null);
@@ -121,12 +123,15 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
   async function propose() {
     setProposing(true); setError(null);
     try {
-      const resp = await api<{ propuesta: any }>("/api/jira-flow/llm/propose-from-situ", {
+      const resp = await api<{ propuesta: any }>("/api/jira-flow/llm/propose-from-situ-with-files", {
         method: "POST",
         body: JSON.stringify({
           situ_key: situ.key,
           extra_instructions: extraInst,
           confluence_page_ids: Array.from(selectedCfIds),
+          images: files?.images ?? [],
+          pdfs: files?.pdfs ?? [],
+          extracted_texts: files?.texts ?? [],
         }),
       });
       setProposal({ itdev: resp.propuesta.itdev, razonamiento: resp.propuesta.razonamiento, situ_existente_key: situ.key, titulo_corto: resp.propuesta.titulo_corto });
@@ -151,7 +156,10 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
       )}
 
       {created && (
-        <div className="mt-3 text-sm text-green-700">✅ ITDEV: <a className="underline" href={created.url} target="_blank" rel="noreferrer">{created.itdev_key}</a></div>
+        <div className="mt-3 text-sm text-green-700 flex items-center gap-2">
+          ✅ ITDEV: <a className="underline" href={created.url} target="_blank" rel="noreferrer">{created.itdev_key}</a>
+          {created.teams_notified && <span className="text-xs px-2 py-0.5 rounded bg-red-100 text-red-700">📢 Teams notificado</span>}
+        </div>
       )}
 
       {!created && (
@@ -210,6 +218,9 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
                 )}
               </div>
 
+              <div className="mt-3">
+                <FileUploader onProcessed={setFiles} hint="Adjuntá imágenes, PDFs o archivos de contexto (van a Gemini Y se adjuntan al ITDEV)" />
+              </div>
               <input className="mt-3 w-full border border-border rounded px-2 py-1.5 text-sm" placeholder="Instrucciones extra para Gemini (opcional)" value={extraInst} onChange={(e) => setExtraInst(e.target.value)} />
               <button onClick={propose} disabled={proposing} className="mt-2 px-3 py-1.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2">
                 {proposing ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} Proponer ITDEV
@@ -226,12 +237,13 @@ function SituCard({ situ, epics, users, sprints, spaces, labels, onAssigned }: {
                 situKey={situ.key}
                 attachmentsFromSitu={loadedIssue?.attachments?.map((a) => ({ ...a }))}
                 confluencePageLinks={selectedCfPages}
+                extraFiles={files}
                 epics={epics}
                 users={users}
                 sprints={sprints}
                 spaces={spaces}
                 labels={labels}
-                onCreated={(r) => setCreated({ itdev_key: r.itdev_key, url: r.url })}
+                onCreated={(r) => setCreated({ itdev_key: r.itdev_key, url: r.url, teams_notified: r.teams_notified })}
               />
             </div>
           )}

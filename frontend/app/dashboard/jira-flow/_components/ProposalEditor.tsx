@@ -5,18 +5,20 @@ import type { AssignableUser, Epic, Sprint, ConfluenceSpace, ConfluencePage, Pro
 import { type EditableProposal, type EditableChildSubtask, toEditable, fromEditable, toEditableChild, fromEditableChild, matchAssigneeIdByName } from "./helpers";
 import { api } from "@/lib/api";
 import { Loader2, Rocket } from "lucide-react";
+import type { ProcessedFiles } from "./FileUploader";
 
 type Props = {
   initial: ProposalWrapper;
   situKey?: string | null;
   attachmentsFromSitu?: { id: string; filename: string; mimeType: string; content: string; _skip?: boolean }[];
   confluencePageLinks?: ConfluencePage[];
+  extraFiles?: ProcessedFiles | null;
   epics: Epic[];
   users: AssignableUser[];
   sprints: Sprint[];
   spaces: ConfluenceSpace[];
   labels: string[];
-  onCreated: (resp: { itdev_key: string; url: string; warnings: string[]; subtasks: { key: string; summary: string }[]; confluence_url?: string | null }) => void;
+  onCreated: (resp: { itdev_key: string; url: string; warnings: string[]; subtasks: { key: string; summary: string }[]; confluence_url?: string | null; teams_notified?: boolean }) => void;
 };
 
 const TYPES: Array<"Story" | "Task" | "Bug"> = ["Story", "Task", "Bug"];
@@ -82,6 +84,8 @@ export function ProposalEditor(p: Props) {
         confluence_space_id: confluenceSpaceId,
         subtasks: subtasksClean,
         copy_attachments_from_situ: (p.attachmentsFromSitu || []).filter((a) => !a._skip).map((a) => ({ filename: a.filename, mimeType: a.mimeType, content: a.content })),
+        extra_attachments: p.extraFiles?.all_attachments ?? [],
+        teams_notify_on_highest: true,
       };
       const resp = await api<{ itdev_key: string; url: string; warnings: string[]; subtasks: any[]; confluence_url?: string | null }>(
         "/api/jira-flow/itdev/create", { method: "POST", body: JSON.stringify(body) },
