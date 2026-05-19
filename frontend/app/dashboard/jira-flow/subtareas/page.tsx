@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import type { AssignableUser, ChildSubtask, ITDEVIssueRow } from "../types";
 import { type EditableChildSubtask, toEditableChild, fromEditableChild, matchAssigneeIdByName } from "../_components/helpers";
@@ -57,9 +56,7 @@ export default function SubtareasPage() {
   }
 
   return (
-    <>
-      <Topbar title="Jira Flow · Subtareas a ITDEV" subtitle="Toma tickets del tablero · Gemini propone sub-tasks · creás en batch" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-5">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-5">
         <div className="border border-border rounded-xl p-5 bg-white space-y-2">
           <div className="font-semibold">🎯 Acceso directo</div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -95,8 +92,7 @@ export default function SubtareasPage() {
         {filtered.map((i) => (
           <ITDEVCard key={i.key} issue={i} users={users.data?.items ?? []} />
         ))}
-      </div>
-    </>
+    </div>
   );
 }
 

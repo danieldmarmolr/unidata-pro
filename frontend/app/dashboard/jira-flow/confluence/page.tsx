@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import type { ConfluencePage, ConfluenceSpace } from "../types";
 import { Search, RefreshCw } from "lucide-react";
@@ -40,9 +39,7 @@ export default function ConfluenceTabPage() {
   });
 
   return (
-    <>
-      <Topbar title="Jira Flow · Confluence" subtitle="Spaces, búsqueda de páginas y actividad reciente" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-5">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-5">
         <div className="border border-border rounded-xl p-5 bg-white space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <select value={spaceKey} onChange={(e) => setSpaceKey(e.target.value)} className="border border-border rounded px-2 py-1.5 text-sm">
@@ -74,8 +71,7 @@ export default function ConfluenceTabPage() {
           {recent.isLoading && <div className="text-muted text-sm">Cargando...</div>}
           {recent.data?.items.map((p) => <PageCard key={p.id} page={p} compact />)}
         </Section>
-      </div>
-    </>
+    </div>
   );
 }
 

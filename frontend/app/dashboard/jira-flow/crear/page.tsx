@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { ProposalEditor } from "../_components/ProposalEditor";
 import { FileUploader, type ProcessedFiles } from "../_components/FileUploader";
@@ -48,9 +47,7 @@ export default function CrearPage() {
   const ready = epics.data && users.data && sprints.data && spaces.data && labels.data;
 
   return (
-    <>
-      <Topbar title="Jira Flow · Crear desde contexto" subtitle="Pegá una transcripción · adjuntá imágenes/PDFs · Gemini detecta tareas · creás ITDEVs vinculados" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
         <div className="border border-border rounded-xl p-5 bg-white space-y-3">
           <div className="font-semibold flex items-center gap-2">
             <span className="w-6 h-6 rounded-full bg-primary text-white text-xs flex items-center justify-center font-bold">1</span>
@@ -126,7 +123,6 @@ export default function CrearPage() {
             })}
           </>
         )}
-      </div>
-    </>
+    </div>
   );
 }

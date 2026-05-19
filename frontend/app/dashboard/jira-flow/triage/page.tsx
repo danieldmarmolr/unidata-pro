@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { ProposalEditor } from "../_components/ProposalEditor";
 import { FileUploader, type ProcessedFiles } from "../_components/FileUploader";
@@ -43,9 +42,7 @@ export default function TriagePage() {
     .filter((s) => !searchQuery.trim() || s.key.toLowerCase().includes(searchQuery.toLowerCase()) || s.summary.toLowerCase().includes(searchQuery.toLowerCase()));
 
   return (
-    <>
-      <Topbar title="Jira Flow · Triage SITU → ITDEV" subtitle="Listá SITU abiertos · proponé ITDEV con Gemini · creá vinculado" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-4">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-4">
         <div className="border border-border rounded-xl p-4 bg-white">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <div className="flex items-center border border-border rounded px-2">
@@ -73,8 +70,7 @@ export default function TriagePage() {
             onAssigned={() => qc.invalidateQueries({ queryKey: ["jira-flow", "situ-open"] })}
           />
         ))}
-      </div>
-    </>
+    </div>
   );
 }
 

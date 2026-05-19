@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { Play, RefreshCw, Loader2 } from "lucide-react";
 
@@ -58,9 +57,7 @@ export default function AutoDocsPage() {
   });
 
   return (
-    <>
-      <Topbar title="Jira Flow · Auto Docs" subtitle="Polling ITDEV cerrados → genera post-mortems, runbooks y ADRs en Confluence (state persistido en DB)" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Metric label="Última corrida" value={state.data?.last_run_iso || "—"} />
           <Metric label="Procesados (acumulado)" value={state.data?.processed_keys.length ?? 0} />
@@ -125,8 +122,7 @@ export default function AutoDocsPage() {
             </ul>
           </div>
         )}
-      </div>
-    </>
+    </div>
   );
 }
 

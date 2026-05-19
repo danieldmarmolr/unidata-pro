@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
 
@@ -50,9 +49,7 @@ export default function ConfigPage() {
   }
 
   return (
-    <>
-      <Topbar title="Jira Flow · Config" subtitle="Variables de entorno · test conexión Jira y Gemini" hidePeriod />
-      <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
+    <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
         {error && <div className="text-red-600 text-sm">{(error as Error).message}</div>}
         {isLoading && <div className="text-muted text-sm">Cargando...</div>}
 
@@ -96,8 +93,7 @@ export default function ConfigPage() {
             </div>
           </>
         )}
-      </div>
-    </>
+    </div>
   );
 }
 
