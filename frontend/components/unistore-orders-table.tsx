@@ -15,6 +15,7 @@ type RawRow = unknown[];
 const COL = {
   id: 0, numero: 1, fecha: 2, payment: 3, shipping: 4, status: 5,
   total: 6, cliente: 7, provincia: 8, metodo_envio: 9, canal: 10, empaquetada: 11, customer_id: 12,
+  metodo_pago: 13, ganancia: 14,
 } as const;
 
 const PAYMENT_FILTERS = [
@@ -37,6 +38,8 @@ function get(row: RawRow, col: number): string {
 }
 
 function rowToOrderData(row: RawRow): OrderRowData {
+  const customerId = Number(row[COL.customer_id] ?? 0) || null;
+  const gananciaRaw = row[COL.ganancia];
   return {
     id: Number(row[COL.id] ?? 0),
     numero: get(row, COL.numero),
@@ -48,16 +51,21 @@ function rowToOrderData(row: RawRow): OrderRowData {
     empaquetada: row[COL.empaquetada] === true || row[COL.empaquetada] === "true",
     canal: get(row, COL.canal) || null,
     subtitle: get(row, COL.cliente) || null,
+    subtitleHref: customerId ? `/dashboard/customer/${customerId}` : null,
+    metodo_pago: get(row, COL.metodo_pago) || null,
+    ganancia: gananciaRaw != null && gananciaRaw !== "" ? Number(gananciaRaw) : null,
   };
 }
 
-export function UnistoreOrdersTable() {
+export function UnistoreOrdersTable({ externalPayFilter }: { externalPayFilter?: string | null }) {
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const qs = periodToQuery(period, customFrom, customTo);
 
   const [payFilter, setPayFilter] = useState("all");
+  // when parent passes a filter (donut cross-filter), it overrides the internal one
+  const effectivePayFilter = externalPayFilter != null ? externalPayFilter : payFilter;
   const [statusFilter, setStatusFilter] = useState("all");
   const [canalFilter, setCanalFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -84,7 +92,7 @@ export function UnistoreOrdersTable() {
       if (!data?.rows) return [];
       return data.rows
         .filter((r) => {
-          if (payFilter !== "all" && get(r, COL.payment) !== payFilter) return false;
+          if (effectivePayFilter !== "all" && get(r, COL.payment) !== effectivePayFilter) return false;
           if (statusFilter !== "all" && get(r, COL.status) !== statusFilter) return false;
           if (canalFilter !== "all" && get(r, COL.canal) !== canalFilter) return false;
           if (search) {
@@ -114,7 +122,7 @@ export function UnistoreOrdersTable() {
     [sorted],
   );
 
-  const COLS = 6;
+  const COLS = 8;
 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -162,7 +170,7 @@ export function UnistoreOrdersTable() {
               key={f.value}
               onClick={() => setPayFilter(f.value)}
               className={`px-2 py-0.5 rounded text-[11px] font-semibold border transition-all ${
-                payFilter === f.value
+                effectivePayFilter === f.value
                   ? "bg-primary text-white border-primary"
                   : "bg-surface text-text-muted border-border hover:border-text-muted"
               }`}
@@ -242,16 +250,18 @@ export function UnistoreOrdersTable() {
               <tr className="border-b border-border bg-soft/50 text-left">
                 <th className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-text-muted w-8">#</th>
                 <th className="px-3 py-2">
-                  <SortHeader label="Número" col="numero" sortBy={sortKey} sortDir={sortDir} onToggle={toggle} className="text-[10px] uppercase tracking-wider font-bold text-text-muted" />
+                  <SortHeader label="Número · Cliente" col="numero" sortBy={sortKey} sortDir={sortDir} onToggle={toggle} className="text-[10px] uppercase tracking-wider font-bold text-text-muted" />
                 </th>
                 <th className="px-3 py-2">
                   <SortHeader label="Fecha" col="fecha" sortBy={sortKey} sortDir={sortDir} onToggle={toggle} className="text-[10px] uppercase tracking-wider font-bold text-text-muted" />
                 </th>
+                <th className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-text-muted">Método pago</th>
                 <th className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-text-muted">Estado del pedido</th>
                 <th className="px-3 py-2 text-right">
                   <SortHeader label="Total" col="total" sortBy={sortKey} sortDir={sortDir} onToggle={toggle} className="text-[10px] uppercase tracking-wider font-bold text-text-muted" />
                 </th>
-                <th className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-text-muted">Envío</th>
+                <th className="px-3 py-2 text-right text-[10px] uppercase tracking-wider font-bold text-text-muted">Ganancia</th>
+                <th className="px-3 py-2 text-[10px] uppercase tracking-wider font-bold text-text-muted">Detalle</th>
               </tr>
             </thead>
             <tbody>

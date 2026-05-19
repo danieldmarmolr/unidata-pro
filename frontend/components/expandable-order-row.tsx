@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
@@ -39,8 +40,14 @@ export type OrderRowData = {
   canal?: string | null;
   /** Subtitulo opcional - aparece chiquito abajo del numero (ej: razon de cancelacion, provincia, dias hace) */
   subtitle?: string | null;
+  /** Si se provee, el subtitle se renderiza como link a esta URL */
+  subtitleHref?: string | null;
   /** Chip extra a la derecha (ej: "STAFF") - opcional */
   badge?: { label: string; cls: string } | null;
+  /** Método de pago TN (ej: "Pago Nube - Transferencia o depósito") — agrega una td extra */
+  metodo_pago?: string | null;
+  /** Ganancia estimada = revenue - costo lotes. null = sin datos de costo */
+  ganancia?: number | null;
 };
 
 type OrderItem = {
@@ -66,7 +73,10 @@ export function ExpandableOrderRow({
   cols?: number;
 }) {
   const [open, setOpen] = useState(false);
+  const router = useRouter();
   const orderId = order.id;
+  const hasPago = order.metodo_pago !== undefined;
+  const hasGanancia = order.ganancia !== undefined;
 
   const orderDetail = useQuery<{ items: OrderItem[] }>({
     queryKey: ["order-items-with-img", orderId],
@@ -103,10 +113,26 @@ export function ExpandableOrderRow({
             )}
           </div>
           {order.subtitle && (
-            <div className="text-[10px] text-text-muted mt-0.5 ml-5">{order.subtitle}</div>
+            <div className="text-[10px] text-text-muted mt-0.5 ml-5">
+              {order.subtitleHref ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); router.push(order.subtitleHref!); }}
+                  className="hover:text-primary hover:underline transition"
+                >
+                  {order.subtitle}
+                </button>
+              ) : order.subtitle}
+            </div>
           )}
         </td>
         <td className="px-3 py-2 align-middle text-xs text-text-muted">{order.fecha ?? "—"}</td>
+        {hasPago && (
+          <td className="px-3 py-2 align-middle max-w-[140px]">
+            <span className="text-[11px] text-text-muted truncate block" title={order.metodo_pago ?? ""}>
+              {order.metodo_pago || "—"}
+            </span>
+          </td>
+        )}
         <td className="px-3 py-2 align-middle">
           <OrderStatusPipeline
             payment={order.payment}
@@ -118,6 +144,17 @@ export function ExpandableOrderRow({
           />
         </td>
         <td className="px-3 py-2 align-middle text-right font-bold tabular-nums">{formatCurrency(order.total)}</td>
+        {hasGanancia && (
+          <td className="px-3 py-2 align-middle text-right tabular-nums text-xs font-semibold">
+            {order.ganancia == null ? (
+              <span className="text-text-muted">—</span>
+            ) : order.ganancia >= 0 ? (
+              <span className="text-emerald-600">{formatCurrency(order.ganancia)}</span>
+            ) : (
+              <span className="text-red-500">{formatCurrency(order.ganancia)}</span>
+            )}
+          </td>
+        )}
         {onOpenDetail && (
           <td className="px-3 py-2 align-middle text-center">
             <button

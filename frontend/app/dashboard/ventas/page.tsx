@@ -39,6 +39,7 @@ export default function VentasPage() {
  const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
  const [channel, setChannel] = useState<Channel>("all");
  const [drill, setDrill] = useState<Drill | null>(null);
+ const [paymentFilter, setPaymentFilter] = useState<string | null>(null);
 
  const { data, isLoading, isFetching, error } = useQuery<SalesOverview & { top_users?: { category: string; value: number; extra?: Record<string, number | string | null> | null }[] }>({
  queryKey: ["dashboards", "sales", unit, period, customFrom, customTo, channel],
@@ -147,8 +148,11 @@ export default function VentasPage() {
    { key: "skus", label: "SKUs distintos", kind: "number", color: "#ec4899" },
    { key: "devoluciones", label: "Devoluciones", kind: "number", color: "#ef4444" },
  ]}
- defaultPrimary="value"
- defaultSecondary="orders"
+ defaultSeries={[
+   { key: "value", vizType: "bar", axis: "left" },
+   { key: "orders", vizType: "line", axis: "right" },
+   { key: "ticket_avg", vizType: "area", axis: "right" },
+ ]}
  caption={`Métricas diarias · ${period}`}
  subtitle="Activá/desactivá series · cambiá tipo de gráfico y eje por serie"
  height={320}
@@ -162,7 +166,9 @@ export default function VentasPage() {
  ) : (
  <DonutChart
  data={statusData}
- caption="Distribucion paymentStatus (TN)"
+ caption="Distribución paymentStatus (TN)"
+ highlightName={paymentFilter}
+ onSliceClick={(d) => setPaymentFilter(paymentFilter === d.name ? null : d.name)}
  />
  )}
  </div>
@@ -288,7 +294,7 @@ export default function VentasPage() {
  {/* Tabla de órdenes Unistore (solo Unistore) */}
  {unit === "unistore" && (
  <div className="mb-6">
- <UnistoreOrdersTable />
+ <UnistoreOrdersTable externalPayFilter={paymentFilter} />
  </div>
  )}
  </div>

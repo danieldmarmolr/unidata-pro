@@ -499,11 +499,10 @@ def saas_users_expiring(days_window: int = 7, segment: str = "all") -> dict:
 # ============================================================
 
 def _orders_serialize(rows: list) -> dict:
-    # customer_id queda al final como columna oculta — el frontend la usa para construir
-    # el link al perfil del cliente y la oculta visualmente
     return _serialize(rows, [
         "id", "numero", "fecha", "payment", "shipping", "status",
         "total", "cliente", "provincia", "metodo_envio", "canal", "empaquetada", "customer_id",
+        "metodo_pago", "ganancia",
     ])
 
 
@@ -546,10 +545,48 @@ def _build_order_select(eng) -> str:
                m.metodo_envio,
                {canal_sql} AS canal,
                m.empaquetada,
-               m.customer_id
+               m.customer_id,
+               m."gatewayName"
         FROM base m
         ORDER BY m.fecha DESC LIMIT 1000
     """
+
+
+def _enrich_with_ganancia(eng, rows: list) -> list:
+    """Agrega ganancia por orden cruzando items con costs_db. Retorna rows con índice 14 = ganancia."""
+    if not rows:
+        return rows
+    order_ids = [r[0] for r in rows]
+    items_rows = q(eng, """
+        SELECT "orderId", sku, "quantity"::int
+        FROM tienda_nube."OrderItem"
+        WHERE "orderId" = ANY(:ids) AND sku IS NOT NULL AND sku <> ''
+    """, {"ids": order_ids}) or []
+    items_by_order: dict[int, list[tuple]] = {}
+    for ir in items_rows:
+        items_by_order.setdefault(ir[0], []).append((ir[1], ir[2]))  # sku, qty
+
+    cost_by_sku: dict[str, float] = {}
+    try:
+        from app.db import costs_db
+        for c in (costs_db.current_costs(limit=10000) or []):
+            sku_key = (c.get("sku") or "").strip().lower()
+            costo = c.get("costo_unit_ars") or c.get("costo_con_iva_unit_ars") or 0
+            if sku_key and costo:
+                cost_by_sku[sku_key] = float(costo)
+    except Exception:
+        pass
+
+    enriched = []
+    for r in rows:
+        items = items_by_order.get(r[0], [])
+        ganancia = None
+        if items and cost_by_sku:
+            costo_total = sum(cost_by_sku.get((sku or "").strip().lower(), 0) * qty for sku, qty in items)
+            if costo_total > 0:
+                ganancia = round(float(r[6] or 0) - costo_total, 0)
+        enriched.append(list(r) + [ganancia])
+    return enriched
 
 
 def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
@@ -557,7 +594,7 @@ def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str
     win = resolve_window(period, from_iso, to_iso)
     where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
     rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
-    return _orders_serialize(rows)
+    return _orders_serialize(_enrich_with_ganancia(eng, rows))
 
 
 def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
@@ -565,7 +602,7 @@ def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str 
     win = resolve_window(period, from_iso, to_iso)
     where = 'o."createdAt" >= :from_ts AND o."createdAt" < :to_ts'
     rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
-    return _orders_serialize(rows)
+    return _orders_serialize(_enrich_with_ganancia(eng, rows))
 
 
 def tn_orders_cancelled(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
@@ -573,7 +610,7 @@ def tn_orders_cancelled(period: str = "30d", from_iso: str | None = None, to_iso
     win = resolve_window(period, from_iso, to_iso)
     where = "o.status = 'cancelled' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
     rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
-    return _orders_serialize(rows)
+    return _orders_serialize(_enrich_with_ganancia(eng, rows))
 
 
 def tn_orders_stuck() -> dict:

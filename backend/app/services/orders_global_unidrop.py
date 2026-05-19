@@ -41,7 +41,7 @@ def _build_ml_sub(from_ts: dt.datetime, to_ts: dt.datetime) -> str:
             EXISTS(
                 SELECT 1 FROM mercado_libre_dev."OrderItemMercadoLibre" oi
                 WHERE oi."orderId"::text = o.id::text
-                  AND UPPER(COALESCE(oi."type"::text, oi."orderType"::text, '')) = 'COMBO'
+                  AND UPPER(COALESCE(oi."orderType"::text, '')) = 'COMBO'
             ) AS is_combo
         FROM mercado_libre_dev."OrderMercadoLibre" o
         LEFT JOIN public."User" u
