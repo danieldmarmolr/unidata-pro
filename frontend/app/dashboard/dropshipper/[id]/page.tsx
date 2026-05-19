@@ -235,6 +235,7 @@ type UnifiedOrder = {
   gateway_name?: string;
   gateway_link?: string;
   paid_at?: string;
+  intent_fecha?: string | null;
   completed_at?: string;
   cancelled_at?: string;
   closed_at?: string;
@@ -2229,7 +2230,7 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
 
   const steps: { active: boolean; label: string; icon: string; iso?: string | null }[] = [
     { active: true, label: "Creada", icon: "📋", iso: o.fecha },
-    { active: isPaid, label: "Pagada", icon: "💲", iso: o.paid_at },
+    { active: isPaid, label: "Pagada", icon: "💲", iso: o.paid_at || o.intent_fecha },
     { active: isPacked, label: "Empaquetado", icon: "📦", iso: o.packed_at || o.label_downloaded_at },
     { active: isShipped, label: "En camino", icon: "🚚", iso: o.shipped_at },
     { active: isDelivered, label: "Entregada", icon: "✅", iso: o.delivered_at || o.shipment?.entregado },
@@ -2293,7 +2294,7 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
     <div className="flex items-start gap-1.5">
       {step(true, "Creada", "📋", stepDate(o.fecha))}
       {line(isPaid)}
-      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at))}
+      {step(isPaid, "Pagada", "💲", stepDate(o.paid_at || o.intent_fecha))}
       {line(isPacked)}
       {step(isPacked, "Empaquetado", "📦", stepDate(o.packed_at || o.label_downloaded_at))}
       {line(isShipped)}

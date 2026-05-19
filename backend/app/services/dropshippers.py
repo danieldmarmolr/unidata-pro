@@ -1068,6 +1068,7 @@ def dropshipper_detail(
             "number": info.get("number") or "",
             "status": info.get("status") or "paid (via Talo)",
             "fecha": info.get("fecha") or intent_fecha,
+            "intent_fecha": intent_fecha,
             "total": round(float(info.get("total") or 0), 2),
             "profit_unidrop": round(float(info.get("profit_unidrop") or 0), 2),
             "shipping_cost": round(float(info.get("shipping_cost") or 0), 2),
