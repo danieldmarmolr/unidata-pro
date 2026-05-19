@@ -325,6 +325,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
   const [comboFilter, setComboFilter] = useState<"all" | "combo" | "individual">("all");
   const [ordersPage, setOrdersPage] = useState(1);
+  const [planModalOpen, setPlanModalOpen] = useState(false);
   const ORDERS_PAGE_SIZE = 20;
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
@@ -463,39 +464,20 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
               </div>
             </div>
 
-            {/* Plan badge */}
-            <div className="bg-surface border border-border rounded-xl p-3 min-w-[200px]">
-              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-1">Plan suscripcion</div>
-              <div className="text-base font-bold text-text">{u.plan || "Sin plan"}</div>
-              <div className="text-xs text-text-muted">
-                {formatCurrency(u.plan_precio)}/mes · {u.plan_pub_max} pub max
+            {/* Plan badge — compact, click abre modal */}
+            <button
+              onClick={() => setPlanModalOpen(true)}
+              className="flex items-center gap-2.5 px-3 py-2 rounded-xl bg-surface border border-border hover:border-primary/50 transition-colors text-left flex-shrink-0 group"
+            >
+              <div className="min-w-0">
+                <div className="text-[9px] text-text-muted uppercase tracking-wider">Plan suscripcion</div>
+                <div className="text-sm font-bold text-text leading-tight truncate">{u.plan || "Sin plan"}</div>
+                <div className={`text-[10px] font-semibold mt-0.5 ${subActiva ? "text-emerald-600" : "text-rose-600"}`}>
+                  {subActiva ? `✓ activa · ${u.dias_al_vencimiento}d` : "✗ vencida"}
+                </div>
               </div>
-              {subActiva ? (
-                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700">
-                  <CheckCircle2 size={12} /> Activa · vence en {u.dias_al_vencimiento}d
-                </div>
-              ) : (
-                <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-bold text-rose-700">
-                  <XCircle size={12} /> Vencida o inactiva
-                </div>
-              )}
-              {data.sub_ltv && (
-                <div className="mt-2 pt-2 border-t border-border space-y-0.5">
-                  <div className="text-[11px] font-bold text-text">
-                    LTV suscripción: {formatCurrency(data.sub_ltv.total_pagado)}
-                  </div>
-                  <div className="text-[10px] text-text-muted">
-                    {data.sub_ltv.cant_procesadas} pagos procesados
-                    {data.sub_ltv.ultimo_pago && ` · último ${data.sub_ltv.ultimo_pago.slice(0, 10)}`}
-                  </div>
-                  {data.sub_ltv.cant_pendientes > 0 && (
-                    <div className="text-[10px] text-amber-700 font-semibold">
-                      {data.sub_ltv.cant_pendientes} pendiente{data.sub_ltv.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv.monto_pendiente)}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+              <ChevronRight size={14} className="text-text-muted flex-shrink-0 group-hover:text-primary transition-colors" />
+            </button>
           </div>
 
           {/* Canal de operacion */}
@@ -584,9 +566,18 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             </div>
             <div>
               <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">Última Venta</div>
-              <div className={`text-sm font-extrabold tabular-nums ${recencyD === null ? "text-rose-600" : recencyD <= 30 ? "text-emerald-700" : "text-amber-600"}`}>
-                {v.ultima_venta_number || (recencyD === null ? "Sin ventas" : recencyD === 0 ? "Hoy" : `${recencyD}d atrás`)}
-              </div>
+              {v.ultima_venta ? (
+                <>
+                  <div className={`text-sm font-extrabold tabular-nums ${recencyD === null ? "text-rose-600" : recencyD <= 30 ? "text-emerald-700" : "text-amber-600"}`}>
+                    {fmtArDateTime(v.ultima_venta).slice(0, 10)}
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {recencyD === 0 ? "Hoy" : `${recencyD}d atrás`}
+                  </div>
+                </>
+              ) : (
+                <div className="text-sm font-extrabold text-rose-600">Sin ventas</div>
+              )}
             </div>
           </div>
         </div>
@@ -629,6 +620,488 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 if (tConn <= 0) return null;
                 return ` · ${tConn} tienda${tConn === 1 ? "" : "s"} conectada${tConn === 1 ? "" : "s"}`;
               })()}
+            </div>
+          </div>
+        </div>
+
+        {/* Banner de filtro activo */}
+        {selectedIntent != null && (
+          <div className="mb-3 flex items-center gap-3 px-4 py-2 rounded-lg bg-amber-50 border border-amber-300 text-xs">
+            <span className="inline-flex items-center gap-1.5 font-bold text-amber-900">
+              Filtrando por PaymentIntent <span className="font-mono">#{selectedIntent}</span>
+            </span>
+            <span className="text-amber-800">
+              {filteredQuery.isLoading
+                ? "cargando..."
+                : `${unifiedOrders.length} ${unifiedOrders.length === 1 ? "orden" : "órdenes"} en este pago`}
+            </span>
+            <button
+              onClick={() => { setSelectedIntent(null); setOrdersPage(1); }}
+              className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded border border-amber-400 bg-white hover:bg-amber-100 font-bold text-amber-900"
+            >
+              <X size={11} /> limpiar filtro
+            </button>
+          </div>
+        )}
+
+        {/* Analítica de productos del dropshipper — Combo vs Individual + Top SKUs */}
+        {data.combo_analytics && (data.combo_analytics.combo_count + data.combo_analytics.individual_count) > 0 && (
+          <div className="bg-surface border border-border rounded-xl p-4 mb-4">
+            <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Analítica de productos del dropshipper</h3>
+                <p className="text-[11px] text-text-muted">
+                  Distribución combo vs individual + SKUs más vendidos sobre las últimas {data.combo_analytics.combo_count + data.combo_analytics.individual_count} órdenes
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Combo vs Individual */}
+              <div className="bg-soft/40 border border-border rounded-lg p-3">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-3">Combo vs Individual</div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-text font-semibold">Combo</span>
+                      <span className="tabular-nums">{data.combo_analytics.combo_count} órd · {formatCurrency(data.combo_analytics.combo_revenue)}</span>
+                    </div>
+                    <div className="h-2 bg-soft rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${data.combo_analytics.combo_pct}%` }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-text font-semibold">Individual</span>
+                      <span className="tabular-nums">{data.combo_analytics.individual_count} órd · {formatCurrency(data.combo_analytics.individual_revenue)}</span>
+                    </div>
+                    <div className="h-2 bg-soft rounded-full overflow-hidden">
+                      <div className="h-full bg-emerald-400" style={{ width: `${100 - data.combo_analytics.combo_pct}%` }} />
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-border/50 text-[11px] text-text-muted">
+                    {data.combo_analytics.combo_pct >= 50 ? (
+                      <>Vende <strong className="text-primary">más en combo</strong> ({data.combo_analytics.combo_pct.toFixed(0)}%)</>
+                    ) : (
+                      <>Vende <strong className="text-emerald-600">más individual</strong> ({(100 - data.combo_analytics.combo_pct).toFixed(0)}%)</>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {/* Top SKUs */}
+              <div className="bg-soft/40 border border-border rounded-lg p-3">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Top SKUs vendidos</div>
+                <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
+                  {data.combo_analytics.top_skus.slice(0, 10).map((s) => (
+                    <Link key={s.sku} href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
+                          className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-soft transition group">
+                      {s.image_url ? (
+                        <img src={s.image_url} alt={s.sku} className="w-8 h-8 rounded object-cover border border-border flex-shrink-0" loading="lazy" />
+                      ) : (
+                        <div className="w-8 h-8 rounded bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                          <Package size={12} className="text-text-muted" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-text truncate group-hover:text-primary">{s.name || s.sku}</div>
+                        <div className="text-[10px] text-text-muted font-mono">{s.sku} · {s.in_combos > 0 && <span className="text-primary">combo×{s.in_combos}</span>}{s.in_combos > 0 && s.in_individual > 0 && " · "}{s.in_individual > 0 && <span className="text-emerald-600">ind×{s.in_individual}</span>}</div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="text-xs font-bold tabular-nums">{s.qty}</div>
+                        <div className="text-[9px] text-text-muted tabular-nums">{formatCurrency(s.revenue)}</div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
+          {/* Vista unificada estilo Unidrop panel */}
+          <div className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h3 className="text-sm font-bold text-text">Ventas dropshipper (vista unificada)</h3>
+                <p className="text-[11px] text-text-muted">
+                  {allOrdersQuery.isLoading && !selectedIntent
+                    ? "Cargando órdenes..."
+                    : `${unifiedOrders.length} órdenes ${channelFilter === "all" ? "ML + TN" : channelFilter.toUpperCase()} · click en número para abrir en panel Unidrop`}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                {(allOrdersQuery.isFetching && !selectedIntent) && (
+                  <span className="text-[10px] text-text-muted italic">cargando...</span>
+                )}
+                {selectedIntent != null && filteredQuery.isFetching && (
+                  <span className="text-[10px] text-text-muted italic">actualizando...</span>
+                )}
+                <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
+                  <button onClick={() => { setChannelFilter("all"); setOrdersPage(1); }}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                    Todas ({countMl + countTn})
+                  </button>
+                  <button onClick={() => { setChannelFilter("ml"); setOrdersPage(1); }}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><MeliBadgeInline /> ({countMl})</span>
+                  </button>
+                  <button onClick={() => { setChannelFilter("tn"); setOrdersPage(1); }}
+                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-[#23A0DF]/10 text-[#1580B8] shadow" : "text-text-muted hover:text-text")}>
+                    <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
+                  </button>
+                </div>
+                {countCombo > 0 && (
+                  <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
+                    <button onClick={() => { setComboFilter("all"); setOrdersPage(1); }}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                      Tipo
+                    </button>
+                    <button onClick={() => { setComboFilter("combo"); setOrdersPage(1); }}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "combo" ? "bg-primary/10 text-primary shadow" : "text-text-muted hover:text-text")}>
+                      Combo ({countCombo})
+                    </button>
+                    <button onClick={() => { setComboFilter("individual"); setOrdersPage(1); }}
+                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "individual" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+                      Ind ({countMl + countTn - countCombo})
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
+                  <tr>
+                    <th className="w-7 px-1 py-2.5"></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="number" label="# Orden" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2.5">Estado del pedido</th>
+                    <th className="text-left px-2 py-2.5">Método envío</th>
+                    <th className="text-right px-2 py-2.5" title="Costo Unidrop = lo facturado en Contabilium (mercadería + envío)">Costo</th>
+                    <th className="text-right px-2 py-2.5" title="Ingreso del dropshipper (lo que cobró al cliente final)"><SortHeader col="total" label="Ingreso" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2.5" title="Ganancia = Ingreso − Costo">Ganancia</th>
+                    <th className="w-8 px-1 py-2.5"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unifiedOrders.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="text-center text-text-muted py-8">
+                        {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
+                      </td>
+                    </tr>
+                  ) : (
+                    paginatedOrders.map((o, idx) => {
+                      const rowKey = `${o.origen}-${o.internal_id ?? o.external_id}-${idx}`;
+                      const hasItems = (o.items?.length ?? 0) > 0;
+                      const hasShip = !!o.shipment;
+                      const hasReturns = (o.returns_count ?? 0) > 0;
+                      const isExpandable = hasItems || hasShip || hasReturns;
+                      const isExpanded = expandedOrders.has(rowKey);
+                      // Método de envío: solo carriers válidos (filtramos cualquier status como EMPAQUETADO).
+                      const metodoEnvio = methodEnvioDisplay(o);
+                      // Costo Unidrop = lo facturado a Unidrop via Contabilium (mercaderia + envio).
+                      // Es lo que importa para nuestras finanzas (alineado con Contabilium).
+                      const costoUnidrop = o.invoice?.total && o.invoice.total > 0
+                        ? o.invoice.total
+                        : (o.merch_cost || 0) + (o.shipping_cost || 0);
+                      // Ganancia dropshipper = ingreso (lo que cobró al cliente final) − costo Unidrop.
+                      const ganancia = o.total - costoUnidrop;
+                      return (
+                        <>
+                        <tr key={rowKey}
+                            className={`border-t border-border cursor-pointer ${isExpanded ? "bg-primary/5" : "hover:bg-soft/40"}`}
+                            onClick={() => toggleExpand(rowKey)}>
+                          {/* Expand chevron */}
+                          <td className="px-1 py-2 text-center text-text-muted">
+                            {isExpandable
+                              ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
+                              : <span className="w-3 inline-block" />}
+                          </td>
+                          {/* Número + canal badge */}
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <ChannelBadge origen={o.origen} />
+                              <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
+                                {o.number || o.external_id || "—"}
+                              </button>
+                              {o.is_combo && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 leading-tight">C</span>}
+                            </div>
+                          </td>
+                          {/* Cliente */}
+                          <td className="px-2 py-2 max-w-[150px]">
+                            <div className="truncate font-medium" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted text-[10px]">—</span>}</div>
+                            {(o.billing_city || o.billing_province) && (
+                              <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
+                            )}
+                          </td>
+                          {/* Fecha */}
+                          <td className="px-2 py-2 text-text-muted whitespace-nowrap">{fmtArDateTime(o.fecha)}</td>
+                          {/* Pipeline de estado */}
+                          <td className="px-2 py-2">
+                            <OrderPipeline o={o} />
+                          </td>
+                          {/* Método envío */}
+                          <td className="px-2 py-2">
+                            {metodoEnvio ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold bg-blue-50 text-blue-700 border-blue-200">
+                                <Truck size={8} />{metodoEnvio}
+                              </span>
+                            ) : <span className="text-text-muted text-[10px]">—</span>}
+                          </td>
+                          {/* Costo Unidrop (Contabilium) */}
+                          <td className="px-2 py-2 text-right tabular-nums text-text"
+                              title={o.invoice ? `Factura ${o.invoice.tipo} ${o.invoice.numero} — Contabilium` : "Sin factura registrada"}>
+                            {costoUnidrop > 0 ? formatCurrency(costoUnidrop) : <span className="text-text-muted text-[10px] font-normal">—</span>}
+                          </td>
+                          {/* Ingreso (lo que cobró el dropshipper al cliente) */}
+                          <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
+                          {/* Ganancia = Ingreso − Costo */}
+                          <td className={`px-2 py-2 text-right tabular-nums font-bold ${ganancia >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                            {costoUnidrop > 0 ? formatCurrency(ganancia) : <span className="text-text-muted text-[10px] font-normal">—</span>}
+                          </td>
+                          {/* Abrir modal */}
+                          <td className="px-1 py-2 text-center">
+                            <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                              className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-primary hover:bg-soft"
+                              title="Ver detalle completo">
+                              <ExternalLink size={11} />
+                            </button>
+                          </td>
+                        </tr>
+                        {/* Fila expandible — tabla completa de productos al estilo del modal */}
+                        {isExpanded && (
+                          <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
+                            <td colSpan={10} className="px-4 py-3">
+                              {hasItems && (() => {
+                                const sumCost = o.items!.reduce((s, i) => s + (i.cost ?? 0) * i.qty, 0);
+                                const sumPrice = o.items!.reduce((s, i) => s + i.price * i.qty, 0);
+                                const sumGan = sumPrice - sumCost;
+                                return (
+                                  <div>
+                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                                      <Package size={11} /> Productos · {o.items!.length} {o.items!.length === 1 ? "línea" : "líneas"}
+                                    </div>
+                                    <div className="border border-border rounded-lg overflow-hidden bg-surface">
+                                      <table className="w-full text-xs">
+                                        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+                                          <tr>
+                                            <th className="text-left px-3 py-2">Producto</th>
+                                            <th className="text-center px-2 py-2 w-12">Uds</th>
+                                            <th className="text-right px-2 py-2 w-24">Costo Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Precio Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Ganancia Ud.</th>
+                                            <th className="text-right px-2 py-2 w-24">Costo Total</th>
+                                            <th className="text-right px-2 py-2 w-24">Precio Total</th>
+                                            <th className="text-right px-3 py-2 w-24">Ganancia Total</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {o.items!.map((item, ii) => {
+                                            const isCombo = item.item_type?.toUpperCase() === "COMBO";
+                                            const ganUd = item.price - (item.cost ?? 0);
+                                            const costTot = (item.cost ?? 0) * item.qty;
+                                            const priceTot = item.price * item.qty;
+                                            const ganTot = priceTot - costTot;
+                                            return (
+                                              <tr key={ii} className="border-t border-border align-top">
+                                                <td className="px-3 py-2">
+                                                  <div className="flex items-start gap-2">
+                                                    {item.image_url ? (
+                                                      <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
+                                                    ) : (
+                                                      <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
+                                                        <Package size={12} className="text-text-muted" />
+                                                      </div>
+                                                    )}
+                                                    <div className="min-w-0">
+                                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="font-semibold text-text truncate">{item.name || "—"}</span>
+                                                        {isCombo && <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">C</span>}
+                                                      </div>
+                                                      {item.sku ? (
+                                                        <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
+                                                              onClick={(e) => e.stopPropagation()}
+                                                              className="text-[10px] text-primary font-mono hover:underline inline-flex items-center gap-0.5"
+                                                              title={`Abrir Producto 360 de ${item.sku}`}>
+                                                          SKU {item.sku} <ExternalLink size={8} />
+                                                        </Link>
+                                                      ) : <div className="text-[10px] text-text-muted font-mono">SKU —</div>}
+                                                    </div>
+                                                  </div>
+                                                </td>
+                                                <td className="text-center px-2 py-2 tabular-nums">{item.qty}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(item.cost) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(item.price)}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-primary font-semibold">{item.cost ? formatCurrency(ganUd) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(costTot) : "—"}</td>
+                                                <td className="text-right px-2 py-2 tabular-nums font-semibold">{formatCurrency(priceTot)}</td>
+                                                <td className="text-right px-3 py-2 tabular-nums text-primary font-bold">{item.cost ? formatCurrency(ganTot) : "—"}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                          <tr className="border-t-2 border-border bg-soft/50 font-bold">
+                                            <td className="px-3 py-2 text-text-muted text-[10px] uppercase tracking-wider" colSpan={5}>Totales</td>
+                                            <td className="text-right px-2 py-2 tabular-nums">{sumCost > 0 ? formatCurrency(sumCost) : "—"}</td>
+                                            <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(sumPrice)}</td>
+                                            <td className="text-right px-3 py-2 tabular-nums text-primary">{sumCost > 0 ? formatCurrency(sumGan) : "—"}</td>
+                                          </tr>
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                    {/* Bloque resumido de envío + devoluciones a la derecha */}
+                                    {(hasShip || hasReturns) && (
+                                      <div className="flex flex-wrap gap-3 mt-2.5 text-[11px]">
+                                        {hasShip && (
+                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-soft border border-border rounded">
+                                            <Truck size={10} className="text-text-muted" />
+                                            <span className="text-text-muted">{carrierLabel(o.shipment!.carrier)}:</span>
+                                            <span className="font-semibold">{o.shipment!.status || "—"}</span>
+                                            {o.shipment!.entregado && (
+                                              <span className="text-emerald-700">· entregado {o.shipment!.entregado.slice(0, 10)}</span>
+                                            )}
+                                          </div>
+                                        )}
+                                        {hasReturns && (
+                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-rose-50 border border-rose-200 rounded">
+                                            <RotateCcw size={10} className="text-rose-600" />
+                                            <span className="text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</span>
+                                          </div>
+                                        )}
+                                        <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                          className="ml-auto text-[11px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                          <ExternalLink size={10} /> Ver detalle completo
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
+                              {!hasItems && (
+                                <div className="text-text-muted text-xs italic py-2">
+                                  Sin productos detallados.
+                                  {(hasShip || hasReturns) && (
+                                    <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
+                                            className="ml-2 text-primary hover:underline inline-flex items-center gap-1 font-semibold">
+                                      <ExternalLink size={10} /> Ver detalle completo
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {ordersTotalPages > 1 && (
+              <div className="px-4 py-2.5 border-t border-border flex items-center justify-between gap-2">
+                <span className="text-[11px] text-text-muted">
+                  Pág. {ordersPage} de {ordersTotalPages} · {unifiedOrders.length} órdenes total
+                </span>
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                    disabled={ordersPage === 1}
+                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
+                  >← Ant</button>
+                  {Array.from({ length: Math.min(ordersTotalPages, 7) }, (_, i) => {
+                    const pg = ordersTotalPages <= 7 ? i + 1
+                      : ordersPage <= 4 ? i + 1
+                      : ordersPage >= ordersTotalPages - 3 ? ordersTotalPages - 6 + i
+                      : ordersPage - 3 + i;
+                    return (
+                      <button key={pg} onClick={() => setOrdersPage(pg)}
+                        className={"px-2.5 py-1 text-[11px] font-semibold rounded border transition " + (ordersPage === pg ? "bg-primary text-white border-primary" : "border-border hover:bg-soft")}>
+                        {pg}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => setOrdersPage((p) => Math.min(ordersTotalPages, p + 1))}
+                    disabled={ordersPage === ordersTotalPages}
+                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
+                  >Sig →</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Últimos pagos Talo (interactivo: click filtra la tabla izq) */}
+          <div className="bg-surface border border-border rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-border">
+              <h3 className="text-sm font-bold text-text">Últimos pagos a Unidrop (Talo Pay)</h3>
+              <p className="text-[11px] text-text-muted">
+                PaymentIntents · {pg.procesados} procesados / {pg.total_intents} totales · <strong>click en una fila</strong> para filtrar órdenes
+              </p>
+            </div>
+            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2"><SortHeader col="id" label="ID" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="status" label="Estado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="paid" label="Pagado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="pending" label="Pendiente" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                    <th className="text-right px-2 py-2"><SortHeader col="ml_orders" label="Origen" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pagosSorted.rows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="text-center text-text-muted py-6">
+                        Sin pagos registrados
+                      </td>
+                    </tr>
+                  ) : (
+                    pagosSorted.rows.map((p) => {
+                      const isSelected = selectedIntent === p.id;
+                      const canFilter = p.status?.toLowerCase() === "processed" && (p.ml_orders + p.tn_orders) > 0;
+                      return (
+                        <tr
+                          key={p.id}
+                          onClick={() => { if (canFilter) { setSelectedIntent(isSelected ? null : p.id); setOrdersPage(1); } }}
+                          className={
+                            "border-t border-border transition " +
+                            (canFilter ? "cursor-pointer " : "cursor-default opacity-60 ") +
+                            (isSelected ? "bg-amber-100/60 hover:bg-amber-100" : "hover:bg-soft/40")
+                          }
+                          title={canFilter ? (isSelected ? "Click para limpiar filtro" : "Click para filtrar órdenes de este pago") : "Sin órdenes asociadas"}
+                        >
+                          <td className="px-3 py-1.5 font-mono text-text-muted">
+                            {isSelected && <span className="text-amber-700 mr-1">▶</span>}
+                            {p.id}
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(p.status)}`}>
+                              {p.status || "-"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(p.fecha)}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700 font-semibold">
+                            {formatCurrency(p.paid)}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-rose-700">
+                            {p.pending > 0 ? formatCurrency(p.pending) : "—"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right text-[10px] text-text-muted">
+                            {p.ml_orders > 0 && <span>ML×{p.ml_orders} </span>}
+                            {p.tn_orders > 0 && <span>TN×{p.tn_orders}</span>}
+                            {p.ml_orders === 0 && p.tn_orders === 0 && "—"}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -788,12 +1261,14 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
         {/* Notas del equipo sobre este dropshipper (source of truth) */}
         <DropshipperNotes dropshipperId={u.user_id} />
 
-        {/* Talo accounts (CustomerPaymentAccount) */}
-        {data.talo_accounts && data.talo_accounts.length > 0 && data.talo_accounts.some(a => a.cbu || a.cbu_alias || a.alias) && (
-          <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 mb-5">
-            <h3 className="text-xs font-bold text-violet-900 uppercase tracking-wider mb-3">Cuentas Talo Pay</h3>
-            <div className="space-y-2">
-              {data.talo_accounts!.map((acc) => (
+        {/* Cuentas Talo Pay — CBU + resumen de ambos tipos de transacción */}
+        <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 mb-5">
+          <h3 className="text-xs font-bold text-violet-900 uppercase tracking-wider mb-3">Cuentas Talo Pay</h3>
+
+          {/* CBU / alias */}
+          {data.talo_accounts && data.talo_accounts.some(a => a.cbu || a.cbu_alias || a.alias) && (
+            <div className="space-y-2 mb-3">
+              {data.talo_accounts.map((acc) => (
                 <div key={acc.id} className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
                   <span className="text-text-muted">ID: <span className="font-mono font-bold text-text">{acc.id}</span></span>
                   {(acc.cbu || acc.cbu_alias) && <span className="text-text-muted">CBU: <span className="font-mono font-bold text-text">{acc.cbu || acc.cbu_alias}</span></span>}
@@ -803,85 +1278,86 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 </div>
               ))}
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Historial de suscripcion (PaymentIntentSubscription all-time) */}
-        {data.subscription_intents && data.subscription_intents.length > 0 && (
-          <div className="bg-surface border border-border rounded-xl overflow-hidden mb-5">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h3 className="text-sm font-bold text-text">Historial de suscripción</h3>
-                <p className="text-[11px] text-text-muted">
-                  PaymentIntentSubscription · {data.subscription_intents.length} registros ·
-                  LTV {formatCurrency(data.sub_ltv?.total_pagado ?? 0)}
-                </p>
+          {/* Resumen: suscripciones + órdenes */}
+          <div className="grid grid-cols-2 gap-3 pt-3 border-t border-violet-200">
+            <div>
+              <div className="text-[10px] text-violet-700 uppercase tracking-wider mb-0.5">Suscripciones (histórico)</div>
+              <div className="text-base font-extrabold text-violet-900 tabular-nums">{formatCurrency(data.sub_ltv?.total_pagado ?? 0)}</div>
+              <div className="text-[10px] text-violet-700 mt-0.5">
+                {data.sub_ltv?.cant_procesadas ?? 0} procesadas
+                {(data.sub_ltv?.cant_pendientes ?? 0) > 0 && (
+                  <span className="text-amber-700 font-semibold"> · {data.sub_ltv!.cant_pendientes} pendiente{data.sub_ltv!.cant_pendientes > 1 ? "s" : ""}</span>
+                )}
               </div>
-              {(data.sub_ltv?.cant_pendientes ?? 0) > 0 && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] font-bold">
-                  <Clock size={11} /> {data.sub_ltv!.cant_pendientes} pendiente{data.sub_ltv!.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv!.monto_pendiente)}
-                </span>
-              )}
             </div>
-            <div className="overflow-x-auto max-h-[280px] overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2">ID</th>
-                    <th className="text-left px-2 py-2">Estado</th>
-                    <th className="text-left px-2 py-2">Fecha</th>
-                    <th className="text-left px-2 py-2">Plan</th>
-                    <th className="text-right px-2 py-2">Pagado</th>
-                    <th className="text-right px-2 py-2">Esperado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.subscription_intents.map((si) => {
-                    const st = si.status.toUpperCase();
-                    return (
-                      <tr key={si.id} className="border-t border-border hover:bg-soft/40">
-                        <td className="px-3 py-1.5 font-mono text-text-muted">{si.id}</td>
-                        <td className="px-2 py-1.5">
-                          <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${
-                            st === "PROCESSED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                            : st === "PENDING" ? "bg-amber-50 text-amber-700 border-amber-200"
-                            : "bg-zinc-50 text-zinc-600 border-zinc-200"
-                          }`}>{si.status}</span>
-                        </td>
-                        <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(si.fecha)}</td>
-                        <td className="px-2 py-1.5 text-text-muted">{si.plan || "—"}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">
-                          {si.pagado > 0 ? formatCurrency(si.pagado) : "—"}
-                        </td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
-                          {si.esperado > 0 ? formatCurrency(si.esperado) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div>
+              <div className="text-[10px] text-violet-700 uppercase tracking-wider mb-0.5">Órdenes (período)</div>
+              <div className="text-base font-extrabold text-violet-900 tabular-nums">{formatCurrency(pg.pagado_total_period ?? 0)}</div>
+              <div className="text-[10px] text-violet-700 mt-0.5">
+                {(pg.pagos_ml_period_count ?? 0) + (pg.pagos_tn_period_count ?? 0)} intents procesados
+                {(pg.pagos_tn_period_count ?? 0) > 0 && ` · TN×${pg.pagos_tn_period_count}`}
+                {(pg.pagos_ml_period_count ?? 0) > 0 && ` · ML×${pg.pagos_ml_period_count}`}
+              </div>
             </div>
           </div>
-        )}
 
-        {/* Top clientes FINALES (compradores TN + ML del dropshipper) — drill al End Consumer 360 (solo TN) */}
-        {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
-          <div className="mb-5">
-            <CategoryTable
-              caption="Top clientes finales del dropshipper"
-              subtitle="Compradores TN y ML combinados · click en TN abre el journey del cliente"
-              data={data.top_clientes_finales}
-              formatter="currency"
-              extraColumns={[
-                { key: "canal", label: "Canal", format: "raw" },
-                { key: "ordenes", label: "Órd", format: "number" },
-                { key: "provincia", label: "Provincia", format: "raw" },
-                { key: "dni", label: "DNI", format: "raw" },
-              ]}
-            />
-          </div>
-        )}
+          {/* Historial de suscripciones */}
+          {data.subscription_intents && data.subscription_intents.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-violet-200">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                <span className="text-[10px] font-bold text-violet-900 uppercase tracking-wider">
+                  Historial suscripción · {data.subscription_intents.length} registros
+                </span>
+                {(data.sub_ltv?.cant_pendientes ?? 0) > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold">
+                    <Clock size={10} /> {data.sub_ltv!.cant_pendientes} pendiente{data.sub_ltv!.cant_pendientes > 1 ? "s" : ""} · {formatCurrency(data.sub_ltv!.monto_pendiente)}
+                  </span>
+                )}
+              </div>
+              <div className="overflow-x-auto max-h-[220px] overflow-y-auto rounded-lg border border-violet-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-violet-100/60 text-violet-900 text-[10px] uppercase tracking-wider sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-1.5">ID</th>
+                      <th className="text-left px-2 py-1.5">Estado</th>
+                      <th className="text-left px-2 py-1.5">Fecha</th>
+                      <th className="text-left px-2 py-1.5">Plan</th>
+                      <th className="text-right px-2 py-1.5">Pagado</th>
+                      <th className="text-right px-2 py-1.5">Esperado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.subscription_intents.map((si) => {
+                      const st = si.status.toUpperCase();
+                      return (
+                        <tr key={si.id} className="border-t border-violet-100 hover:bg-violet-50/40">
+                          <td className="px-3 py-1.5 font-mono text-text-muted">{si.id}</td>
+                          <td className="px-2 py-1.5">
+                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${
+                              st === "PROCESSED" ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : st === "PENDING" ? "bg-amber-50 text-amber-700 border-amber-200"
+                              : "bg-zinc-50 text-zinc-600 border-zinc-200"
+                            }`}>{si.status}</span>
+                          </td>
+                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(si.fecha)}</td>
+                          <td className="px-2 py-1.5 text-text-muted">{si.plan || "—"}</td>
+                          <td className="px-2 py-1.5 text-right tabular-nums font-semibold text-emerald-700">
+                            {si.pagado > 0 ? formatCurrency(si.pagado) : "—"}
+                          </td>
+                          <td className="px-2 py-1.5 text-right tabular-nums text-text-muted">
+                            {si.esperado > 0 ? formatCurrency(si.esperado) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Mensual GMV MELI + TN */}
         {data.monthly.length > 0 && (() => {
@@ -986,23 +1462,21 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        {/* Banner de filtro activo */}
-        {selectedIntent != null && (
-          <div className="mb-3 flex items-center gap-3 px-4 py-2 rounded-lg bg-amber-50 border border-amber-300 text-xs">
-            <span className="inline-flex items-center gap-1.5 font-bold text-amber-900">
-              Filtrando por PaymentIntent <span className="font-mono">#{selectedIntent}</span>
-            </span>
-            <span className="text-amber-800">
-              {filteredQuery.isLoading
-                ? "cargando..."
-                : `${unifiedOrders.length} ${unifiedOrders.length === 1 ? "orden" : "órdenes"} en este pago`}
-            </span>
-            <button
-              onClick={() => { setSelectedIntent(null); setOrdersPage(1); }}
-              className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded border border-amber-400 bg-white hover:bg-amber-100 font-bold text-amber-900"
-            >
-              <X size={11} /> limpiar filtro
-            </button>
+        {/* Top clientes FINALES (compradores TN + ML del dropshipper) */}
+        {data.top_clientes_finales && data.top_clientes_finales.length > 0 && (
+          <div className="mb-5">
+            <CategoryTable
+              caption="Top clientes finales del dropshipper"
+              subtitle="Compradores TN y ML combinados · click en TN abre el journey del cliente"
+              data={data.top_clientes_finales}
+              formatter="currency"
+              extraColumns={[
+                { key: "canal", label: "Canal", format: "raw" },
+                { key: "ordenes", label: "Órd", format: "number" },
+                { key: "provincia", label: "Provincia", format: "raw" },
+                { key: "dni", label: "DNI", format: "raw" },
+              ]}
+            />
           </div>
         )}
 
@@ -1542,469 +2016,71 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
           );
         })()}
+      </div>
 
-        {/* Analítica de productos del dropshipper — Combo vs Individual + Top SKUs */}
-        {data.combo_analytics && (data.combo_analytics.combo_count + data.combo_analytics.individual_count) > 0 && (
-          <div className="bg-surface border border-border rounded-xl p-4 mb-4">
-            <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
-              <div>
-                <h3 className="text-sm font-bold text-text">Analítica de productos del dropshipper</h3>
-                <p className="text-[11px] text-text-muted">
-                  Distribución combo vs individual + SKUs más vendidos sobre las últimas {data.combo_analytics.combo_count + data.combo_analytics.individual_count} órdenes
-                </p>
-              </div>
+      {/* Modal: Plan suscripción */}
+      {planModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setPlanModalOpen(false)}>
+          <div className="bg-surface rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-text">Plan Suscripción</h3>
+              <button onClick={() => setPlanModalOpen(false)} className="text-text-muted hover:text-text p-1 rounded">
+                <X size={18} />
+              </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Combo vs Individual */}
-              <div className="bg-soft/40 border border-border rounded-lg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-3">Combo vs Individual</div>
-                <div className="space-y-3">
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-text font-semibold">Combo</span>
-                      <span className="tabular-nums">{data.combo_analytics.combo_count} órd · {formatCurrency(data.combo_analytics.combo_revenue)}</span>
-                    </div>
-                    <div className="h-2 bg-soft rounded-full overflow-hidden">
-                      <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${data.combo_analytics.combo_pct}%` }} />
-                    </div>
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span className="text-text font-semibold">Individual</span>
-                      <span className="tabular-nums">{data.combo_analytics.individual_count} órd · {formatCurrency(data.combo_analytics.individual_revenue)}</span>
-                    </div>
-                    <div className="h-2 bg-soft rounded-full overflow-hidden">
-                      <div className="h-full bg-emerald-400" style={{ width: `${100 - data.combo_analytics.combo_pct}%` }} />
-                    </div>
-                  </div>
-                  <div className="pt-2 border-t border-border/50 text-[11px] text-text-muted">
-                    {data.combo_analytics.combo_pct >= 50 ? (
-                      <>Vende <strong className="text-primary">más en combo</strong> ({data.combo_analytics.combo_pct.toFixed(0)}%)</>
-                    ) : (
-                      <>Vende <strong className="text-emerald-600">más individual</strong> ({(100 - data.combo_analytics.combo_pct).toFixed(0)}%)</>
-                    )}
-                  </div>
-                </div>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between items-baseline">
+                <span className="text-text-muted">Plan</span>
+                <span className="font-bold text-text">{u.plan || "Sin plan"}</span>
               </div>
-              {/* Top SKUs */}
-              <div className="bg-soft/40 border border-border rounded-lg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Top SKUs vendidos</div>
-                <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
-                  {data.combo_analytics.top_skus.slice(0, 10).map((s) => (
-                    <Link key={s.sku} href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
-                          className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-soft transition group">
-                      {s.image_url ? (
-                        <img src={s.image_url} alt={s.sku} className="w-8 h-8 rounded object-cover border border-border flex-shrink-0" loading="lazy" />
-                      ) : (
-                        <div className="w-8 h-8 rounded bg-soft border border-border flex items-center justify-center flex-shrink-0">
-                          <Package size={12} className="text-text-muted" />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-text truncate group-hover:text-primary">{s.name || s.sku}</div>
-                        <div className="text-[10px] text-text-muted font-mono">{s.sku} · {s.in_combos > 0 && <span className="text-primary">combo×{s.in_combos}</span>}{s.in_combos > 0 && s.in_individual > 0 && " · "}{s.in_individual > 0 && <span className="text-emerald-600">ind×{s.in_individual}</span>}</div>
-                      </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="text-xs font-bold tabular-nums">{s.qty}</div>
-                        <div className="text-[9px] text-text-muted tabular-nums">{formatCurrency(s.revenue)}</div>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
+              <div className="flex justify-between items-baseline">
+                <span className="text-text-muted">Precio</span>
+                <span className="font-semibold">{formatCurrency(u.plan_precio)}/mes</span>
               </div>
-            </div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
-          {/* Vista unificada estilo Unidrop panel */}
-          <div className="bg-surface border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h3 className="text-sm font-bold text-text">Ventas dropshipper (vista unificada)</h3>
-                <p className="text-[11px] text-text-muted">
-                  {allOrdersQuery.isLoading && !selectedIntent
-                    ? "Cargando órdenes..."
-                    : `${unifiedOrders.length} órdenes ${channelFilter === "all" ? "ML + TN" : channelFilter.toUpperCase()} · click en número para abrir en panel Unidrop`}
-                </p>
+              <div className="flex justify-between items-baseline">
+                <span className="text-text-muted">Publicaciones max</span>
+                <span className="font-semibold">{u.plan_pub_max}</span>
               </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {(allOrdersQuery.isFetching && !selectedIntent) && (
-                  <span className="text-[10px] text-text-muted italic">cargando...</span>
-                )}
-                {selectedIntent != null && filteredQuery.isFetching && (
-                  <span className="text-[10px] text-text-muted italic">actualizando...</span>
-                )}
-                <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                  <button onClick={() => { setChannelFilter("all"); setOrdersPage(1); }}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
-                    Todas ({countMl + countTn})
-                  </button>
-                  <button onClick={() => { setChannelFilter("ml"); setOrdersPage(1); }}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}>
-                    <span className="inline-flex items-center gap-1"><MeliBadgeInline /> ({countMl})</span>
-                  </button>
-                  <button onClick={() => { setChannelFilter("tn"); setOrdersPage(1); }}
-                    className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-[#23A0DF]/10 text-[#1580B8] shadow" : "text-text-muted hover:text-text")}>
-                    <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
-                  </button>
-                </div>
-                {countCombo > 0 && (
-                  <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                    <button onClick={() => { setComboFilter("all"); setOrdersPage(1); }}
-                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
-                      Tipo
-                    </button>
-                    <button onClick={() => { setComboFilter("combo"); setOrdersPage(1); }}
-                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "combo" ? "bg-primary/10 text-primary shadow" : "text-text-muted hover:text-text")}>
-                      Combo ({countCombo})
-                    </button>
-                    <button onClick={() => { setComboFilter("individual"); setOrdersPage(1); }}
-                      className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "individual" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
-                      Ind ({countMl + countTn - countCombo})
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="overflow-x-auto max-h-[560px] overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
-                  <tr>
-                    <th className="w-7 px-1 py-2.5"></th>
-                    <th className="text-left px-2 py-2.5"><SortHeader col="number" label="# Orden" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2.5"><SortHeader col="buyer_name" label="Cliente" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2.5"><SortHeader col="fecha" label="Fecha" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2.5">Estado del pedido</th>
-                    <th className="text-left px-2 py-2.5">Método envío</th>
-                    <th className="text-right px-2 py-2.5" title="Costo Unidrop = lo facturado en Contabilium (mercadería + envío)">Costo</th>
-                    <th className="text-right px-2 py-2.5" title="Ingreso del dropshipper (lo que cobró al cliente final)"><SortHeader col="total" label="Ingreso" sortBy={unifiedSorted.sortBy} sortDir={unifiedSorted.sortDir} onToggle={unifiedSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2.5" title="Ganancia = Ingreso − Costo">Ganancia</th>
-                    <th className="w-8 px-1 py-2.5"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {unifiedOrders.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="text-center text-text-muted py-8">
-                        {selectedIntent ? "Sin órdenes en este PaymentIntent" : "Sin ventas registradas"}
-                      </td>
-                    </tr>
-                  ) : (
-                    paginatedOrders.map((o, idx) => {
-                      const rowKey = `${o.origen}-${o.internal_id ?? o.external_id}-${idx}`;
-                      const hasItems = (o.items?.length ?? 0) > 0;
-                      const hasShip = !!o.shipment;
-                      const hasReturns = (o.returns_count ?? 0) > 0;
-                      const isExpandable = hasItems || hasShip || hasReturns;
-                      const isExpanded = expandedOrders.has(rowKey);
-                      // Método de envío: solo carriers válidos (filtramos cualquier status como EMPAQUETADO).
-                      const metodoEnvio = methodEnvioDisplay(o);
-                      // Costo Unidrop = lo facturado a Unidrop via Contabilium (mercaderia + envio).
-                      // Es lo que importa para nuestras finanzas (alineado con Contabilium).
-                      const costoUnidrop = o.invoice?.total && o.invoice.total > 0
-                        ? o.invoice.total
-                        : (o.merch_cost || 0) + (o.shipping_cost || 0);
-                      // Ganancia dropshipper = ingreso (lo que cobró al cliente final) − costo Unidrop.
-                      const ganancia = o.total - costoUnidrop;
-                      return (
-                        <>
-                        <tr key={rowKey}
-                            className={`border-t border-border cursor-pointer ${isExpanded ? "bg-primary/5" : "hover:bg-soft/40"}`}
-                            onClick={() => toggleExpand(rowKey)}>
-                          {/* Expand chevron */}
-                          <td className="px-1 py-2 text-center text-text-muted">
-                            {isExpandable
-                              ? (isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />)
-                              : <span className="w-3 inline-block" />}
-                          </td>
-                          {/* Número + canal badge */}
-                          <td className="px-2 py-2">
-                            <div className="flex items-center gap-1.5">
-                              <ChannelBadge origen={o.origen} />
-                              <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
-                                className="font-mono font-semibold text-primary hover:underline text-xs leading-none">
-                                {o.number || o.external_id || "—"}
-                              </button>
-                              {o.is_combo && <span className="px-1 py-0 rounded text-[8px] font-bold bg-primary/10 text-primary border border-primary/20 leading-tight">C</span>}
-                            </div>
-                          </td>
-                          {/* Cliente */}
-                          <td className="px-2 py-2 max-w-[150px]">
-                            <div className="truncate font-medium" title={o.buyer_name}>{o.buyer_name || <span className="text-text-muted text-[10px]">—</span>}</div>
-                            {(o.billing_city || o.billing_province) && (
-                              <div className="text-[9px] text-text-muted truncate">{[o.billing_city, o.billing_province].filter(Boolean).join(", ")}</div>
-                            )}
-                          </td>
-                          {/* Fecha */}
-                          <td className="px-2 py-2 text-text-muted whitespace-nowrap">{fmtArDateTime(o.fecha)}</td>
-                          {/* Pipeline de estado */}
-                          <td className="px-2 py-2">
-                            <OrderPipeline o={o} />
-                          </td>
-                          {/* Método envío */}
-                          <td className="px-2 py-2">
-                            {metodoEnvio ? (
-                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[9px] font-bold bg-blue-50 text-blue-700 border-blue-200">
-                                <Truck size={8} />{metodoEnvio}
-                              </span>
-                            ) : <span className="text-text-muted text-[10px]">—</span>}
-                          </td>
-                          {/* Costo Unidrop (Contabilium) */}
-                          <td className="px-2 py-2 text-right tabular-nums text-text"
-                              title={o.invoice ? `Factura ${o.invoice.tipo} ${o.invoice.numero} — Contabilium` : "Sin factura registrada"}>
-                            {costoUnidrop > 0 ? formatCurrency(costoUnidrop) : <span className="text-text-muted text-[10px] font-normal">—</span>}
-                          </td>
-                          {/* Ingreso (lo que cobró el dropshipper al cliente) */}
-                          <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(o.total)}</td>
-                          {/* Ganancia = Ingreso − Costo */}
-                          <td className={`px-2 py-2 text-right tabular-nums font-bold ${ganancia >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
-                            {costoUnidrop > 0 ? formatCurrency(ganancia) : <span className="text-text-muted text-[10px] font-normal">—</span>}
-                          </td>
-                          {/* Abrir modal */}
-                          <td className="px-1 py-2 text-center">
-                            <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
-                              className="w-6 h-6 flex items-center justify-center rounded text-text-muted hover:text-primary hover:bg-soft"
-                              title="Ver detalle completo">
-                              <ExternalLink size={11} />
-                            </button>
-                          </td>
-                        </tr>
-                        {/* Fila expandible — tabla completa de productos al estilo del modal */}
-                        {isExpanded && (
-                          <tr key={`${rowKey}-detail`} className="border-t border-border/40 bg-primary/3">
-                            <td colSpan={10} className="px-4 py-3">
-                              {hasItems && (() => {
-                                const sumCost = o.items!.reduce((s, i) => s + (i.cost ?? 0) * i.qty, 0);
-                                const sumPrice = o.items!.reduce((s, i) => s + i.price * i.qty, 0);
-                                const sumGan = sumPrice - sumCost;
-                                return (
-                                  <div>
-                                    <div className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                                      <Package size={11} /> Productos · {o.items!.length} {o.items!.length === 1 ? "línea" : "líneas"}
-                                    </div>
-                                    <div className="border border-border rounded-lg overflow-hidden bg-surface">
-                                      <table className="w-full text-xs">
-                                        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
-                                          <tr>
-                                            <th className="text-left px-3 py-2">Producto</th>
-                                            <th className="text-center px-2 py-2 w-12">Uds</th>
-                                            <th className="text-right px-2 py-2 w-24">Costo Ud.</th>
-                                            <th className="text-right px-2 py-2 w-24">Precio Ud.</th>
-                                            <th className="text-right px-2 py-2 w-24">Ganancia Ud.</th>
-                                            <th className="text-right px-2 py-2 w-24">Costo Total</th>
-                                            <th className="text-right px-2 py-2 w-24">Precio Total</th>
-                                            <th className="text-right px-3 py-2 w-24">Ganancia Total</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {o.items!.map((item, ii) => {
-                                            const isCombo = item.item_type?.toUpperCase() === "COMBO";
-                                            const ganUd = item.price - (item.cost ?? 0);
-                                            const costTot = (item.cost ?? 0) * item.qty;
-                                            const priceTot = item.price * item.qty;
-                                            const ganTot = priceTot - costTot;
-                                            return (
-                                              <tr key={ii} className="border-t border-border align-top">
-                                                <td className="px-3 py-2">
-                                                  <div className="flex items-start gap-2">
-                                                    {item.image_url ? (
-                                                      <img src={item.image_url} alt={item.sku} className="w-8 h-8 rounded-md object-cover border border-border flex-shrink-0" loading="lazy" />
-                                                    ) : (
-                                                      <div className="w-8 h-8 rounded-md bg-soft border border-border flex items-center justify-center flex-shrink-0">
-                                                        <Package size={12} className="text-text-muted" />
-                                                      </div>
-                                                    )}
-                                                    <div className="min-w-0">
-                                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                                        <span className="font-semibold text-text truncate">{item.name || "—"}</span>
-                                                        {isCombo && <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">C</span>}
-                                                      </div>
-                                                      {item.sku ? (
-                                                        <Link href={`/dashboard/productos/${encodeURIComponent(item.sku)}`}
-                                                              onClick={(e) => e.stopPropagation()}
-                                                              className="text-[10px] text-primary font-mono hover:underline inline-flex items-center gap-0.5"
-                                                              title={`Abrir Producto 360 de ${item.sku}`}>
-                                                          SKU {item.sku} <ExternalLink size={8} />
-                                                        </Link>
-                                                      ) : <div className="text-[10px] text-text-muted font-mono">SKU —</div>}
-                                                    </div>
-                                                  </div>
-                                                </td>
-                                                <td className="text-center px-2 py-2 tabular-nums">{item.qty}</td>
-                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(item.cost) : "—"}</td>
-                                                <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(item.price)}</td>
-                                                <td className="text-right px-2 py-2 tabular-nums text-primary font-semibold">{item.cost ? formatCurrency(ganUd) : "—"}</td>
-                                                <td className="text-right px-2 py-2 tabular-nums text-text-muted">{item.cost ? formatCurrency(costTot) : "—"}</td>
-                                                <td className="text-right px-2 py-2 tabular-nums font-semibold">{formatCurrency(priceTot)}</td>
-                                                <td className="text-right px-3 py-2 tabular-nums text-primary font-bold">{item.cost ? formatCurrency(ganTot) : "—"}</td>
-                                              </tr>
-                                            );
-                                          })}
-                                          <tr className="border-t-2 border-border bg-soft/50 font-bold">
-                                            <td className="px-3 py-2 text-text-muted text-[10px] uppercase tracking-wider" colSpan={5}>Totales</td>
-                                            <td className="text-right px-2 py-2 tabular-nums">{sumCost > 0 ? formatCurrency(sumCost) : "—"}</td>
-                                            <td className="text-right px-2 py-2 tabular-nums">{formatCurrency(sumPrice)}</td>
-                                            <td className="text-right px-3 py-2 tabular-nums text-primary">{sumCost > 0 ? formatCurrency(sumGan) : "—"}</td>
-                                          </tr>
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                    {/* Bloque resumido de envío + devoluciones a la derecha */}
-                                    {(hasShip || hasReturns) && (
-                                      <div className="flex flex-wrap gap-3 mt-2.5 text-[11px]">
-                                        {hasShip && (
-                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-soft border border-border rounded">
-                                            <Truck size={10} className="text-text-muted" />
-                                            <span className="text-text-muted">{carrierLabel(o.shipment!.carrier)}:</span>
-                                            <span className="font-semibold">{o.shipment!.status || "—"}</span>
-                                            {o.shipment!.entregado && (
-                                              <span className="text-emerald-700">· entregado {o.shipment!.entregado.slice(0, 10)}</span>
-                                            )}
-                                          </div>
-                                        )}
-                                        {hasReturns && (
-                                          <div className="flex items-center gap-1.5 px-2 py-1 bg-rose-50 border border-rose-200 rounded">
-                                            <RotateCcw size={10} className="text-rose-600" />
-                                            <span className="text-rose-700 font-semibold">{o.returns_count} devolución{o.returns_count !== 1 ? "es" : ""}</span>
-                                          </div>
-                                        )}
-                                        <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
-                                          className="ml-auto text-[11px] text-primary hover:underline inline-flex items-center gap-1 font-semibold">
-                                          <ExternalLink size={10} /> Ver detalle completo
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })()}
-                              {!hasItems && (
-                                <div className="text-text-muted text-xs italic py-2">
-                                  Sin productos detallados.
-                                  {(hasShip || hasReturns) && (
-                                    <button onClick={(e) => { e.stopPropagation(); setModalOrder(o); }}
-                                            className="ml-2 text-primary hover:underline inline-flex items-center gap-1 font-semibold">
-                                      <ExternalLink size={10} /> Ver detalle completo
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                        </>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {ordersTotalPages > 1 && (
-              <div className="px-4 py-2.5 border-t border-border flex items-center justify-between gap-2">
-                <span className="text-[11px] text-text-muted">
-                  Pág. {ordersPage} de {ordersTotalPages} · {unifiedOrders.length} órdenes total
+              <div className="flex justify-between items-baseline">
+                <span className="text-text-muted">Estado</span>
+                <span className={`font-bold ${subActiva ? "text-emerald-600" : "text-rose-600"}`}>
+                  {subActiva ? `Activa · vence en ${u.dias_al_vencimiento}d` : "Vencida o inactiva"}
                 </span>
-                <div className="inline-flex items-center gap-1">
-                  <button
-                    onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
-                    disabled={ordersPage === 1}
-                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
-                  >← Ant</button>
-                  {Array.from({ length: Math.min(ordersTotalPages, 7) }, (_, i) => {
-                    const pg = ordersTotalPages <= 7 ? i + 1
-                      : ordersPage <= 4 ? i + 1
-                      : ordersPage >= ordersTotalPages - 3 ? ordersTotalPages - 6 + i
-                      : ordersPage - 3 + i;
-                    return (
-                      <button key={pg} onClick={() => setOrdersPage(pg)}
-                        className={"px-2.5 py-1 text-[11px] font-semibold rounded border transition " + (ordersPage === pg ? "bg-primary text-white border-primary" : "border-border hover:bg-soft")}>
-                        {pg}
-                      </button>
-                    );
-                  })}
-                  <button
-                    onClick={() => setOrdersPage((p) => Math.min(ordersTotalPages, p + 1))}
-                    disabled={ordersPage === ordersTotalPages}
-                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
-                  >Sig →</button>
-                </div>
               </div>
-            )}
-          </div>
-
-          {/* Últimos pagos Talo (interactivo: click filtra la tabla izq) */}
-          <div className="bg-surface border border-border rounded-xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-border">
-              <h3 className="text-sm font-bold text-text">Últimos pagos a Unidrop (Talo Pay)</h3>
-              <p className="text-[11px] text-text-muted">
-                PaymentIntents · {pg.procesados} procesados / {pg.total_intents} totales · <strong>click en una fila</strong> para filtrar órdenes
-              </p>
-            </div>
-            <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2"><SortHeader col="id" label="ID" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="status" label="Estado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                    <th className="text-left px-2 py-2"><SortHeader col="fecha" label="Fecha" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="paid" label="Pagado" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="pending" label="Pendiente" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                    <th className="text-right px-2 py-2"><SortHeader col="ml_orders" label="Origen" sortBy={pagosSorted.sortBy} sortDir={pagosSorted.sortDir} onToggle={pagosSorted.toggle} /></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagosSorted.rows.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="text-center text-text-muted py-6">
-                        Sin pagos registrados
-                      </td>
-                    </tr>
-                  ) : (
-                    pagosSorted.rows.map((p) => {
-                      const isSelected = selectedIntent === p.id;
-                      const canFilter = p.status?.toLowerCase() === "processed" && (p.ml_orders + p.tn_orders) > 0;
-                      return (
-                        <tr
-                          key={p.id}
-                          onClick={() => { if (canFilter) { setSelectedIntent(isSelected ? null : p.id); setOrdersPage(1); } }}
-                          className={
-                            "border-t border-border transition " +
-                            (canFilter ? "cursor-pointer " : "cursor-default opacity-60 ") +
-                            (isSelected ? "bg-amber-100/60 hover:bg-amber-100" : "hover:bg-soft/40")
-                          }
-                          title={canFilter ? (isSelected ? "Click para limpiar filtro" : "Click para filtrar órdenes de este pago") : "Sin órdenes asociadas"}
-                        >
-                          <td className="px-3 py-1.5 font-mono text-text-muted">
-                            {isSelected && <span className="text-amber-700 mr-1">▶</span>}
-                            {p.id}
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <span className={`inline-block px-1.5 py-0.5 rounded border text-[9px] uppercase font-bold ${statusColor(p.status)}`}>
-                              {p.status || "-"}
-                            </span>
-                          </td>
-                          <td className="px-2 py-1.5 text-text-muted">{fmtArDateTime(p.fecha)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-emerald-700 font-semibold">
-                            {formatCurrency(p.paid)}
-                          </td>
-                          <td className="px-2 py-1.5 text-right tabular-nums text-rose-700">
-                            {p.pending > 0 ? formatCurrency(p.pending) : "—"}
-                          </td>
-                          <td className="px-2 py-1.5 text-right text-[10px] text-text-muted">
-                            {p.ml_orders > 0 && <span>ML×{p.ml_orders} </span>}
-                            {p.tn_orders > 0 && <span>TN×{p.tn_orders}</span>}
-                            {p.ml_orders === 0 && p.tn_orders === 0 && "—"}
-                          </td>
-                        </tr>
-                      );
-                    })
+              {u.sub_desde && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-text-muted">Desde</span>
+                  <span>{u.sub_desde.slice(0, 10)}</span>
+                </div>
+              )}
+              {u.sub_vence && (
+                <div className="flex justify-between items-baseline">
+                  <span className="text-text-muted">Vence</span>
+                  <span>{u.sub_vence.slice(0, 10)}</span>
+                </div>
+              )}
+              {data.sub_ltv && (
+                <>
+                  <div className="border-t border-border pt-3 flex justify-between items-baseline">
+                    <span className="text-text-muted">LTV suscripción</span>
+                    <span className="font-bold text-emerald-700">{formatCurrency(data.sub_ltv.total_pagado)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-text-muted">
+                    <span>{data.sub_ltv.cant_procesadas} pagos procesados</span>
+                    {data.sub_ltv.ultimo_pago && <span>último {data.sub_ltv.ultimo_pago.slice(0, 10)}</span>}
+                  </div>
+                  {data.sub_ltv.cant_pendientes > 0 && (
+                    <div className="flex justify-between text-xs font-semibold text-amber-700">
+                      <span>{data.sub_ltv.cant_pendientes} pendiente{data.sub_ltv.cant_pendientes > 1 ? "s" : ""}</span>
+                      <span>{formatCurrency(data.sub_ltv.monto_pendiente)}</span>
+                    </div>
                   )}
-                </tbody>
-              </table>
+                </>
+              )}
             </div>
           </div>
         </div>
-      </div>
+      )}
     </>
   );
 }
