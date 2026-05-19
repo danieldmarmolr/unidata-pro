@@ -447,6 +447,7 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
                         shipping: o.shipping,
                         status: o.status,
                         empaquetada: o.empaquetada,
+                        canal: o.canal,
                         subtitle: subtitleParts.join(" · "),
                       };
                       return (

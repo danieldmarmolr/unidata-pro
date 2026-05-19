@@ -171,8 +171,9 @@ export function CellRenderer({
     const shippingVal = findColValue(columns, row, ["shipping", "shippingStatus", "envio", "shipping_status"]);
     const orderStatusVal = findColValue(columns, row, ["status", "estado", "order_status"]);
     const packedVal = findColValue(columns, row, ["empaquetada", "packed", "is_packed"]);
+    const canalVal = findColValue(columns, row, ["canal", "shipping_channel", "canal_envio"]);
     if (shippingVal !== null) {
-      return <OrderStatusPipeline payment={v} shipping={shippingVal} orderStatus={orderStatusVal} packed={packedVal} compact />;
+      return <OrderStatusPipeline payment={v} shipping={shippingVal} orderStatus={orderStatusVal} packed={packedVal} canal={String(canalVal ?? "")} compact />;
     }
     return <OrderStatusBadge kind="payment" value={v} />;
   }

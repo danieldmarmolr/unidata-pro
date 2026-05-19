@@ -34,10 +34,11 @@ function normalize(s: unknown): string {
   return String(s ?? "").trim().toLowerCase();
 }
 
-function buildSteps(payment: string, shipping: string, orderStatus: string, packed?: boolean): Step[] {
+function buildSteps(payment: string, shipping: string, orderStatus: string, packed?: boolean, canal?: string): Step[] {
   const p = normalize(payment);
   const s = normalize(shipping);
   const o = normalize(orderStatus);
+  const c = normalize(canal);
 
   const isCancelled = o === "cancelled" || p === "voided" || p === "abandoned";
   const isRefunded = p === "refunded";
@@ -47,36 +48,75 @@ function buildSteps(payment: string, shipping: string, orderStatus: string, pack
 
   const isDelivered = SHIPPING_DELIVERED.includes(s);
   const isInTransit = SHIPPING_INTRANSIT.includes(s);
-  // Si llega bool empaquetada del backend (Digip DespachoPedido), lo usamos.
-  // Si no tenemos esa info, asumimos que SHIPPING_PACKED (unshipped/ready_to_ship)
-  // del shippingStatus TN es indicio de que ya esta armado.
   const isPackedFromDigip = packed === true;
   const isPackedFromShipping = SHIPPING_PACKED.includes(s) || isInTransit || isDelivered;
   const isPacked = isPackedFromDigip || isPackedFromShipping;
 
+  const paidStep: Step = {
+    key: "paid",
+    label: isRefunded ? "Reembolsada" : isCancelled ? "Anulada" : isPending ? "Pendiente de pago" : "Pagada",
+    icon: isRefunded ? RotateCcw : isCancelled ? X : isPending ? Clock : DollarSign,
+    active: isPaid,
+    warning: isPending,
+    cancelled: isPaymentFail || isCancelled,
+    hint: `Pago: ${payment || "—"}`,
+  };
+
+  // Producto Digital: flujo de 3 pasos, se cierra al confirmar pago
+  if (c === "producto digital") {
+    return [
+      { key: "received", label: "Recibida", icon: Inbox, active: true, hint: "Orden creada en el sistema" },
+      paidStep,
+      {
+        key: "delivered",
+        label: isPaid ? "Servicio entregado" : "Servicio pendiente",
+        icon: GraduationCap,
+        active: isPaid && !isCancelled,
+        hint: isPaid ? "Servicio digital disponible · ciclo completo" : "Disponible tras confirmar pago",
+      },
+    ];
+  }
+
+  // Retiro presencial: flujo de 5 pasos con labels de retiro
+  if (c === "retiro presencial") {
+    return [
+      { key: "received", label: "Recibida", icon: Inbox, active: true, hint: "Orden creada en el sistema" },
+      paidStep,
+      {
+        key: "packed",
+        label: isPacked ? "Preparada" : "Sin preparar",
+        icon: Box,
+        active: isPacked,
+        warning: isPaid && !isPacked && !isCancelled,
+        hint: isPacked ? "Lista para retirar" : "Pendiente de preparar",
+      },
+      {
+        key: "shipped",
+        label: isPacked && !isDelivered ? "Lista para retiro" : isDelivered ? "Lista para retiro" : "Sin preparar",
+        icon: MapPin,
+        active: isPacked,
+        warning: isPaid && !isPacked && !isCancelled,
+        hint: `Retiro presencial · estado envio: ${shipping || "—"}`,
+      },
+      {
+        key: "delivered",
+        label: isDelivered ? "Retirado" : "Sin retirar",
+        icon: isDelivered ? Check : PackageCheck,
+        active: isDelivered,
+        hint: isDelivered ? "Retiro confirmado · ciclo completo" : "Aun no retirado",
+      },
+    ];
+  }
+
+  // Flujo default: envio fisico
   return [
-    {
-      key: "received",
-      label: "Recibida",
-      icon: Inbox,
-      active: true, // siempre activa una vez existe la orden
-      hint: "Orden creada en el sistema",
-    },
-    {
-      key: "paid",
-      label: isRefunded ? "Reembolsada" : isCancelled ? "Anulada" : isPending ? "Pendiente de pago" : "Pagada",
-      icon: isRefunded ? RotateCcw : isCancelled ? X : isPending ? Clock : DollarSign,
-      active: isPaid,
-      warning: isPending,
-      cancelled: isPaymentFail || isCancelled,
-      hint: `Pago: ${payment || "—"}`,
-    },
+    { key: "received", label: "Recibida", icon: Inbox, active: true, hint: "Orden creada en el sistema" },
+    paidStep,
     {
       key: "packed",
       label: isPacked ? "Empaquetada" : "Sin empaquetar",
       icon: Box,
       active: isPacked,
-      // warning si pago confirmado pero aun no empaqueto Digip
       warning: isPaid && !isPacked && !isCancelled,
       hint: isPackedFromDigip
         ? "Despachada por Digip · lista para enviar"
@@ -89,14 +129,11 @@ function buildSteps(payment: string, shipping: string, orderStatus: string, pack
       label: isInTransit || isDelivered ? "Enviada" : "Sin enviar",
       icon: Truck,
       active: isInTransit || isDelivered,
-      // warning si esta empaquetada pero aun no salio
       warning: isPacked && !isInTransit && !isDelivered && !isCancelled,
       hint: `Envio TN: ${shipping || "—"}`,
     },
     {
       key: "delivered",
-      // Cuando el ciclo esta cumplido reemplazamos el packagecheck por un Check
-      // verde brillante para evitar redundancia con "Enviada" del paso anterior.
       label: isDelivered ? "Recibida por cliente" : "Sin entregar",
       icon: isDelivered ? Check : PackageCheck,
       active: isDelivered,
@@ -166,6 +203,7 @@ export function OrderStatusPipeline({
   shipping,
   orderStatus,
   packed,
+  canal,
   compact = false,
 }: {
   payment?: unknown;
@@ -173,6 +211,8 @@ export function OrderStatusPipeline({
   orderStatus?: unknown;
   /** Empaquetada (boolean del backend, derivado de Digip DespachoPedido) */
   packed?: unknown;
+  /** Canal de envio — determina el flujo visual (digital / retiro presencial / default) */
+  canal?: string | null;
   /** compact: mas estrecho para tablas densas */
   compact?: boolean;
 }) {
@@ -182,6 +222,7 @@ export function OrderStatusPipeline({
     String(shipping ?? ""),
     String(orderStatus ?? ""),
     packedBool,
+    canal ?? undefined,
   );
   // Con 5 steps los dots tienen que ser un poco más chicos para no overflow
   const dotSize = compact ? 20 : 24;

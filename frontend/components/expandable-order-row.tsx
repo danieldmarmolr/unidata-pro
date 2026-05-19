@@ -35,6 +35,8 @@ export type OrderRowData = {
   status?: string | null;
   /** True si paso por DespachoPedido (digip) */
   empaquetada?: boolean | null;
+  /** Canal de envio (ej: "OCA", "Retiro presencial", "Producto Digital") — determina flujo del pipeline */
+  canal?: string | null;
   /** Subtitulo opcional - aparece chiquito abajo del numero (ej: razon de cancelacion, provincia, dias hace) */
   subtitle?: string | null;
   /** Chip extra a la derecha (ej: "STAFF") - opcional */
@@ -111,6 +113,7 @@ export function ExpandableOrderRow({
             shipping={order.shipping}
             orderStatus={order.status}
             packed={order.empaquetada ?? false}
+            canal={order.canal}
             compact
           />
         </td>

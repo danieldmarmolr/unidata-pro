@@ -14,6 +14,12 @@ from app.services._utils import q, scalar
 from app.services._utils import resolve_window
 from app.services import costs as costs_svc
 from app.utils.tz import today_ar
+from app.services.drilldowns import (
+    _classify_channel_sql,
+    _shipping_method_expr,
+    _shipping_type_col,
+    _carrier_col,
+)
 
 log = logging.getLogger("unidata.products")
 
@@ -462,26 +468,51 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
     # hoy lidera X con N unidades'. Filtrar HOY = solo del calendar day.
     recent_orders: list[dict] = []
     try:
-        rows = q(eng, """
-            SELECT o.id, o.number, o."createdAt"::text AS fecha,
-                   o."paymentStatus", o."shippingStatus", o.status,
-                   o.total::float, oi.quantity, oi.price::float,
-                   (oi.quantity * oi.price)::float AS subtotal,
-                   COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') AS provincia,
-                   COALESCE(c.name, c.email, 'Customer ' || o."customerId"::text) AS cliente,
-                   o."customerId" AS customer_id,
-                   EXISTS (
-                     SELECT 1 FROM digip."DespachoPedido" dp
-                     JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
-                     WHERE pd."orderId" = o.id
-                   ) AS empaquetada
-            FROM tienda_nube."OrderItem" oi
-            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-            LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
-            LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
-            WHERE oi.sku = :sku
-              AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
-            ORDER BY o."createdAt" DESC
+        _method_expr = _shipping_method_expr(eng)
+        _type_col = _shipping_type_col(eng)
+        _car_col = _carrier_col(eng)
+        _type_select = f", {_type_col} AS shipping_type" if _type_col else ""
+        _carrier_select = f", {_car_col} AS carrier_name" if _car_col else ""
+        _type_alias = "m.shipping_type" if _type_col else None
+        _carrier_alias = "m.carrier_name" if _car_col else None
+        _canal_sql = _classify_channel_sql(
+            "m.metodo_envio", type_alias=_type_alias,
+            carrier_alias=_carrier_alias, pva_alias="m.is_pva",
+        )
+        rows = q(eng, f"""
+            WITH base AS (
+              SELECT o.id, o.number, o."createdAt"::text AS fecha,
+                     o."paymentStatus", o."shippingStatus", o.status,
+                     o.total::float, oi.quantity, oi.price::float,
+                     (oi.quantity * oi.price)::float AS subtotal,
+                     COALESCE(NULLIF(TRIM(osa.province),''),'(sin provincia)') AS provincia,
+                     COALESCE(c.name, c.email, 'Customer ' || o."customerId"::text) AS cliente,
+                     o."customerId" AS customer_id,
+                     EXISTS (
+                       SELECT 1 FROM digip."DespachoPedido" dp
+                       JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                       WHERE pd."orderId" = o.id
+                     ) AS empaquetada,
+                     {_method_expr}{_type_select}{_carrier_select},
+                     EXISTS (
+                       SELECT 1 FROM tienda_nube."OrderItem" oi2
+                       WHERE oi2."orderId" = o.id AND oi2.sku ILIKE 'PVA%'
+                     ) AS is_pva
+              FROM tienda_nube."OrderItem" oi
+              JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+              LEFT JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
+              LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
+              LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
+              WHERE oi.sku = :sku
+                AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+            )
+            SELECT m.id, m.number, m.fecha,
+                   m."paymentStatus", m."shippingStatus", m.status,
+                   m.total, m.quantity, m.price, m.subtotal,
+                   m.provincia, m.cliente, m.customer_id, m.empaquetada,
+                   {_canal_sql} AS canal
+            FROM base m
+            ORDER BY m.fecha DESC
             LIMIT 200
         """, {"sku": sku, "from_ts": from_ts, "to_ts": to_ts}) or []
         recent_orders = [{
@@ -499,6 +530,7 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
             "cliente": r[11] or "",
             "customer_id": int(r[12] or 0) if r[12] else None,
             "empaquetada": bool(r[13]) if r[13] is not None else False,
+            "canal": r[14] or "",
         } for r in rows]
     except Exception as e:
         log.warning("product_detail recent_orders fail: %s", e)
@@ -959,17 +991,41 @@ def customer_detail(customer_id: int) -> dict:
                       "value": round(cancelled / orders * 100, 1) if orders else 0, "suffix": "%",
                       "hint": f"{cancelled} / {orders} ordenes"})
 
-    rows = q(eng, """
-        SELECT o.id, o.number, o."createdAt"::text, o.status,
-               o."paymentStatus", o."shippingStatus", o.total::float,
-               EXISTS (
-                 SELECT 1 FROM digip."DespachoPedido" dp
-                 JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
-                 WHERE pd."orderId" = o.id
-               ) AS empaquetada
-        FROM tienda_nube."Order" o
-        WHERE o."customerId" = :cid
-        ORDER BY o."createdAt" DESC LIMIT 50
+    method_expr = _shipping_method_expr(eng)
+    type_col = _shipping_type_col(eng)
+    carrier_col_expr = _carrier_col(eng)
+    type_select = f", {type_col} AS shipping_type" if type_col else ""
+    carrier_select = f", {carrier_col_expr} AS carrier_name" if carrier_col_expr else ""
+    type_alias = "m.shipping_type" if type_col else None
+    carrier_alias = "m.carrier_name" if carrier_col_expr else None
+    canal_sql = _classify_channel_sql(
+        "m.metodo_envio", type_alias=type_alias,
+        carrier_alias=carrier_alias, pva_alias="m.is_pva",
+    )
+    rows = q(eng, f"""
+        WITH base AS (
+          SELECT o.id, o.number, o."createdAt"::text, o.status,
+                 o."paymentStatus", o."shippingStatus", o.total::float,
+                 {method_expr}{type_select}{carrier_select},
+                 EXISTS (
+                   SELECT 1 FROM tienda_nube."OrderItem" oi
+                   WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
+                 ) AS is_pva,
+                 EXISTS (
+                   SELECT 1 FROM digip."DespachoPedido" dp
+                   JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
+                   WHERE pd."orderId" = o.id
+                 ) AS empaquetada
+          FROM tienda_nube."Order" o
+          LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
+          WHERE o."customerId" = :cid
+        )
+        SELECT m.id, m.number, m."createdAt", m.status,
+               m."paymentStatus", m."shippingStatus", m.total,
+               m.empaquetada,
+               {canal_sql} AS canal
+        FROM base m
+        ORDER BY m."createdAt" DESC LIMIT 50
     """, {"cid": customer_id}) or []
     orders_list = [{
         "category": str(r[1] or r[0]),
@@ -981,6 +1037,7 @@ def customer_detail(customer_id: int) -> dict:
             "payment": r[4] or "",
             "shipping": r[5] or "",
             "empaquetada": bool(r[7]) if r[7] is not None else False,
+            "canal": r[8] or "",
         },
     } for r in rows]
 
