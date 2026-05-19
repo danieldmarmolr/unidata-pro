@@ -1,91 +1,224 @@
 """
 Vista global de ordenes Unidrop: ML + TN de todos los dropshippers, paginada.
 Respeta el filtro de fecha del topbar (period + custom range).
-Devuelve campos enriquecidos: shipping_type, ciudad, provincia, payment/shipping
-status, costos reales, is_combo (via items LATERAL).
+
+Estrategia: query independiente por canal (ML / TN), unir resultados en Python.
+Si una falla, la otra sigue (mas robusto que UNION ALL).
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
 
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, DBAPIError
+
 from app.db.engines import get_engine
-from app.services._utils import q, scalar, resolve_window
+from app.services._utils import resolve_window
 
 log = logging.getLogger("unidata.dashboards")
 
 
-def _build_ml_sub(from_ts: dt.datetime, to_ts: dt.datetime) -> str:
-    """Sub-query ML — ordenes DROP-* enriquecidas con shipping address (JSONB)."""
-    return f"""
+def _exec_safe(engine, sql: str, params: dict | None = None) -> list:
+    """Ejecuta y devuelve filas. En caso de error, loggea el error completo
+    (no como warning silencioso) para facilitar debugging."""
+    try:
+        with engine.connect() as c:
+            return list(c.execute(text(sql), params or {}).all())
+    except Exception as e:
+        # Loggear el ERROR completo (no warning) para diagnostico
+        log.error("orders_global SQL failed: %s :: %s", str(e)[:500], sql.strip()[:200])
+        return []
+
+
+def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
+    """Fetch ML orders en el rango. Solo orders DROP-*."""
+    sql = """
         SELECT
             COALESCE(u.id, 0)::int                                                AS user_id,
             COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'Sin asignar')  AS dropshipper_name,
-            'ml'::text                                                            AS origen,
             COALESCE(NULLIF(o."number", ''), o.id::text)                          AS "number",
             o.id::text                                                            AS external_id,
             o."dateCreated"::text                                                 AS fecha,
-            COALESCE(o."status", '')::text                                        AS status,
-            COALESCE(o."paymentStatus", '')::text                                 AS payment_status,
-            COALESCE(o."shippingStatus", '')::text                                AS shipping_status,
+            COALESCE(o."status"::text, '')                                        AS status,
+            COALESCE(o."paymentStatus"::text, '')                                 AS payment_status,
+            COALESCE(o."shippingStatus"::text, '')                                AS shipping_status,
             COALESCE(o."totalAmount", 0)::float                                   AS total,
             COALESCE(o."merchandise_cost", 0)::float                              AS merch_cost,
             COALESCE(o."shipping_cost", 0)::float                                 AS shipping_cost,
             COALESCE(o."profit_for_subscription", 0)::float                       AS profit_unidrop,
             COALESCE(o."buyer_name", '')                                          AS buyer_name,
-            COALESCE(o."shipping_address_detail"->>'city', '')                    AS buyer_city,
-            COALESCE(o."shipping_address_detail"->>'state', '')                   AS buyer_province,
             COALESCE(o."shipping_option_reference", '')                           AS shipping_type,
             COALESCE(o."label_downloaded", FALSE)                                 AS label_downloaded,
-            COALESCE(o."cancel_by_unidrop", FALSE)                                AS cancel_by_unidrop,
-            EXISTS(
-                SELECT 1 FROM mercado_libre_dev."OrderItemMercadoLibre" oi
-                WHERE oi."orderId"::text = o.id::text
-                  AND UPPER(COALESCE(oi."orderType"::text, '')) = 'COMBO'
-            ) AS is_combo
+            COALESCE(o."cancel_by_unidrop", FALSE)                                AS cancel_by_unidrop
         FROM mercado_libre_dev."OrderMercadoLibre" o
         LEFT JOIN public."User" u
              ON u.dni::text = split_part(o."number", '-', 2)
         WHERE o."number" LIKE 'DROP-%'
-          AND o."dateCreated" >= '{from_ts.isoformat()}'::timestamp
-          AND o."dateCreated" <  '{to_ts.isoformat()}'::timestamp
+          AND o."dateCreated" >= :from_ts
+          AND o."dateCreated" <  :to_ts
+        ORDER BY o."dateCreated" DESC NULLS LAST
     """
+    rows = _exec_safe(eng, sql, {"from_ts": from_ts, "to_ts": to_ts})
+    out = []
+    for r in rows:
+        out.append({
+            "user_id": int(r[0]) if r[0] else 0,
+            "dropshipper_name": r[1] or "",
+            "origen": "ml",
+            "number": r[2] or "",
+            "external_id": r[3] or "",
+            "fecha": str(r[4]) if r[4] else "",
+            "status": r[5] or "",
+            "payment_status": r[6] or "",
+            "shipping_status": r[7] or "",
+            "total": round(float(r[8] or 0), 2),
+            "merch_cost": round(float(r[9] or 0), 2),
+            "shipping_cost": round(float(r[10] or 0), 2),
+            "profit_unidrop": round(float(r[11] or 0), 2),
+            "buyer_name": r[12] or "",
+            "shipping_type": r[13] or "",
+            "label_downloaded": bool(r[14]),
+            "cancel_by_unidrop": bool(r[15]),
+            "buyer_city": "",
+            "buyer_province": "",
+            "is_combo": False,  # enriched en bulk despues
+        })
+    log.info("orders_global ML fetched: %d rows", len(out))
+    return out
 
 
-def _build_tn_sub(from_ts: dt.datetime, to_ts: dt.datetime) -> str:
-    """Sub-query TN — ordenes de tienda nube enriquecidas con direccion + shipping."""
-    return f"""
+def _fetch_tn(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
+    """Fetch TN orders en el rango. Asocia user_id via tno.user_id."""
+    sql = """
         SELECT
             COALESCE(u.id, 0)::int                                                AS user_id,
             COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'Sin asignar')  AS dropshipper_name,
-            'tn'::text                                                            AS origen,
             COALESCE(NULLIF(tno."number", ''), tno.tienda_nube_id::text)          AS "number",
             tno.tienda_nube_id::text                                              AS external_id,
             tno.created_at::text                                                  AS fecha,
-            COALESCE(tno.payment_status::text, '')                                AS status,
             COALESCE(tno.payment_status::text, '')                                AS payment_status,
-            COALESCE(tno.shipping_status::text, '')                               AS shipping_status,
             COALESCE(tno.total, 0)::float                                         AS total,
             GREATEST(COALESCE(tno.total_cost, 0)::float - COALESCE(tno.shipping_cost, 0)::float, 0) AS merch_cost,
             COALESCE(tno.shipping_cost, 0)::float                                 AS shipping_cost,
-            0::float                                                              AS profit_unidrop,
             COALESCE(NULLIF(tno.contact_name, ''), '')                            AS buyer_name,
-            COALESCE(tno.shipping_address->>'city', '')                           AS buyer_city,
-            COALESCE(tno.shipping_address->>'province',
-                     tno.shipping_address->>'state', '')                          AS buyer_province,
-            COALESCE(tno.shipping_option, '')                                     AS shipping_type,
-            COALESCE(tno.label_downloaded, FALSE)                                 AS label_downloaded,
-            COALESCE(tno.cancel_by_unidrop, FALSE)                                AS cancel_by_unidrop,
-            EXISTS(
-                SELECT 1 FROM public.tienda_nube_order_items toi
-                WHERE toi.tienda_nube_order_id::text = tno.tienda_nube_id::text
-                  AND UPPER(COALESCE(toi.order_type::text, '')) = 'COMBO'
-            ) AS is_combo
+            COALESCE(tno.shipping_option, '')                                     AS shipping_type
         FROM public.tienda_nube_orders tno
         LEFT JOIN public."User" u ON u.id = tno.user_id
-        WHERE tno.created_at >= '{from_ts.isoformat()}'::timestamp
-          AND tno.created_at <  '{to_ts.isoformat()}'::timestamp
+        WHERE tno.created_at >= :from_ts
+          AND tno.created_at <  :to_ts
+        ORDER BY tno.created_at DESC NULLS LAST
     """
+    rows = _exec_safe(eng, sql, {"from_ts": from_ts, "to_ts": to_ts})
+    out = []
+    for r in rows:
+        out.append({
+            "user_id": int(r[0]) if r[0] else 0,
+            "dropshipper_name": r[1] or "",
+            "origen": "tn",
+            "number": r[2] or "",
+            "external_id": r[3] or "",
+            "fecha": str(r[4]) if r[4] else "",
+            "status": r[5] or "",
+            "payment_status": r[5] or "",
+            "shipping_status": "",
+            "total": round(float(r[6] or 0), 2),
+            "merch_cost": round(float(r[7] or 0), 2),
+            "shipping_cost": round(float(r[8] or 0), 2),
+            "profit_unidrop": 0.0,
+            "buyer_name": r[9] or "",
+            "shipping_type": r[10] or "",
+            "label_downloaded": False,
+            "cancel_by_unidrop": False,
+            "buyer_city": "",
+            "buyer_province": "",
+            "is_combo": False,
+        })
+    log.info("orders_global TN fetched: %d rows", len(out))
+    return out
+
+
+def _enrich_combo_ml(eng, items: list[dict]) -> None:
+    """Marca is_combo=True para ML orders cuyos items contienen orderType='COMBO'."""
+    ml_ids = [str(it["external_id"]) for it in items if it["origen"] == "ml" and it["external_id"]]
+    if not ml_ids:
+        return
+    ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in ml_ids) + "]::text[]"
+    sql = f"""
+        SELECT DISTINCT oi."orderId"::text AS order_ext_id
+        FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+        WHERE oi."orderId"::text = ANY({ids_lit})
+          AND UPPER(COALESCE(oi."orderType"::text, '')) = 'COMBO'
+    """
+    rows = _exec_safe(eng, sql)
+    combo_set = {r[0] for r in rows if r[0]}
+    for it in items:
+        if it["origen"] == "ml" and it["external_id"] in combo_set:
+            it["is_combo"] = True
+
+
+def _enrich_combo_tn(eng, items: list[dict]) -> None:
+    """Marca is_combo=True para TN orders cuyos items contienen order_type='COMBO'."""
+    tn_ids = [str(it["external_id"]) for it in items if it["origen"] == "tn" and it["external_id"]]
+    if not tn_ids:
+        return
+    ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in tn_ids) + "]::text[]"
+    sql = f"""
+        SELECT DISTINCT toi.tienda_nube_order_id::text AS order_ext_id
+        FROM public.tienda_nube_order_items toi
+        WHERE toi.tienda_nube_order_id::text = ANY({ids_lit})
+          AND UPPER(COALESCE(toi.order_type::text, '')) = 'COMBO'
+    """
+    rows = _exec_safe(eng, sql)
+    combo_set = {r[0] for r in rows if r[0]}
+    for it in items:
+        if it["origen"] == "tn" and it["external_id"] in combo_set:
+            it["is_combo"] = True
+
+
+def _enrich_address_ml(eng, items: list[dict]) -> None:
+    """Saca ciudad/provincia del shipping_address_detail JSONB para ML orders."""
+    ml_ids = [str(it["external_id"]) for it in items if it["origen"] == "ml" and it["external_id"]]
+    if not ml_ids:
+        return
+    ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in ml_ids) + "]::text[]"
+    sql = f"""
+        SELECT id::text,
+               COALESCE(shipping_address_detail->>'city', ''),
+               COALESCE(shipping_address_detail->>'state', '')
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE id::text = ANY({ids_lit})
+    """
+    rows = _exec_safe(eng, sql)
+    addr_map = {r[0]: (r[1] or "", r[2] or "") for r in rows if r[0]}
+    for it in items:
+        if it["origen"] == "ml" and it["external_id"] in addr_map:
+            city, prov = addr_map[it["external_id"]]
+            it["buyer_city"] = city
+            it["buyer_province"] = prov
+
+
+def _enrich_address_tn(eng, items: list[dict]) -> None:
+    """Saca ciudad/provincia del shipping_address JSONB para TN orders."""
+    tn_ids = [str(it["external_id"]) for it in items if it["origen"] == "tn" and it["external_id"]]
+    if not tn_ids:
+        return
+    ids_lit = "ARRAY[" + ",".join("'" + i + "'" for i in tn_ids) + "]::text[]"
+    sql = f"""
+        SELECT tienda_nube_id::text,
+               COALESCE(shipping_address->>'city', ''),
+               COALESCE(shipping_address->>'province',
+                        shipping_address->>'state', '')
+        FROM public.tienda_nube_orders
+        WHERE tienda_nube_id::text = ANY({ids_lit})
+    """
+    rows = _exec_safe(eng, sql)
+    addr_map = {r[0]: (r[1] or "", r[2] or "") for r in rows if r[0]}
+    for it in items:
+        if it["origen"] == "tn" and it["external_id"] in addr_map:
+            city, prov = addr_map[it["external_id"]]
+            it["buyer_city"] = city
+            it["buyer_province"] = prov
 
 
 def orders_global_unidrop(
@@ -93,7 +226,7 @@ def orders_global_unidrop(
     channel: str = "all",
     shipping_type: str | None = None,
     status_filter: str | None = None,
-    combo_filter: str | None = None,  # "all" | "combo" | "ind"
+    combo_filter: str | None = None,
     search_drop: str | None = None,
     user_id: int | None = None,
     limit: int = 100,
@@ -106,137 +239,106 @@ def orders_global_unidrop(
     from_ts: dt.datetime = win["from_ts"]
     to_ts: dt.datetime = win["to_ts"]
 
+    log.info("orders_global_unidrop start period=%s channel=%s window=%s→%s",
+             period, channel, from_ts.isoformat(), to_ts.isoformat())
+
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
 
-    subs: list[str] = []
+    all_items: list[dict] = []
     if include_ml:
-        subs.append(_build_ml_sub(from_ts, to_ts))
+        all_items.extend(_fetch_ml(eng, from_ts, to_ts))
     if include_tn:
-        subs.append(_build_tn_sub(from_ts, to_ts))
+        all_items.extend(_fetch_tn(eng, from_ts, to_ts))
 
-    if not subs:
-        return {"items": [], "total": 0, "total_ml": 0, "total_tn": 0,
-                "combo_count": 0, "ind_count": 0,
-                "limit": limit, "offset": offset,
-                "from": from_ts.isoformat(), "to": to_ts.isoformat(),
-                "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    log.info("orders_global_unidrop pre-enrich: ml=%d tn=%d total=%d",
+             sum(1 for i in all_items if i["origen"] == "ml"),
+             sum(1 for i in all_items if i["origen"] == "tn"),
+             len(all_items))
 
-    union_sql = " UNION ALL ".join(f"({s})" for s in subs)
+    # Enriquecer is_combo + city/province (defensivo, si falla seguimos sin esos campos)
+    if all_items:
+        try:
+            _enrich_combo_ml(eng, all_items)
+        except Exception as e:
+            log.error("orders_global combo_ml enrich failed: %s", str(e)[:200])
+        try:
+            _enrich_combo_tn(eng, all_items)
+        except Exception as e:
+            log.error("orders_global combo_tn enrich failed: %s", str(e)[:200])
+        try:
+            _enrich_address_ml(eng, all_items)
+        except Exception as e:
+            log.error("orders_global address_ml enrich failed: %s", str(e)[:200])
+        try:
+            _enrich_address_tn(eng, all_items)
+        except Exception as e:
+            log.error("orders_global address_tn enrich failed: %s", str(e)[:200])
 
-    where_clauses = ["1=1"]
-    params: dict = {}
+    # Filtrar in-memory (lo hicimos antes en SQL pero ahora es por simplicidad)
+    def matches(it: dict) -> bool:
+        if shipping_type and shipping_type.lower() not in ("all", ""):
+            st = shipping_type.lower()
+            t = (it.get("shipping_type") or "").lower()
+            if st in ("pr", "punto"):
+                if not ("pr" in t or "punto" in t or "drop_off" in t):
+                    return False
+            elif st in ("flex", "flexi"):
+                if not ("flexi" in t or "self" in t or t == "flex"):
+                    return False
+            elif st == "full":
+                if "full" not in t:
+                    return False
+            elif st == "oca":
+                if "oca" not in t:
+                    return False
+            elif st in ("lightdata", "unifast"):
+                if not ("lightdata" in t or "unifast" in t):
+                    return False
+            elif st == "andreani":
+                if "andreani" not in t:
+                    return False
+        if status_filter and status_filter.lower() not in ("all", ""):
+            sf = status_filter.lower()
+            STATUS_MAP = {
+                "paid": "paid", "confirmed": "confirmed", "shipped": "shipped",
+                "delivered": "delivered", "cancelled": "cancel",
+            }
+            raw = STATUS_MAP.get(sf, sf)
+            if not (raw in (it.get("status") or "").lower()
+                    or raw in (it.get("payment_status") or "").lower()
+                    or raw in (it.get("shipping_status") or "").lower()):
+                return False
+        if combo_filter and combo_filter.lower() in ("combo", "ind", "individual"):
+            if combo_filter.lower() == "combo" and not it.get("is_combo"):
+                return False
+            if combo_filter.lower() in ("ind", "individual") and it.get("is_combo"):
+                return False
+        if search_drop and search_drop.strip():
+            if search_drop.strip().lower() not in (it.get("dropshipper_name") or "").lower():
+                return False
+        if user_id:
+            if int(it.get("user_id") or 0) != int(user_id):
+                return False
+        return True
 
-    if shipping_type and shipping_type.lower() not in ("all", ""):
-        st = shipping_type.lower()
-        if st in ("pr", "punto"):
-            where_clauses.append(
-                "(LOWER(shipping_type) LIKE '%pr%' OR LOWER(shipping_type) LIKE '%punto%'"
-                " OR LOWER(shipping_type) LIKE '%drop_off%')"
-            )
-        elif st in ("flex", "flexi"):
-            where_clauses.append(
-                "(LOWER(shipping_type) LIKE '%flexi%' OR LOWER(shipping_type) LIKE '%self%'"
-                " OR LOWER(shipping_type) = 'flex')"
-            )
-        elif st == "full":
-            where_clauses.append("LOWER(shipping_type) LIKE '%full%'")
-        elif st == "oca":
-            where_clauses.append("LOWER(shipping_type) LIKE '%oca%'")
-        elif st in ("lightdata", "unifast"):
-            where_clauses.append(
-                "(LOWER(shipping_type) LIKE '%lightdata%' OR LOWER(shipping_type) LIKE '%unifast%')"
-            )
-        elif st == "andreani":
-            where_clauses.append("LOWER(shipping_type) LIKE '%andreani%'")
+    filtered = [it for it in all_items if matches(it)]
 
-    if status_filter and status_filter.lower() not in ("all", ""):
-        sf = status_filter.lower()
-        STATUS_MAP = {
-            "paid": "paid",
-            "confirmed": "confirmed",
-            "shipped": "shipped",
-            "delivered": "delivered",
-            "cancelled": "cancel",
-        }
-        raw = STATUS_MAP.get(sf, sf)
-        where_clauses.append(
-            "(LOWER(status) LIKE :sf OR LOWER(payment_status) LIKE :sf OR LOWER(shipping_status) LIKE :sf)"
-        )
-        params["sf"] = f"%{raw}%"
+    total = len(filtered)
+    total_ml = sum(1 for i in filtered if i["origen"] == "ml")
+    total_tn = sum(1 for i in filtered if i["origen"] == "tn")
+    combo_count = sum(1 for i in filtered if i.get("is_combo"))
+    ind_count = total - combo_count
 
-    if combo_filter and combo_filter.lower() in ("combo", "ind", "individual"):
-        if combo_filter.lower() == "combo":
-            where_clauses.append("is_combo = TRUE")
-        else:
-            where_clauses.append("is_combo = FALSE")
+    # Sort y paginacion
+    filtered.sort(key=lambda x: x.get("fecha") or "", reverse=True)
+    paged = filtered[offset:offset + limit]
 
-    if search_drop and search_drop.strip():
-        where_clauses.append("LOWER(dropshipper_name) LIKE LOWER(:search_drop)")
-        params["search_drop"] = f"%{search_drop.strip()}%"
-
-    if user_id:
-        where_clauses.append("user_id = :user_id")
-        params["user_id"] = user_id
-
-    where_sql = " AND ".join(where_clauses)
-
-    # Totals: total general + por canal + por is_combo
-    agg_row = q(eng, f"""
-        SELECT COUNT(*)::int                                AS total,
-               COUNT(*) FILTER (WHERE origen = 'ml')::int   AS total_ml,
-               COUNT(*) FILTER (WHERE origen = 'tn')::int   AS total_tn,
-               COUNT(*) FILTER (WHERE is_combo = TRUE)::int AS combo_count,
-               COUNT(*) FILTER (WHERE is_combo = FALSE)::int AS ind_count
-        FROM ({union_sql}) x WHERE {where_sql}
-    """, params) or [(0, 0, 0, 0, 0)]
-    agg = agg_row[0] if agg_row else (0, 0, 0, 0, 0)
-    total = int(agg[0] or 0)
-    total_ml = int(agg[1] or 0)
-    total_tn = int(agg[2] or 0)
-    combo_count = int(agg[3] or 0)
-    ind_count = int(agg[4] or 0)
-
-    rows = q(eng, f"""
-        SELECT user_id, dropshipper_name, origen, "number", external_id, fecha,
-               status, payment_status, shipping_status, total, merch_cost, shipping_cost,
-               profit_unidrop, buyer_name, buyer_city, buyer_province, shipping_type,
-               label_downloaded, cancel_by_unidrop, is_combo
-        FROM ({union_sql}) x
-        WHERE {where_sql}
-        ORDER BY fecha DESC NULLS LAST
-        LIMIT :lim OFFSET :off
-    """, {**params, "lim": limit, "off": offset}) or []
-
-    log.info("orders_global_unidrop period=%s channel=%s window=%s→%s total=%d (ml=%d, tn=%d) returned=%d",
-             period, channel, from_ts.isoformat(), to_ts.isoformat(),
-             total, total_ml, total_tn, len(rows))
-
-    items = [{
-        "user_id": int(r[0]) if r[0] else 0,
-        "dropshipper_name": r[1] or "",
-        "origen": r[2] or "ml",
-        "number": r[3] or "",
-        "external_id": r[4] or "",
-        "fecha": str(r[5]) if r[5] else "",
-        "status": r[6] or "",
-        "payment_status": r[7] or "",
-        "shipping_status": r[8] or "",
-        "total": round(float(r[9] or 0), 2),
-        "merch_cost": round(float(r[10] or 0), 2),
-        "shipping_cost": round(float(r[11] or 0), 2),
-        "profit_unidrop": round(float(r[12] or 0), 2),
-        "buyer_name": r[13] or "",
-        "buyer_city": r[14] or "",
-        "buyer_province": r[15] or "",
-        "shipping_type": r[16] or "",
-        "label_downloaded": bool(r[17]),
-        "cancel_by_unidrop": bool(r[18]),
-        "is_combo": bool(r[19]),
-    } for r in rows]
+    log.info("orders_global_unidrop done: total=%d (ml=%d tn=%d combo=%d ind=%d) returned=%d",
+             total, total_ml, total_tn, combo_count, ind_count, len(paged))
 
     return {
-        "items": items,
+        "items": paged,
         "total": total,
         "total_ml": total_ml,
         "total_tn": total_tn,
