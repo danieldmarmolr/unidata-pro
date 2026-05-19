@@ -1,8 +1,7 @@
 """
 Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
-
-Columnas y patrones de fecha copiados de drilldowns.unidrop_orders_combined_paid
-que es la query confirmada funcionando en producción.
+Sin filtro de fecha — la data histórica es el universo real (los períodos están
+todos en el pasado > 90d). Paginación por LIMIT/OFFSET.
 """
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ import datetime as dt
 import logging
 
 from app.db.engines import get_engine
-from app.services._utils import q, scalar, resolve_window
+from app.services._utils import q, scalar
 
 log = logging.getLogger("unidata.dashboards")
 
@@ -38,7 +37,6 @@ _ML_SUB = """
     LEFT JOIN public."User" u
          ON u.dni::text = split_part(o."number", '-', 2)
     WHERE o."number" LIKE 'DROP-%'
-      AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
 """
 
 _TN_SUB = """
@@ -63,7 +61,6 @@ _TN_SUB = """
         FALSE                                                                AS label_downloaded
     FROM public.tienda_nube_orders tno
     LEFT JOIN public."User" u ON u.id = tno.user_id
-    WHERE tno.created_at >= :from_ts AND tno.created_at < :to_ts
 """
 
 
@@ -80,9 +77,6 @@ def orders_global_unidrop(
     to_iso: str | None = None,
 ) -> dict:
     eng = get_engine("unidrop")
-    win = resolve_window(period, from_iso, to_iso)
-    date_params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
-    log.warning("orders_global_unidrop: period=%s from=%s to=%s uid=%s channel=%s", period, win["from_ts"], win["to_ts"], user_id, channel)
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
@@ -100,7 +94,7 @@ def orders_global_unidrop(
     union_sql = " UNION ALL ".join(f"({s})" for s in subs)
 
     where_clauses = ["1=1"]
-    extra_params: dict = {}
+    params: dict = {}
 
     if shipping_type and shipping_type.lower() not in ("all", ""):
         st = shipping_type.lower()
@@ -138,33 +132,21 @@ def orders_global_unidrop(
         where_clauses.append(
             "(LOWER(status) LIKE :sf OR LOWER(payment_status) LIKE :sf OR LOWER(shipping_status) LIKE :sf)"
         )
-        extra_params["sf"] = f"%{raw}%"
+        params["sf"] = f"%{raw}%"
 
     if search_drop and search_drop.strip():
         where_clauses.append("LOWER(dropshipper_name) LIKE LOWER(:search_drop)")
-        extra_params["search_drop"] = f"%{search_drop.strip()}%"
+        params["search_drop"] = f"%{search_drop.strip()}%"
 
     if user_id:
         where_clauses.append("user_id = :user_id")
-        extra_params["user_id"] = user_id
+        params["user_id"] = user_id
 
     where_sql = " AND ".join(where_clauses)
-    params: dict = {**date_params, **extra_params}
-
-    # Diagnostic: test each source independently with date filter
-    _ml_nd = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
-    _ml_d = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\' AND "dateCreated" >= :from_ts AND "dateCreated" < :to_ts', date_params)
-    _ml_max = scalar(eng, 'SELECT MAX("dateCreated")::text FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
-    _tn_nd = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders")
-    _tn_d = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders WHERE created_at >= :from_ts AND created_at < :to_ts", date_params)
-    _tn_max = scalar(eng, "SELECT MAX(created_at)::text FROM public.tienda_nube_orders")
-    log.warning("DIAG ML: no_date=%s with_date=%s max_date=%s", _ml_nd, _ml_d, _ml_max)
-    log.warning("DIAG TN: no_date=%s with_date=%s max_date=%s", _tn_nd, _tn_d, _tn_max)
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
-    log.warning("orders_global_unidrop RESULT: total=%d from=%s to=%s", total, win["from_ts"], win["to_ts"])
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha,
