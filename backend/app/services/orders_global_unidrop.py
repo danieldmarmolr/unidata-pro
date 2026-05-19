@@ -43,24 +43,24 @@ def _tn_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tu
 def _ml_sub(date_clause: str) -> str:
     return f"""
     SELECT
-        COALESCE(u.id, 0)::int                                  AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')AS dropshipper_name,
-        'ml'::text                                              AS origen,
-        COALESCE(oml."number", oml.id::text)                    AS "number",
-        oml.id::text                                            AS external_id,
-        oml."dateCreated"                                       AS fecha,
-        COALESCE(oml.status::text, '')                          AS status,
-        COALESCE(oml."paymentStatus"::text, '')                 AS payment_status,
-        COALESCE(oml."shippingStatus"::text, '')                AS shipping_status,
-        COALESCE(oml."totalAmount", 0)::float                   AS total,
-        COALESCE(oml."merchandise_cost", 0)::float              AS merch_cost,
-        COALESCE(oml."shipping_cost", 0)::float                 AS shipping_cost,
-        COALESCE(oml."profit_for_subscription", 0)::float       AS profit_unidrop,
-        COALESCE(oml."buyer_name", '')                          AS buyer_name,
-        ''                                                      AS buyer_city,
-        ''                                                      AS buyer_province,
-        COALESCE(oml."shipping_type"::text, '')                 AS shipping_type,
-        FALSE                                                   AS label_downloaded
+        COALESCE(u.id, 0)::int                                      AS user_id,
+        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')    AS dropshipper_name,
+        'ml'::text                                                  AS origen,
+        COALESCE(oml."number", oml.id::text)                        AS "number",
+        oml.id::text                                                AS external_id,
+        oml."dateCreated"                                           AS fecha,
+        COALESCE(oml.status::text, '')                              AS status,
+        COALESCE(oml."paymentStatus"::text, '')                     AS payment_status,
+        COALESCE(oml."shippingStatus"::text, '')                    AS shipping_status,
+        COALESCE(oml."totalAmount", 0)::float                       AS total,
+        COALESCE(oml."merchandise_cost", 0)::float                  AS merch_cost,
+        COALESCE(oml."shipping_cost", 0)::float                     AS shipping_cost,
+        COALESCE(oml."profit_for_subscription", 0)::float           AS profit_unidrop,
+        COALESCE(oml."buyer_name", '')                              AS buyer_name,
+        ''                                                          AS buyer_city,
+        ''                                                          AS buyer_province,
+        COALESCE(oml."shipping_option_reference"::text, '')         AS shipping_type,
+        COALESCE(oml."label_downloaded", FALSE)                     AS label_downloaded
     FROM mercado_libre_dev."OrderMercadoLibre" oml
     LEFT JOIN public."User" u
          ON u.dni::text = split_part(oml."number", '-', 2)
@@ -71,34 +71,26 @@ def _ml_sub(date_clause: str) -> str:
 def _tn_sub(date_clause: str) -> str:
     return f"""
     SELECT
-        COALESCE(u.id, 0)::int                                  AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')AS dropshipper_name,
-        'tn'::text                                              AS origen,
-        COALESCE(tno."number", tno.tienda_nube_id::text)        AS "number",
-        tno.tienda_nube_id::text                                AS external_id,
-        tno.created_at                                          AS fecha,
-        COALESCE(tno.payment_status::text, '')                  AS status,
-        COALESCE(tno.payment_status::text, '')                  AS payment_status,
-        COALESCE(tno.shipping_status::text, '')                 AS shipping_status,
-        COALESCE(tno.total, 0)::float                           AS total,
-        0::float                                                AS merch_cost,
-        0::float                                                AS shipping_cost,
-        0::float                                                AS profit_unidrop,
-        COALESCE(tno.contact_name, '')                          AS buyer_name,
-        COALESCE(tno.billing_city, '')                          AS buyer_city,
-        COALESCE(tno.billing_province, '')                      AS buyer_province,
-        COALESCE(tno.shipping_carrier, '')                      AS shipping_type,
-        COALESCE(tno.label_downloaded, FALSE)                   AS label_downloaded
+        COALESCE(u.id, 0)::int                                      AS user_id,
+        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')    AS dropshipper_name,
+        'tn'::text                                                  AS origen,
+        COALESCE(tno."number", tno.tienda_nube_id::text)            AS "number",
+        tno.tienda_nube_id::text                                    AS external_id,
+        tno.created_at                                              AS fecha,
+        COALESCE(tno.payment_status::text, '')                      AS status,
+        COALESCE(tno.payment_status::text, '')                      AS payment_status,
+        COALESCE(tno.shipping_status::text, '')                     AS shipping_status,
+        COALESCE(tno.total, 0)::float                               AS total,
+        0::float                                                    AS merch_cost,
+        0::float                                                    AS shipping_cost,
+        0::float                                                    AS profit_unidrop,
+        ''                                                          AS buyer_name,
+        ''                                                          AS buyer_city,
+        ''                                                          AS buyer_province,
+        COALESCE(tno.shipping_carrier, '')                          AS shipping_type,
+        COALESCE(tno.label_downloaded, FALSE)                       AS label_downloaded
     FROM public.tienda_nube_orders tno
-    LEFT JOIN LATERAL (
-        SELECT cpa."userId"
-        FROM public."PaymentIntent" pi
-        JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
-        WHERE tno.tienda_nube_id::text = ANY(pi."orderIds"::text[])
-        ORDER BY pi."createdAt" DESC
-        LIMIT 1
-    ) pi_user ON true
-    LEFT JOIN public."User" u ON u.id = pi_user."userId"
+    LEFT JOIN public."User" u ON u.id = tno.user_id
     WHERE {date_clause}"""
 
 
