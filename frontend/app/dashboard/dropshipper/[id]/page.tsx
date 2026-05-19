@@ -325,6 +325,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
   const [comboFilter, setComboFilter] = useState<"all" | "combo" | "individual">("all");
+  const [ordersPage, setOrdersPage] = useState(1);
+  const ORDERS_PAGE_SIZE = 20;
   const [expandedOrders, setExpandedOrders] = useState<Set<string>>(new Set());
   const [modalOrder, setModalOrder] = useState<UnifiedOrder | null>(null);
   const toggleExpand = (key: string) =>
@@ -346,6 +348,8 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const countCombo = unifiedAll.filter((o) => !!o.is_combo).length;
   const unifiedSorted = useTableSort<UnifiedOrder>(unifiedFiltered, "fecha", "desc");
   const unifiedOrders = unifiedSorted.rows;
+  const ordersTotalPages = Math.ceil(unifiedOrders.length / ORDERS_PAGE_SIZE);
+  const paginatedOrders = unifiedOrders.slice((ordersPage - 1) * ORDERS_PAGE_SIZE, ordersPage * ORDERS_PAGE_SIZE);
   // Sort para Pagos Talo
   const pagosSorted = useTableSort<NonNullable<typeof data>["ultimos_pagos"][number]>(
     data?.ultimos_pagos ?? [],
@@ -555,8 +559,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             accent="emerald"
             hint={mixHint}
           />
-          <KpiBox icon={Wallet} label="Margen Unidrop" value={formatCurrency(v.profit_unidrop)} accent="primary"
-                  hint="profit_for_subscription: ganancia de Unidrop por cada orden ML" />
+          {(() => {
+            const gananciaDrop = gmvTotal - (pg.pagado_total_period ?? 0);
+            return (
+              <KpiBox icon={Wallet} label="Ganancia dropshipper" value={formatCurrency(gananciaDrop)} accent="primary"
+                      hint={`Ingreso ${formatCurrency(gmvTotal)} − pagado a Unidrop ${formatCurrency(pg.pagado_total_period ?? 0)} (sin suscripción)`} />
+            );
+          })()}
           <KpiBox
             icon={TrendingUp}
             label="Ticket a Unidrop"
@@ -596,14 +605,14 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
 
         {/* KPIs secundarios */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-          <KpiBox icon={CreditCard} label="Pagado a Unidrop" value={formatCurrency(pg.pagado_total)} accent="emerald"
-                  hint={`${pg.procesados} pagos PROCESSED de ${pg.total_intents}`} />
+          <KpiBox icon={CreditCard} label="Pagado a Unidrop (total)" value={formatCurrency(pg.pagado_total)} accent="emerald"
+                  hint={`Histórico · ${pg.procesados} pagos PROCESSED de ${pg.total_intents}`} />
+          <KpiBox icon={Wallet} label="Margen Unidrop (ML)" value={formatCurrency(v.profit_unidrop)} accent="primary"
+                  hint="profit_for_subscription: lo que gana Unidrop por cada orden ML pagada" />
+          <KpiBox icon={DollarSign} label="Costo mercadería" value={formatCurrency(v.costo_mercaderia)} accent="amber"
+                  hint="Suma costos de mercadería en órdenes ML pagadas" />
           <KpiBox icon={Package} label="Publicaciones activas" value={formatNumber(pubs.activas)} accent="primary"
                   hint={`${pubs.totales} totales · max ${u.plan_pub_max}`} />
-          <KpiBox icon={DollarSign} label="Costo mercadería" value={formatCurrency(v.costo_mercaderia)} accent="amber"
-                  hint="Suma costos de mercadería en órdenes pagadas" />
-          <KpiBox icon={Package} label="Costo envíos" value={formatCurrency(v.costo_envio)} accent="amber"
-                  hint="Suma costos de envío MELI" />
         </div>
 
         {/* Segmentación omnicanal — ML vs TN, visible siempre aunque uno sea 0 */}
@@ -622,7 +631,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
             <div className="text-2xl font-extrabold text-yellow-900 tabular-nums">{formatCurrency(gmvMl)}</div>
             <div className="text-[11px] text-yellow-800/70 mt-1">
               {formatNumber(v.ventas_pagadas)} órdenes pagadas
-              {v.profit_unidrop > 0 && ` · Margen Unidrop ${formatCurrency(v.profit_unidrop)}`}
+              {v.profit_unidrop > 0 && ` · Ganancia Unidrop ${formatCurrency(v.profit_unidrop)}`}
             </div>
           </div>
           <div className="bg-cyan-50/40 border border-cyan-200 rounded-xl p-4">
@@ -1014,7 +1023,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 : `${unifiedOrders.length} ${unifiedOrders.length === 1 ? "orden" : "órdenes"} en este pago`}
             </span>
             <button
-              onClick={() => setSelectedIntent(null)}
+              onClick={() => { setSelectedIntent(null); setOrdersPage(1); }}
               className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded border border-amber-400 bg-white hover:bg-amber-100 font-bold text-amber-900"
             >
               <X size={11} /> limpiar filtro
@@ -1647,30 +1656,30 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   <span className="text-[10px] text-text-muted italic">actualizando...</span>
                 )}
                 <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                  <button onClick={() => setChannelFilter("all")}
+                  <button onClick={() => { setChannelFilter("all"); setOrdersPage(1); }}
                     className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
                     Todas ({countMl + countTn})
                   </button>
-                  <button onClick={() => setChannelFilter("ml")}
+                  <button onClick={() => { setChannelFilter("ml"); setOrdersPage(1); }}
                     className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "ml" ? "bg-yellow-100 text-yellow-900 shadow" : "text-text-muted hover:text-text")}>
                     <span className="inline-flex items-center gap-1"><MeliBadgeInline /> ({countMl})</span>
                   </button>
-                  <button onClick={() => setChannelFilter("tn")}
+                  <button onClick={() => { setChannelFilter("tn"); setOrdersPage(1); }}
                     className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (channelFilter === "tn" ? "bg-[#23A0DF]/10 text-[#1580B8] shadow" : "text-text-muted hover:text-text")}>
                     <span className="inline-flex items-center gap-1"><TnBadgeInline /> ({countTn})</span>
                   </button>
                 </div>
                 {countCombo > 0 && (
                   <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-                    <button onClick={() => setComboFilter("all")}
+                    <button onClick={() => { setComboFilter("all"); setOrdersPage(1); }}
                       className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "all" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
                       Tipo
                     </button>
-                    <button onClick={() => setComboFilter("combo")}
+                    <button onClick={() => { setComboFilter("combo"); setOrdersPage(1); }}
                       className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "combo" ? "bg-primary/10 text-primary shadow" : "text-text-muted hover:text-text")}>
                       Combo ({countCombo})
                     </button>
-                    <button onClick={() => setComboFilter("individual")}
+                    <button onClick={() => { setComboFilter("individual"); setOrdersPage(1); }}
                       className={"px-2.5 py-1 text-[10px] font-bold rounded-md transition " + (comboFilter === "individual" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
                       Ind ({countMl + countTn - countCombo})
                     </button>
@@ -1702,7 +1711,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       </td>
                     </tr>
                   ) : (
-                    unifiedOrders.map((o, idx) => {
+                    paginatedOrders.map((o, idx) => {
                       const rowKey = `${o.origen}-${o.internal_id ?? o.external_id}-${idx}`;
                       const hasItems = (o.items?.length ?? 0) > 0;
                       const hasShip = !!o.shipment;
@@ -1910,6 +1919,37 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                 </tbody>
               </table>
             </div>
+            {ordersTotalPages > 1 && (
+              <div className="px-4 py-2.5 border-t border-border flex items-center justify-between gap-2">
+                <span className="text-[11px] text-text-muted">
+                  Pág. {ordersPage} de {ordersTotalPages} · {unifiedOrders.length} órdenes total
+                </span>
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    onClick={() => setOrdersPage((p) => Math.max(1, p - 1))}
+                    disabled={ordersPage === 1}
+                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
+                  >← Ant</button>
+                  {Array.from({ length: Math.min(ordersTotalPages, 7) }, (_, i) => {
+                    const pg = ordersTotalPages <= 7 ? i + 1
+                      : ordersPage <= 4 ? i + 1
+                      : ordersPage >= ordersTotalPages - 3 ? ordersTotalPages - 6 + i
+                      : ordersPage - 3 + i;
+                    return (
+                      <button key={pg} onClick={() => setOrdersPage(pg)}
+                        className={"px-2.5 py-1 text-[11px] font-semibold rounded border transition " + (ordersPage === pg ? "bg-primary text-white border-primary" : "border-border hover:bg-soft")}>
+                        {pg}
+                      </button>
+                    );
+                  })}
+                  <button
+                    onClick={() => setOrdersPage((p) => Math.min(ordersTotalPages, p + 1))}
+                    disabled={ordersPage === ordersTotalPages}
+                    className="px-2.5 py-1 text-[11px] font-semibold rounded border border-border hover:bg-soft disabled:opacity-40 disabled:cursor-not-allowed"
+                  >Sig →</button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Últimos pagos Talo (interactivo: click filtra la tabla izq) */}
@@ -1946,7 +1986,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       return (
                         <tr
                           key={p.id}
-                          onClick={() => canFilter && setSelectedIntent(isSelected ? null : p.id)}
+                          onClick={() => { if (canFilter) { setSelectedIntent(isSelected ? null : p.id); setOrdersPage(1); } }}
                           className={
                             "border-t border-border transition " +
                             (canFilter ? "cursor-pointer " : "cursor-default opacity-60 ") +
