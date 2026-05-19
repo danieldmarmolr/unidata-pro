@@ -151,6 +151,7 @@ def get_unidrop_orders_global(
     shipping_type: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = None,
     search: Annotated[str | None, Query()] = None,
+    user_id: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=300)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
     from_iso: Annotated[str | None, Query(alias="from")] = None,
@@ -158,14 +159,14 @@ def get_unidrop_orders_global(
 ) -> dict:
     """Vista global de órdenes Unidrop: todas las órdenes ML + TN de todos los dropshippers."""
     require_area(user, ["ventas", "cs"])
-    key = f"ord-global:{period}:{channel}:{shipping_type}:{status}:{search}:{limit}:{offset}:{from_iso}:{to_iso}"
+    key = f"ord-global:{period}:{channel}:{shipping_type}:{status}:{search}:{user_id}:{limit}:{offset}:{from_iso}:{to_iso}"
     cached_val = _orders_global_cache.get(key)
     if cached_val is not None:
         return cached_val
     result = orders_global_svc.orders_global_unidrop(
         period=period, channel=channel, shipping_type=shipping_type,
-        status_filter=status, search_drop=search, limit=limit, offset=offset,
-        from_iso=from_iso, to_iso=to_iso,
+        status_filter=status, search_drop=search, user_id=user_id,
+        limit=limit, offset=offset, from_iso=from_iso, to_iso=to_iso,
     )
     _orders_global_cache[key] = result
     return result

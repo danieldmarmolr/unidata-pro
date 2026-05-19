@@ -73,6 +73,7 @@ def orders_global_unidrop(
     shipping_type: str | None = None,
     status_filter: str | None = None,
     search_drop: str | None = None,
+    user_id: int | None = None,
     limit: int = 100,
     offset: int = 0,
     from_iso: str | None = None,
@@ -81,6 +82,7 @@ def orders_global_unidrop(
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
     date_params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
+    log.warning("orders_global_unidrop: period=%s from=%s to=%s uid=%s channel=%s", period, win["from_ts"], win["to_ts"], user_id, channel)
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
@@ -142,12 +144,22 @@ def orders_global_unidrop(
         where_clauses.append("LOWER(dropshipper_name) LIKE LOWER(:search_drop)")
         extra_params["search_drop"] = f"%{search_drop.strip()}%"
 
+    if user_id:
+        where_clauses.append("user_id = :user_id")
+        extra_params["user_id"] = user_id
+
     where_sql = " AND ".join(where_clauses)
     params: dict = {**date_params, **extra_params}
+
+    # Diagnostic: count DROP orders without date filter to verify data exists
+    _ml_total = scalar(eng, 'SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE \'DROP-%\'')
+    _tn_total = scalar(eng, "SELECT COUNT(*) FROM public.tienda_nube_orders")
+    log.warning("orders_global_unidrop DIAG: ml_drop_total=%s tn_total=%s", _ml_total, _tn_total)
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
+    log.warning("orders_global_unidrop RESULT: total_with_filter=%d params=%s", total, params)
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha,
