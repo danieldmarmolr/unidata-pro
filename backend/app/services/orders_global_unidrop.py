@@ -187,6 +187,24 @@ def orders_global_unidrop(
     where_sql = " AND ".join(where_clauses)
     params: dict = {**merged_params, **extra_params}
 
+    # Debug: conteos separados por canal para diagnosticar
+    if include_ml:
+        _ml_only = _ml_sub(ml_date)
+        _ml_cnt = int(scalar(eng, f"SELECT COUNT(*) FROM ({_ml_only}) x", ml_params) or 0)
+        log.warning("orders_global DEBUG ml_count=%d period=%s", _ml_cnt, period)
+    if include_tn:
+        _tn_only = _tn_sub(tn_date)
+        _tn_cnt = int(scalar(eng, f"SELECT COUNT(*) FROM ({_tn_only}) x", tn_params) or 0)
+        log.warning("orders_global DEBUG tn_count=%d period=%s", _tn_cnt, period)
+
+    # Debug: contar OML DROP sin join a User
+    _raw_drop = int(scalar(eng, """
+        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" oml
+        WHERE oml."number" LIKE 'DROP-%'
+          AND oml."dateCreated" >= NOW() - make_interval(days => 90)
+    """, {}) or 0)
+    log.warning("orders_global DEBUG raw_drop_count=%d (no user join)", _raw_drop)
+
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
