@@ -176,7 +176,7 @@ export function UnidropOrdersGlobal() {
   }, []);
 
   const qs = new URLSearchParams({
-    ...(period !== "custom" ? { period } : {}),
+    period,
     ...(period === "custom" && customFrom ? { from: customFrom } : {}),
     ...(period === "custom" && customTo ? { to: customTo } : {}),
     channel,
