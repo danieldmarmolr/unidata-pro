@@ -678,7 +678,8 @@ def run_meli_db(
     log.info("=" * 60)
     try:
         engine = get_engine("unidrop")
-        _fecha_cond = f' AND "lastUpdated"::date >= \'{fecha_desde}\'' if fecha_desde else ""
+        _fecha_cond = f' AND "dateCreated"::date >= \'{fecha_desde}\'' if fecha_desde else ""
+        _fecha_cond_oi = f' AND o."dateCreated"::date >= \'{fecha_desde}\'' if fecha_desde else ""
         df_ord   = pd.read_sql(
             'SELECT * FROM mercado_libre_dev."OrderMercadoLibre" '
             'WHERE status=\'paid\' '
@@ -689,7 +690,7 @@ def run_meli_db(
             'INNER JOIN mercado_libre_dev."OrderMercadoLibre" o ON oi."orderId"=o.id '
             'WHERE o.status=\'paid\' '
             'AND (o."shipping_option_reference" IS NULL OR UPPER(o."shipping_option_reference") != \'EMPAQUETADO\')'
-            + _fecha_cond + ' ORDER BY oi.id ASC', engine)
+            + _fecha_cond_oi + ' ORDER BY oi.id ASC', engine)
         df_pi    = pd.read_sql(
             'SELECT * FROM public."PaymentIntent" WHERE status=\'PROCESSED\' AND "mlOrderIds" IS NOT NULL AND "mlOrderIds"::text<>\'{}\'',
             engine)
@@ -703,8 +704,9 @@ def run_meli_db(
 
     ya_en_db       = set(df_carg["number"].astype(str).str.strip())
     ya_lotes_en_db = set(df_lotes_db["nombre_lote"].astype(str).str.strip())
-    log.info("DB MELI: %d órdenes | %d items | %d PIs | %d ya en pedidos_por_lotes",
-             len(df_ord), len(df_items), len(df_pi), len(ya_en_db))
+    filtro_txt = f"dateCreated >= {fecha_desde}" if fecha_desde else "sin filtro fecha"
+    log.info("DB MELI [%s]: %d órdenes | %d items | %d PIs | %d ya en pedidos_por_lotes",
+             filtro_txt, len(df_ord), len(df_items), len(df_pi), len(ya_en_db))
 
     processed: set = set()
     for raw_val in df_pi["mlOrderIds"].dropna():
@@ -713,15 +715,20 @@ def run_meli_db(
             t = id_str.strip()
             if t and t.lower() != "null":
                 processed.add(t)
+    log.info("  PaymentIntent PROCESSED: %d IDs externos ML únicos", len(processed))
 
     df_ord["id_str"] = df_ord["id"].astype(str).str.strip()
     df_proc = df_ord[df_ord["id_str"].isin(processed) & (df_ord["status"] == "paid")].copy().reset_index(drop=True)
+    sin_pi = df_ord[~df_ord["id_str"].isin(processed)]
 
     if df_proc.empty:
-        log.info("MELI_DB: sin órdenes nuevas")
+        log.info("MELI_DB: sin órdenes nuevas — %d órdenes SQL pero 0 con PI procesado", len(df_ord))
+        if len(sin_pi) > 0:
+            sample_ids = sin_pi["id_str"].head(5).tolist()
+            log.info("  Ejemplos sin PI procesado: %s", sample_ids)
         return {"total": 0, "creados": 0, "ya_existian": 0, "omitidos": 0, "errores": 0}
 
-    log.info("MELI_DB candidatas: %d", len(df_proc))
+    log.info("MELI_DB candidatas tras filtro PI: %d (descartadas sin PI: %d)", len(df_proc), len(sin_pi))
 
     MAP_DESPACHO_ML = {"PUNTO DE RETIRO": "MELI PR", "FLEXI": "MELI FLEX", "": "Sin despacho"}
     ship_flat = json_normalize(df_proc["shipping_address_detail"].apply(_ensure_dict).tolist(), sep="_").add_prefix("shipping_")
@@ -757,8 +764,10 @@ def run_meli_db(
     }, index=df_main.index)
 
     if tipo != "TODOS":
-        tipo_mask = df_digip["CodigoDespacho"].str.upper().str.contains(tipo, na=False)
-        df_digip  = df_digip[tipo_mask].copy()
+        antes_tipo = df_digip["PedidoCodigo"].nunique()
+        tipo_mask  = df_digip["CodigoDespacho"].str.upper().str.contains(tipo, na=False)
+        df_digip   = df_digip[tipo_mask].copy()
+        log.info("  Filtro tipo=%s: %d → %d pedidos únicos", tipo, antes_tipo, df_digip["PedidoCodigo"].nunique())
 
     if df_digip.empty:
         log.info("MELI_DB: sin órdenes para tipo=%s", tipo)
@@ -767,11 +776,13 @@ def run_meli_db(
     ya_db_fallback = carga_digip_db.load_processed("MELI_DB")
     dup_mask       = df_digip["PedidoCodigo"].astype(str).isin(ya_en_db | ya_db_fallback)
     if dup_mask.any():
-        log.info("  Anti-dup: %d pedidos ya procesados — omitidos", dup_mask.sum())
+        n_dup = df_digip.loc[dup_mask, "PedidoCodigo"].nunique()
+        log.info("  Anti-dup: %d pedidos ya en pedidos_por_lotes/processed — omitidos", n_dup)
         df_digip = df_digip[~dup_mask].copy()
     if df_digip.empty:
         log.info("MELI_DB: todos los pedidos ya están cargados")
         return {"total": 0, "creados": 0, "ya_existian": len(ya_en_db), "omitidos": 0, "errores": 0}
+    log.info("  MELI_DB pendientes post anti-dup: %d pedidos únicos", df_digip["PedidoCodigo"].nunique())
 
     # ── Clasificación lote / individual ──────────────────────────────
     _ahora_db  = datetime.now(AR_TZ)
