@@ -2229,9 +2229,10 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
   const isShipped = !!o.shipped_at || isDelivered || ["shipped", "transit", "en_camino"].some((v) => (o.shipping_status || "").toLowerCase().includes(v));
 
   const isMl = o.origen === "ml";
-  const steps: { active: boolean; label: string; icon: string; iso?: string | null; sub?: string }[] = [
+  const paidIso = o.paid_at || (isMl ? o.fecha : undefined);
+  const steps: { active: boolean; label: string; icon: string; iso?: string | null; gold?: boolean }[] = [
     { active: true, label: "Creada", icon: "📋", iso: o.fecha },
-    { active: isPaid || isMl, label: "Pagada", icon: "💲", iso: o.paid_at, sub: !o.paid_at && isMl ? "Talo Pay" : undefined },
+    { active: isPaid || isMl, label: "Pagada", icon: "$", iso: paidIso, gold: isMl },
     { active: isPacked, label: "Empaquetado", icon: "📦", iso: o.packed_at || o.label_downloaded_at },
     { active: isShipped, label: "En camino", icon: "🚚", iso: o.shipped_at },
     { active: isDelivered, label: "Entregada", icon: "✅", iso: o.delivered_at || o.shipment?.entregado },
@@ -2243,10 +2244,10 @@ function OrderPipeline({ o }: { o: UnifiedOrder }) {
         <div key={s.label} className="flex items-center">
           {i > 0 && <div className={`h-0.5 w-2 ${s.active && steps[i - 1].active ? "bg-emerald-400" : "bg-zinc-200"}`} />}
           <div
-            title={s.iso ? `${s.label} · ${pipelineDateLabel(s.iso)}` : s.sub ? `${s.label} · ${s.sub}` : `${s.label} · sin fecha`}
-            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] border ${
+            title={s.iso ? `${s.label} · ${pipelineDateLabel(s.iso)}` : `${s.label} · sin fecha`}
+            className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black border ${
               s.active
-                ? "bg-emerald-500 text-white border-emerald-500"
+                ? `bg-emerald-500 border-emerald-500 ${s.gold ? "text-amber-300" : "text-white"}`
                 : "bg-zinc-100 text-zinc-400 border-zinc-200"
             }`}
           >
@@ -2279,10 +2280,10 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
     }
   };
 
-  const step = (done: boolean, label: string, icon: string, date?: string | null) => (
+  const step = (done: boolean, label: string, icon: string, date?: string | null, gold?: boolean) => (
     <div className="flex flex-col items-center gap-1 min-w-[58px]">
       <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 ${
-        done ? "bg-emerald-500 text-white border-emerald-500" : "bg-zinc-100 text-zinc-400 border-zinc-200"
+        done ? `bg-emerald-500 border-emerald-500 ${gold ? "text-amber-300" : "text-white"}` : "bg-zinc-100 text-zinc-400 border-zinc-200"
       }`}>{icon}</div>
       <span className={`text-[10px] leading-none text-center ${done ? "text-emerald-700 font-semibold" : "text-zinc-400"}`}>{label}</span>
       {date && <span className="text-[9px] leading-none text-text-muted tabular-nums">{date}</span>}
@@ -2295,7 +2296,7 @@ function OrderPipelineDetail({ o }: { o: UnifiedOrder }) {
     <div className="flex items-start gap-1.5">
       {step(true, "Creada", "📋", stepDate(o.fecha))}
       {line(isPaid)}
-      {step(isPaid || o.origen === "ml", "Pagada", "💲", stepDate(o.paid_at) || (o.origen === "ml" && !o.paid_at ? "Talo Pay" : undefined))}
+      {step(isPaid || o.origen === "ml", "Pagada", "$", stepDate(o.paid_at || (o.origen === "ml" ? o.fecha : undefined)), o.origen === "ml")}
       {line(isPacked)}
       {step(isPacked, "Empaquetado", "📦", stepDate(o.packed_at || o.label_downloaded_at))}
       {line(isShipped)}
