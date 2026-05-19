@@ -172,7 +172,10 @@ def get_unidrop_orders_global(
 
 
 @router.get("/unidrop/orders/debug")
-def debug_unidrop_orders(user: Annotated[dict, Depends(current_user)]) -> dict:
+def debug_unidrop_orders(secret: Annotated[str, Query()] = "") -> dict:
+    if secret != "unidata2026":
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404)
     from sqlalchemy import text as sa_text
     from app.db.engines import get_engine
     eng = get_engine("unidrop")
