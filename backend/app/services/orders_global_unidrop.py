@@ -1,98 +1,70 @@
 """
 Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
 
-ML: consulta OrderMercadoLibre directamente por number LIKE 'DROP-%',
-    extrae DNI del formato DROP-{dni}-{seq} para unir a User.
-
-TN: consulta tienda_nube_orders directamente; usa LATERAL a PaymentIntent
-    para resolver el dropshipper (LEFT JOIN → órdenes sin PI asignado igual aparecen).
+Columnas y patrones de fecha copiados de drilldowns.unidrop_orders_combined_paid
+que es la query confirmada funcionando en producción.
 """
 from __future__ import annotations
 
 import datetime as dt
 import logging
 
-from sqlalchemy import text
 from app.db.engines import get_engine
-from app.services._utils import q, scalar
+from app.services._utils import q, scalar, resolve_window
 
 log = logging.getLogger("unidata.dashboards")
 
-PERIOD_DAYS = {"today": 1, "yesterday": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
-
-
-def _ml_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
-    if period == "custom" and from_iso and to_iso:
-        return (
-            'oml."dateCreated" >= :from_iso::timestamp AND oml."dateCreated" <= :to_iso::timestamp',
-            {"from_iso": from_iso, "to_iso": to_iso},
-        )
-    days = PERIOD_DAYS.get(period, 30)
-    return 'oml."dateCreated" >= NOW() - make_interval(days => :days)', {"days": days}
-
-
-def _tn_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
-    if period == "custom" and from_iso and to_iso:
-        return (
-            'tno.created_at >= :from_iso::timestamp AND tno.created_at <= :to_iso::timestamp',
-            {"from_iso": from_iso, "to_iso": to_iso},
-        )
-    days = PERIOD_DAYS.get(period, 30)
-    return 'tno.created_at >= NOW() - make_interval(days => :days)', {"days": days}
-
-
-def _ml_sub(date_clause: str) -> str:
-    return f"""
+_ML_SUB = """
     SELECT
-        COALESCE(u.id, 0)::int                                      AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')    AS dropshipper_name,
-        'ml'::text                                                  AS origen,
-        COALESCE(oml."number", oml.id::text)                        AS "number",
-        oml.id::text                                                AS external_id,
-        oml."dateCreated"                                           AS fecha,
-        COALESCE(oml.status::text, '')                              AS status,
-        COALESCE(oml."statusDetail"::text, '')                      AS payment_status,
-        ''                                                          AS shipping_status,
-        COALESCE(oml."total_cost", 0)::float                        AS total,
-        0::float                                                    AS merch_cost,
-        0::float                                                    AS shipping_cost,
-        COALESCE(oml."profit_for_subscription", 0)::float           AS profit_unidrop,
-        COALESCE(oml."buyer_name", '')                              AS buyer_name,
-        ''                                                          AS buyer_city,
-        ''                                                          AS buyer_province,
-        COALESCE(oml."shipping_option_reference"::text, '')         AS shipping_type,
-        COALESCE(oml."label_downloaded", FALSE)                     AS label_downloaded
-    FROM mercado_libre_dev."OrderMercadoLibre" oml
+        COALESCE(u.id, 0)::int                                               AS user_id,
+        COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'Sin asignar') AS dropshipper_name,
+        'ml'::text                                                           AS origen,
+        COALESCE(o."number", o.id::text)                                     AS "number",
+        o.id::text                                                           AS external_id,
+        o."dateCreated"                                                      AS fecha,
+        o.status::text                                                       AS status,
+        ''::text                                                             AS payment_status,
+        ''::text                                                             AS shipping_status,
+        COALESCE(o."totalAmount", 0)::float                                  AS total,
+        0::float                                                             AS merch_cost,
+        COALESCE(o."shipping_cost", 0)::float                                AS shipping_cost,
+        COALESCE(o."profit_for_subscription", 0)::float                      AS profit_unidrop,
+        COALESCE(o."buyer_name", '')                                         AS buyer_name,
+        ''::text                                                             AS buyer_city,
+        ''::text                                                             AS buyer_province,
+        ''::text                                                             AS shipping_type,
+        FALSE                                                                AS label_downloaded
+    FROM mercado_libre_dev."OrderMercadoLibre" o
     LEFT JOIN public."User" u
-         ON u.dni::text = split_part(oml."number", '-', 2)
-    WHERE oml."number" LIKE 'DROP-%'
-      AND {date_clause}"""
+         ON u.dni::text = split_part(o."number", '-', 2)
+    WHERE o."number" LIKE 'DROP-%'
+      AND o."dateCreated" >= :from_ts AND o."dateCreated" < :to_ts
+"""
 
-
-def _tn_sub(date_clause: str) -> str:
-    return f"""
+_TN_SUB = """
     SELECT
-        COALESCE(u.id, 0)::int                                      AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')    AS dropshipper_name,
-        'tn'::text                                                  AS origen,
-        COALESCE(tno."number", tno.tienda_nube_id::text)            AS "number",
-        tno.tienda_nube_id::text                                    AS external_id,
-        tno.created_at                                              AS fecha,
-        COALESCE(tno.payment_status::text, '')                      AS status,
-        COALESCE(tno.payment_status::text, '')                      AS payment_status,
-        COALESCE(tno.shipping_status::text, '')                     AS shipping_status,
-        COALESCE(tno.total, 0)::float                               AS total,
-        0::float                                                    AS merch_cost,
-        0::float                                                    AS shipping_cost,
-        0::float                                                    AS profit_unidrop,
-        ''                                                          AS buyer_name,
-        ''                                                          AS buyer_city,
-        ''                                                          AS buyer_province,
-        COALESCE(tno.shipping_carrier, '')                          AS shipping_type,
-        COALESCE(tno.label_downloaded, FALSE)                       AS label_downloaded
+        COALESCE(u.id, 0)::int                                               AS user_id,
+        COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'Sin asignar') AS dropshipper_name,
+        'tn'::text                                                           AS origen,
+        COALESCE(tno."number", tno.tienda_nube_id::text)                     AS "number",
+        tno.tienda_nube_id::text                                             AS external_id,
+        tno.created_at                                                       AS fecha,
+        tno.payment_status::text                                             AS status,
+        tno.payment_status::text                                             AS payment_status,
+        ''::text                                                             AS shipping_status,
+        COALESCE(tno.total, 0)::float                                        AS total,
+        0::float                                                             AS merch_cost,
+        0::float                                                             AS shipping_cost,
+        0::float                                                             AS profit_unidrop,
+        COALESCE(NULLIF(tno.contact_name, ''), '')                           AS buyer_name,
+        ''::text                                                             AS buyer_city,
+        ''::text                                                             AS buyer_province,
+        ''::text                                                             AS shipping_type,
+        FALSE                                                                AS label_downloaded
     FROM public.tienda_nube_orders tno
     LEFT JOIN public."User" u ON u.id = tno.user_id
-    WHERE {date_clause}"""
+    WHERE tno.created_at >= :from_ts AND tno.created_at < :to_ts
+"""
 
 
 def orders_global_unidrop(
@@ -107,28 +79,23 @@ def orders_global_unidrop(
     to_iso: str | None = None,
 ) -> dict:
     eng = get_engine("unidrop")
-
-    ml_date, ml_params = _ml_date_clause(period, from_iso, to_iso)
-    tn_date, tn_params = _tn_date_clause(period, from_iso, to_iso)
+    win = resolve_window(period, from_iso, to_iso)
+    date_params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
 
     include_ml = channel in ("all", "ml")
     include_tn = channel in ("all", "tn")
 
-    parts: list[tuple[str, dict]] = []
+    subs = []
     if include_ml:
-        parts.append((_ml_sub(ml_date), ml_params))
+        subs.append(_ML_SUB)
     if include_tn:
-        parts.append((_tn_sub(tn_date), tn_params))
+        subs.append(_TN_SUB)
 
-    if not parts:
+    if not subs:
         return {"items": [], "total": 0, "limit": limit, "offset": offset,
                 "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
-    merged_params: dict = {}
-    for _, p in parts:
-        merged_params.update(p)
-
-    union_sql = " UNION ALL ".join(f"({sub})" for sub, _ in parts)
+    union_sql = " UNION ALL ".join(f"({s})" for s in subs)
 
     where_clauses = ["1=1"]
     extra_params: dict = {}
@@ -176,16 +143,7 @@ def orders_global_unidrop(
         extra_params["search_drop"] = f"%{search_drop.strip()}%"
 
     where_sql = " AND ".join(where_clauses)
-    params: dict = {**merged_params, **extra_params}
-
-    # DEBUG: bypass q() para ver el error SQL real
-    for _label, _sub, _p in [("ML", _ml_sub(ml_date), ml_params), ("TN", _tn_sub(tn_date), tn_params)]:
-        try:
-            with eng.connect() as _c:
-                _r = _c.execute(text(_sub + " LIMIT 1"), _p).all()
-                log.warning("DEBUG %s sub OK rows=%d", _label, len(_r))
-        except Exception as _e:
-            log.warning("DEBUG %s sub ERROR: %s", _label, str(_e)[:600])
+    params: dict = {**date_params, **extra_params}
 
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
