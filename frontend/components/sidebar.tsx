@@ -103,8 +103,18 @@ const ITEMS: NavItem[] = [
     ],
   },
   { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Cross", roles: ONLY_GERENCIA, areas: ["ventas"] },
-  { label: "Logistica",        href: "/dashboard/logistica",      icon: Truck,           group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica"] },
-  { label: "Carga DigiP",      href: "/dashboard/logistica/carga-digip", icon: Upload,   group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica"] },
+  {
+    label: "Logistica",
+    href: "/dashboard/logistica",
+    icon: Truck,
+    group: "Cross",
+    roles: ONLY_GERENCIA,
+    areas: ["logistica"],
+    children: [
+      { label: "Vista general", href: "/dashboard/logistica",             icon: Truck   },
+      { label: "Carga DigiP",  href: "/dashboard/logistica/carga-digip", icon: Upload  },
+    ],
+  },
   { label: "Finanzas",         href: "/dashboard/finanzas",       icon: Wallet,          group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
   {
