@@ -46,7 +46,7 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
                u."subscriptionId" AS subscription_id,
                sm.name             AS subscription_plan_name
         FROM public."User" u
-        LEFT JOIN public."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
+        LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
         WHERE u.dni = :dni
           AND LOWER(u.email) = LOWER(:email)
         LIMIT 1
