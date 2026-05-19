@@ -3,10 +3,9 @@ Vista global de órdenes Unidrop: ML + TN de todos los dropshippers, paginada.
 
 ML: consulta OrderMercadoLibre directamente por number LIKE 'DROP-%',
     extrae DNI del formato DROP-{dni}-{seq} para unir a User.
-    El join via pi."mlOrderIds" = ANY(oml.id) no funciona porque los IDs
-    en el array no coinciden con oml.id (comportamiento confirmado en logs).
 
-TN: ancla en PaymentIntent PROCESSED con cast text para el join a tienda_nube_orders.
+TN: consulta tienda_nube_orders directamente; usa LATERAL a PaymentIntent
+    para resolver el dropshipper (LEFT JOIN → órdenes sin PI asignado igual aparecen).
 """
 from __future__ import annotations
 
@@ -34,26 +33,25 @@ def _ml_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tu
 def _tn_date_clause(period: str, from_iso: str | None, to_iso: str | None) -> tuple[str, dict]:
     if period == "custom" and from_iso and to_iso:
         return (
-            'pi."createdAt" >= :from_iso::timestamp AND pi."createdAt" <= :to_iso::timestamp',
+            'tno.created_at >= :from_iso::timestamp AND tno.created_at <= :to_iso::timestamp',
             {"from_iso": from_iso, "to_iso": to_iso},
         )
     days = PERIOD_DAYS.get(period, 30)
-    return 'pi."createdAt" >= NOW() - make_interval(days => :days)', {"days": days}
+    return 'tno.created_at >= NOW() - make_interval(days => :days)', {"days": days}
 
 
 def _ml_sub(date_clause: str) -> str:
-    """ML orders: OML por numero DROP-{dni}-* → join User via DNI extraido del numero."""
     return f"""
     SELECT
-        u.id::int                                               AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email)               AS dropshipper_name,
+        COALESCE(u.id, 0)::int                                  AS user_id,
+        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')AS dropshipper_name,
         'ml'::text                                              AS origen,
         COALESCE(oml."number", oml.id::text)                    AS "number",
         oml.id::text                                            AS external_id,
         oml."dateCreated"                                       AS fecha,
-        COALESCE(oml.status, '')                                AS status,
-        COALESCE(oml."paymentStatus", '')                       AS payment_status,
-        COALESCE(oml."shippingStatus", '')                      AS shipping_status,
+        COALESCE(oml.status::text, '')                          AS status,
+        COALESCE(oml."paymentStatus"::text, '')                 AS payment_status,
+        COALESCE(oml."shippingStatus"::text, '')                AS shipping_status,
         COALESCE(oml."totalAmount", 0)::float                   AS total,
         COALESCE(oml."merchandise_cost", 0)::float              AS merch_cost,
         COALESCE(oml."shipping_cost", 0)::float                 AS shipping_cost,
@@ -61,28 +59,27 @@ def _ml_sub(date_clause: str) -> str:
         COALESCE(oml."buyer_name", '')                          AS buyer_name,
         ''                                                      AS buyer_city,
         ''                                                      AS buyer_province,
-        COALESCE(oml."shipping_type", '')                       AS shipping_type,
+        COALESCE(oml."shipping_type"::text, '')                 AS shipping_type,
         FALSE                                                   AS label_downloaded
     FROM mercado_libre_dev."OrderMercadoLibre" oml
-    JOIN public."User" u
+    LEFT JOIN public."User" u
          ON u.dni::text = split_part(oml."number", '-', 2)
     WHERE oml."number" LIKE 'DROP-%'
       AND {date_clause}"""
 
 
 def _tn_sub(date_clause: str) -> str:
-    """TN orders: PaymentIntent PROCESSED → tienda_nube_orders via text cast."""
     return f"""
     SELECT
-        cpa."userId"::int                                       AS user_id,
-        COALESCE(u.fantasy_name, u.name, u.email)               AS dropshipper_name,
+        COALESCE(u.id, 0)::int                                  AS user_id,
+        COALESCE(u.fantasy_name, u.name, u.email, 'Sin asignar')AS dropshipper_name,
         'tn'::text                                              AS origen,
         COALESCE(tno."number", tno.tienda_nube_id::text)        AS "number",
         tno.tienda_nube_id::text                                AS external_id,
         tno.created_at                                          AS fecha,
-        tno.payment_status::text                                AS status,
-        tno.payment_status::text                                AS payment_status,
-        COALESCE(tno.shipping_status, '')                       AS shipping_status,
+        COALESCE(tno.payment_status::text, '')                  AS status,
+        COALESCE(tno.payment_status::text, '')                  AS payment_status,
+        COALESCE(tno.shipping_status::text, '')                 AS shipping_status,
         COALESCE(tno.total, 0)::float                           AS total,
         0::float                                                AS merch_cost,
         0::float                                                AS shipping_cost,
@@ -92,14 +89,17 @@ def _tn_sub(date_clause: str) -> str:
         COALESCE(tno.billing_province, '')                      AS buyer_province,
         COALESCE(tno.shipping_carrier, '')                      AS shipping_type,
         COALESCE(tno.label_downloaded, FALSE)                   AS label_downloaded
-    FROM public."PaymentIntent" pi
-    JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
-    JOIN public."User" u ON u.id = cpa."userId"
-    JOIN public.tienda_nube_orders tno
-         ON tno.tienda_nube_id::text = ANY(pi."orderIds"::text[])
-    WHERE pi."status" = 'PROCESSED'
-      AND {date_clause}
-      AND COALESCE(array_length(pi."orderIds", 1), 0) > 0"""
+    FROM public.tienda_nube_orders tno
+    LEFT JOIN LATERAL (
+        SELECT cpa."userId"
+        FROM public."PaymentIntent" pi
+        JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+        WHERE tno.tienda_nube_id::text = ANY(pi."orderIds"::text[])
+        ORDER BY pi."createdAt" DESC
+        LIMIT 1
+    ) pi_user ON true
+    LEFT JOIN public."User" u ON u.id = pi_user."userId"
+    WHERE {date_clause}"""
 
 
 def orders_global_unidrop(
@@ -131,8 +131,6 @@ def orders_global_unidrop(
         return {"items": [], "total": 0, "limit": limit, "offset": offset,
                 "generated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
-    # ML y TN pueden tener distintos params solo si son mismos keys con mismo valor
-    # (ambos usan :days o ambos usan :from_iso/:to_iso) — safe para UNION ALL
     merged_params: dict = {}
     for _, p in parts:
         merged_params.update(p)
@@ -187,51 +185,9 @@ def orders_global_unidrop(
     where_sql = " AND ".join(where_clauses)
     params: dict = {**merged_params, **extra_params}
 
-    # Debug: conteos separados por canal para diagnosticar
-    if include_ml:
-        _ml_only = _ml_sub(ml_date)
-        _ml_cnt = int(scalar(eng, f"SELECT COUNT(*) FROM ({_ml_only}) x", ml_params) or 0)
-        log.warning("orders_global DEBUG ml_count=%d period=%s", _ml_cnt, period)
-    if include_tn:
-        _tn_only = _tn_sub(tn_date)
-        _tn_cnt = int(scalar(eng, f"SELECT COUNT(*) FROM ({_tn_only}) x", tn_params) or 0)
-        log.warning("orders_global DEBUG tn_count=%d period=%s", _tn_cnt, period)
-
-    # Debug: contar OML DROP sin join a User
-    _raw_drop = int(scalar(eng, """
-        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" oml
-        WHERE oml."number" LIKE 'DROP-%'
-          AND oml."dateCreated" >= NOW() - make_interval(days => 90)
-    """, {}) or 0)
-    log.warning("orders_global DEBUG raw_drop_count=%d (no user join)", _raw_drop)
-
-    # Debug: DNI join sin filtro de fecha — confirmar si EXISTE algún match
-    _dni_any = int(scalar(eng, """
-        SELECT COUNT(*)
-        FROM mercado_libre_dev."OrderMercadoLibre" oml
-        JOIN public."User" u ON u.dni::text = split_part(oml."number", '-', 2)
-        WHERE oml."number" LIKE 'DROP-%'
-    """, {}) or 0)
-    log.warning("orders_global DEBUG dni_match_no_date=%d", _dni_any)
-
-    # Debug: contar DROP orders totales sin fecha
-    _all_drop = int(scalar(eng, """
-        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre" WHERE "number" LIKE 'DROP-%'
-    """, {}) or 0)
-    log.warning("orders_global DEBUG all_drop_total=%d", _all_drop)
-
-    # Debug: ver qué columnas tiene User que podrían linkar con el número
-    _user_cols = q(eng, """
-        SELECT column_name, data_type FROM information_schema.columns
-        WHERE table_schema='public' AND table_name='User' ORDER BY ordinal_position LIMIT 20
-    """, {}) or []
-    log.warning("orders_global DEBUG User cols: %s", [(r[0], r[1]) for r in _user_cols])
-
     total = int(scalar(eng, f"""
         SELECT COUNT(*) FROM ({union_sql}) x WHERE {where_sql}
     """, params) or 0)
-
-    log.warning("orders_global_unidrop: period=%s total=%d", period, total)
 
     rows = q(eng, f"""
         SELECT user_id, dropshipper_name, origen, "number", external_id, fecha::text,
