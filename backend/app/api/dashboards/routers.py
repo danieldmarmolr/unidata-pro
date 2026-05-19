@@ -150,6 +150,7 @@ def get_unidrop_orders_global(
     channel: Annotated[Literal["all", "ml", "tn"], Query()] = "all",
     shipping_type: Annotated[str | None, Query()] = None,
     status: Annotated[str | None, Query()] = None,
+    combo: Annotated[Literal["all", "combo", "ind"] | None, Query()] = None,
     search: Annotated[str | None, Query()] = None,
     user_id: Annotated[int | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=300)] = 100,
@@ -159,17 +160,36 @@ def get_unidrop_orders_global(
 ) -> dict:
     """Vista global de órdenes Unidrop: todas las órdenes ML + TN de todos los dropshippers."""
     require_area(user, ["ventas", "cs"])
-    key = f"ord-global:{period}:{channel}:{shipping_type}:{status}:{search}:{user_id}:{limit}:{offset}:{from_iso}:{to_iso}"
+    key = f"ord-global:{period}:{channel}:{shipping_type}:{status}:{combo}:{search}:{user_id}:{limit}:{offset}:{from_iso}:{to_iso}"
     cached_val = _orders_global_cache.get(key)
     if cached_val is not None:
         return cached_val
     result = orders_global_svc.orders_global_unidrop(
         period=period, channel=channel, shipping_type=shipping_type,
-        status_filter=status, search_drop=search, user_id=user_id,
+        status_filter=status, combo_filter=combo,
+        search_drop=search, user_id=user_id,
         limit=limit, offset=offset, from_iso=from_iso, to_iso=to_iso,
     )
     _orders_global_cache[key] = result
     return result
+
+
+@router.get("/unidrop/orders/{origen}/{order_id}/detail")
+def get_unidrop_order_detail(
+    user: Annotated[dict, Depends(current_user)],
+    origen: Literal["ml", "tn"],
+    order_id: str,
+) -> dict:
+    """Detalle completo de una orden Unidrop (ML o TN) — reusa el enriquecimiento
+    de dropshipper_unified_orders restringido a la orden especifica."""
+    require_area(user, ["ventas", "cs"])
+    try:
+        order = dropshippers_svc.single_order_unified(origen=origen, order_id=order_id)
+    except Exception as e:
+        return {"error": str(e), "order": None}
+    if not order:
+        return {"order": None}
+    return {"order": order}
 
 
 @router.get("/logistica/unidrop")

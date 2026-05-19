@@ -8,6 +8,12 @@ import { api } from "@/lib/api";
 import { fmtArDateTime } from "@/lib/dates";
 import { formatNumber } from "@/lib/utils";
 import { periodToQuery, useGlobalFilters } from "@/lib/store";
+import {
+  UnifiedOrderModal,
+  ChannelBadge,
+  ShippingTypeBadge,
+  type UnifiedOrder,
+} from "@/components/unified-order-modal";
 
 type GlobalOrder = {
   user_id: number;
@@ -28,13 +34,21 @@ type GlobalOrder = {
   buyer_province: string;
   shipping_type: string;
   label_downloaded: boolean;
+  cancel_by_unidrop: boolean;
+  is_combo: boolean;
 };
 
 type GlobalOrdersResponse = {
   items: GlobalOrder[];
   total: number;
+  total_ml: number;
+  total_tn: number;
+  combo_count: number;
+  ind_count: number;
   limit: number;
   offset: number;
+  from?: string;
+  to?: string;
   generated_at: string;
 };
 
@@ -43,28 +57,6 @@ const PAGE_SIZE = 100;
 function fmtCurrency(v: number): string {
   if (!v || v === 0) return "—";
   return `$ ${formatNumber(Math.round(v))}`;
-}
-
-function ChannelBadge({ origen }: { origen: "ml" | "tn" }) {
-  return origen === "ml" ? (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">ML</span>
-  ) : (
-    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-100 text-cyan-800 border border-cyan-200">TN</span>
-  );
-}
-
-function ShippingBadge({ label }: { label: string }) {
-  if (!label) return null;
-  const color =
-    label === "PR" ? "bg-cyan-100 text-cyan-800 border-cyan-200" :
-    label.includes("FLEX") ? "bg-green-100 text-green-800 border-green-200" :
-    label === "FULL" ? "bg-purple-100 text-purple-800 border-purple-200" :
-    "bg-slate-100 text-slate-700 border-slate-200";
-  return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${color}`}>
-      {label}
-    </span>
-  );
 }
 
 function pipelineDateLabel(iso?: string | null): string | null {
@@ -80,7 +72,7 @@ function pipelineDateLabel(iso?: string | null): string | null {
   } catch { return null; }
 }
 
-function OrderPipeline({ o }: { o: GlobalOrder }) {
+function OrderPipelineLite({ o }: { o: GlobalOrder }) {
   const ps = (o.payment_status || o.status || "").toLowerCase();
   const ss = (o.shipping_status || "").toLowerCase();
   const isPaid = ["paid", "processed", "approved", "confirmed"].some((v) => ps.includes(v) || ss.includes(v));
@@ -90,7 +82,7 @@ function OrderPipeline({ o }: { o: GlobalOrder }) {
 
   const steps: { active: boolean; label: string; icon: string; iso?: string }[] = [
     { active: true, label: "Creada", icon: "📋", iso: o.fecha },
-    { active: isPaid, label: "Pagada", icon: "💲" },
+    { active: isPaid || o.origen === "ml", label: "Pagada", icon: "💲" },
     { active: isPacked, label: "Empaquetado", icon: "📦" },
     { active: isShipped, label: "En camino", icon: "🚚" },
     { active: isDelivered, label: "Entregada", icon: "✅" },
@@ -161,15 +153,18 @@ export function UnidropOrdersGlobal() {
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
-  const _qs = periodToQuery(period, customFrom, customTo);
 
   const [channel, setChannel] = useState<"all" | "ml" | "tn">("all");
+  const [combo, setCombo] = useState<"all" | "combo" | "ind">("all");
   const [shippingType, setShippingType] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [searchDrop, setSearchDrop] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // Modal: orden seleccionada (cargada lazy via /detail)
+  const [modalKey, setModalKey] = useState<{ origen: "ml" | "tn"; id: string } | null>(null);
 
   const toggleExpand = useCallback((key: string) => {
     setExpandedRows((prev) => {
@@ -185,6 +180,7 @@ export function UnidropOrdersGlobal() {
     ...(period === "custom" && customFrom ? { from: customFrom } : {}),
     ...(period === "custom" && customTo ? { to: customTo } : {}),
     channel,
+    ...(combo !== "all" ? { combo } : {}),
     ...(shippingType !== "all" ? { shipping_type: shippingType } : {}),
     ...(statusFilter !== "all" ? { status: statusFilter } : {}),
     ...(debouncedSearch ? { search: debouncedSearch } : {}),
@@ -193,18 +189,27 @@ export function UnidropOrdersGlobal() {
   });
 
   const { data, isLoading, isFetching, error } = useQuery<GlobalOrdersResponse>({
-    queryKey: ["unidrop-orders-global", period, customFrom, customTo, channel, shippingType, statusFilter, debouncedSearch, page],
+    queryKey: ["unidrop-orders-global", period, customFrom, customTo, channel, combo, shippingType, statusFilter, debouncedSearch, page],
     queryFn: () => api<GlobalOrdersResponse>(`/api/dashboards/unidrop/orders?${qs}`),
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
 
+  // Modal: fetch del detalle completo (UnifiedOrder enriquecido)
+  const { data: detailData, isFetching: detailFetching } = useQuery<{ order: UnifiedOrder | null }>({
+    queryKey: ["unidrop-order-detail", modalKey?.origen, modalKey?.id],
+    queryFn: () => api<{ order: UnifiedOrder | null }>(`/api/dashboards/unidrop/orders/${modalKey!.origen}/${encodeURIComponent(modalKey!.id)}/detail`),
+    enabled: !!modalKey,
+    staleTime: 5 * 60_000,
+  });
+
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+  const totalMl = data?.total_ml ?? 0;
+  const totalTn = data?.total_tn ?? 0;
+  const comboCount = data?.combo_count ?? 0;
+  const indCount = data?.ind_count ?? 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
-
-  const countMl = items.filter((o) => o.origen === "ml").length;
-  const countTn = items.filter((o) => o.origen === "tn").length;
 
   function handleSearch(v: string) {
     setSearchDrop(v);
@@ -222,7 +227,7 @@ export function UnidropOrdersGlobal() {
         <div>
           <div className="text-sm font-bold text-text">Todas las ventas Unidrop</div>
           <div className="text-xs text-text-muted mt-0.5">
-            {isLoading ? "Cargando..." : `${total.toLocaleString("es-AR")} órdenes ML + TN`}
+            {isLoading ? "Cargando..." : `${total.toLocaleString("es-AR")} órdenes ML + TN · ${comboCount.toLocaleString("es-AR")} combos · ${indCount.toLocaleString("es-AR")} individuales`}
             {isFetching && !isLoading && " · actualizando..."}
           </div>
         </div>
@@ -239,7 +244,24 @@ export function UnidropOrdersGlobal() {
                     : "bg-surface text-text-muted hover:bg-surface-alt"
                 }`}
               >
-                {c === "all" ? `Todas (${items.length})` : c === "ml" ? `ML (${countMl})` : `TN (${countTn})`}
+                {c === "all" ? `Todas (${total.toLocaleString("es-AR")})` : c === "ml" ? `ML (${totalMl.toLocaleString("es-AR")})` : `TN (${totalTn.toLocaleString("es-AR")})`}
+              </button>
+            ))}
+          </div>
+
+          {/* Combo/Ind */}
+          <div className="flex rounded-lg border border-border overflow-hidden text-xs">
+            {(["all", "combo", "ind"] as const).map((c) => (
+              <button
+                key={c}
+                onClick={() => { setCombo(c); setPage(0); }}
+                className={`px-3 py-1.5 font-semibold transition-colors ${
+                  combo === c
+                    ? "bg-primary text-white"
+                    : "bg-surface text-text-muted hover:bg-surface-alt"
+                }`}
+              >
+                {c === "all" ? "Tipo" : c === "combo" ? `Combo (${comboCount.toLocaleString("es-AR")})` : `Ind (${indCount.toLocaleString("es-AR")})`}
               </button>
             ))}
           </div>
@@ -301,8 +323,8 @@ export function UnidropOrdersGlobal() {
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider"># Orden</th>
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Cliente</th>
                 <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Fecha</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Estado</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Envío</th>
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Estado del pedido</th>
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider">Método envío</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider">Costo</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider">Ingreso</th>
                 <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider">Ganancia</th>
@@ -342,11 +364,30 @@ export function UnidropOrdersGlobal() {
                         </button>
                       </td>
 
-                      {/* # Orden */}
+                      {/* # Orden — click abre el modal de detalle */}
                       <td className="px-3 py-2 whitespace-nowrap">
                         <div className="flex items-center gap-1.5">
                           <ChannelBadge origen={o.origen} />
-                          <span className="font-mono text-[11px] text-text">{o.number || o.external_id}</span>
+                          <button
+                            className="font-mono text-[11px] text-primary hover:underline"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setModalKey({ origen: o.origen, id: o.external_id || o.number });
+                            }}
+                            title="Ver detalle completo"
+                          >
+                            {o.number || o.external_id}
+                          </button>
+                          {o.is_combo && (
+                            <span className="px-1 py-0 rounded text-[9px] font-bold bg-primary/10 text-primary border border-primary/20">
+                              C
+                            </span>
+                          )}
+                          {o.cancel_by_unidrop && (
+                            <span className="px-1 py-0 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                              CANCEL
+                            </span>
+                          )}
                         </div>
                       </td>
 
@@ -367,12 +408,12 @@ export function UnidropOrdersGlobal() {
 
                       {/* Pipeline */}
                       <td className="px-3 py-2">
-                        <OrderPipeline o={o} />
+                        <OrderPipelineLite o={o} />
                       </td>
 
                       {/* Método envío */}
                       <td className="px-3 py-2">
-                        <ShippingBadge label={metodoEnvio} />
+                        {metodoEnvio ? <ShippingTypeBadge type={o.shipping_type} /> : <span className="text-text-muted text-[10px]">—</span>}
                       </td>
 
                       {/* Costo */}
@@ -404,7 +445,7 @@ export function UnidropOrdersGlobal() {
                       </td>
                     </tr>
 
-                    {/* Expanded: detalle rápido */}
+                    {/* Expanded: detalle rápido + boton ver completo */}
                     {isExpanded && (
                       <tr key={`${rowKey}-exp`} className="bg-surface-alt">
                         <td colSpan={11} className="px-6 py-3">
@@ -441,12 +482,18 @@ export function UnidropOrdersGlobal() {
                                 <span className="text-emerald-600">{fmtCurrency(o.profit_unidrop)}</span>
                               </div>
                             )}
-                            <div className="ml-auto">
+                            <div className="ml-auto flex items-center gap-3">
                               <button
                                 className="text-primary font-semibold hover:underline flex items-center gap-1"
+                                onClick={() => setModalKey({ origen: o.origen, id: o.external_id || o.number })}
+                              >
+                                Ver detalle completo <ExternalLink className="w-3 h-3" />
+                              </button>
+                              <button
+                                className="text-text-muted font-semibold hover:underline flex items-center gap-1"
                                 onClick={() => router.push(`/dashboard/dropshipper/${o.user_id}`)}
                               >
-                                Ver perfil completo <ExternalLink className="w-3 h-3" />
+                                Ver perfil dropshipper
                               </button>
                             </div>
                           </div>
@@ -488,6 +535,19 @@ export function UnidropOrdersGlobal() {
           </div>
         </div>
       )}
+
+      {/* Modal de detalle completo (lazy fetched) */}
+      {modalKey && detailFetching && !detailData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setModalKey(null)}>
+          <div className="bg-surface rounded-2xl shadow-2xl px-8 py-6 text-sm text-text-muted">
+            Cargando detalle de la orden...
+          </div>
+        </div>
+      )}
+      <UnifiedOrderModal
+        order={detailData?.order ?? null}
+        onClose={() => setModalKey(null)}
+      />
     </div>
   );
 }

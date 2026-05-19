@@ -2586,6 +2586,90 @@ def dropshipper_unified_orders(
     return unified[:int(limit)]
 
 
+def single_order_unified(origen: str, order_id: str) -> dict | None:
+    """Devuelve el UnifiedOrder enriquecido de UNA orden especifica (ML o TN).
+
+    Resuelve el user_id a partir de la orden, luego llama a
+    dropshipper_unified_orders y filtra el row por (origen, external_id).
+    Devuelve None si no existe o el dropshipper no se puede resolver.
+    """
+    eng = get_engine("unidrop")
+    origen = (origen or "").lower()
+    if origen not in ("ml", "tn") or not order_id:
+        return None
+
+    user_id: int | None = None
+    intent_id: int | None = None
+
+    if origen == "ml":
+        # Resolver user_id por number=DROP-{dni}-* (split en posicion 2)
+        rows = q(eng, """
+            SELECT u.id::int                                                     AS user_id,
+                   pi.id::int                                                    AS intent_id
+            FROM mercado_libre_dev."OrderMercadoLibre" o
+            LEFT JOIN public."User" u
+                 ON u.dni::text = split_part(o."number", '-', 2)
+            LEFT JOIN public."PaymentIntent" pi
+                 ON o.id = ANY(COALESCE(pi."mlOrderIds", ARRAY[]::bigint[]))
+            WHERE o.id::text = :oid
+            LIMIT 1
+        """, {"oid": str(order_id)}) or []
+        if not rows:
+            return None
+        user_id = int(rows[0][0]) if rows[0][0] else None
+        intent_id = int(rows[0][1]) if rows[0][1] else None
+    else:
+        rows = q(eng, """
+            SELECT tno.user_id::int                                              AS user_id,
+                   pi.id::int                                                    AS intent_id
+            FROM public.tienda_nube_orders tno
+            LEFT JOIN public."PaymentIntent" pi
+                 ON tno.tienda_nube_id = ANY(COALESCE(pi."orderIds", ARRAY[]::bigint[]))
+            WHERE tno.tienda_nube_id::text = :oid
+            LIMIT 1
+        """, {"oid": str(order_id)}) or []
+        if not rows:
+            return None
+        user_id = int(rows[0][0]) if rows[0][0] else None
+        intent_id = int(rows[0][1]) if rows[0][1] else None
+
+    if not user_id:
+        return None
+
+    # Cargar todas las orders del user enriquecidas y filtrar la nuestra.
+    # Si hay intent_id conocido, restringe a ese intent (mas rapido).
+    all_orders = dropshipper_unified_orders(
+        user_id=user_id,
+        limit=2000,
+        intent_id=intent_id,
+    )
+    for o in all_orders:
+        if o.get("origen") != origen:
+            continue
+        # Match por external_id (ML) o internal_id (TN)
+        if origen == "ml" and str(o.get("external_id") or "") == str(order_id):
+            return o
+        if origen == "tn" and str(o.get("internal_id") or o.get("external_id") or "") == str(order_id):
+            return o
+
+    # Fallback: buscar sin intent_id (puede que la order no este ligada a un PI)
+    if intent_id is not None:
+        all_orders = dropshipper_unified_orders(
+            user_id=user_id,
+            limit=2000,
+            intent_id=None,
+        )
+        for o in all_orders:
+            if o.get("origen") != origen:
+                continue
+            if origen == "ml" and str(o.get("external_id") or "") == str(order_id):
+                return o
+            if origen == "tn" and str(o.get("internal_id") or o.get("external_id") or "") == str(order_id):
+                return o
+
+    return None
+
+
 def cohort_signups() -> dict:
     """Cohort por mes de signup: usuarios que se sumaron y cuántos siguen activos / vendieron."""
     eng = get_engine("unidrop")
