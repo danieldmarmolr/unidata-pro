@@ -74,6 +74,27 @@ export function CellRenderer({
   columns?: string[];
 }) {
   if (v === null || v === undefined || v === "") return <>—</>;
+
+  // Numero de orden TN: linkear a TN admin usando el id de la misma fila
+  if (/^(numero|order_number|order_numero)$/i.test(col) && row && columns) {
+    const orderId = findColValue(columns, row, ["id"]);
+    if (orderId) {
+      return (
+        <a
+          href={tnAdminUrl(orderId)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-primary hover:underline font-mono"
+          onClick={(e) => e.stopPropagation()}
+          title="Abrir en Tienda Nube"
+        >
+          {String(v)}
+          <ExternalLink size={9} className="opacity-60" />
+        </a>
+      );
+    }
+  }
+
   // Detectar contexto Unidrop: si la fila tiene una columna _unit con valor 'unidrop'
   // entonces los IDs y nombres NO deben linkear a vistas de Unistore (TN admin /
   // /dashboard/customer/[id]). Esto evita mostrar "Customer 360 · Unistore" con
@@ -669,8 +690,11 @@ export function DrillDownModal({
             //  - status si hay payment (pipeline cubre)
             const hasPayment = data.columns.some((c) => /^(payment|paymentStatus|pago|payment_status)$/i.test(c));
             const hasCanal = data.columns.some((c) => /^(canal|canal_envio|shipping_channel)$/i.test(c));
+            const hasNumero = data.columns.some((c) => /^(numero|order_number|order_numero)$/i.test(c));
             const isHiddenColumn = (c: string) => {
               if (/^(customer_id|customerId|cliente_id|id_cliente)$/i.test(c)) return true;
+              if (/^(empaquetada|packed|is_packed)$/i.test(c)) return true;
+              if (hasNumero && /^(id)$/i.test(c)) return true;
               if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
               if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
               if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
