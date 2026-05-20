@@ -526,6 +526,7 @@ def _build_order_select(eng) -> str:
                  COALESCE(NULLIF(TRIM(c."billingProvince"),''),'-') AS provincia,
                  c.id AS customer_id,
                  {method_expr}{type_select}{carrier_select},
+                 o."gatewayName",
                  EXISTS (
                    SELECT 1 FROM tienda_nube."OrderItem" oi
                    WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
