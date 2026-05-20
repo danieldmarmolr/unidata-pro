@@ -36,10 +36,15 @@ App productiva en `https://app.unidatacenter.com.ar`
 
 Deploy manual cuando hace falta:
 ```bash
-railway up ./backend --path-as-root --service backend --detach
-railway up ./frontend --path-as-root --service frontend --detach
-railway up ./mcp --path-as-root --service mcp --detach
+# DESDE DENTRO del directorio del servicio (sin --path-as-root):
+cd backend && railway up --detach && cd ..
+cd frontend && railway up --detach && cd ..
+cd mcp && railway up --detach && cd ..
 ```
+> ⚠️ NUNCA usar `railway up ./backend --path-as-root --service backend`. El flag `--path-as-root`
+> sube solo el contenido del subdirectorio y corrompe el snapshot de Railway (312 KB vs 13 MB).
+> Todos los deploys subsiguientes (incluso git auto-deploy) fallarán con
+> `snapshot-target-unpack/backend: no such file or directory` hasta que se haga un deploy correcto.
 
 ---
 

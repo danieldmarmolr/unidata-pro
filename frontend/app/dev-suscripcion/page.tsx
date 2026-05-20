@@ -7,8 +7,17 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
 type Dropshipper = {
   name: string;
   fantasy_name: string | null;
+  cuit: string | null;
   subscription_id: number | null;
   subscription_plan_name: string | null;
+  subscription_plan_price_arg: number | null;
+  subscription_ends_at: string | null;
+  subscription_status: string | null;
+};
+
+type LastPayment = {
+  paid_amount_arg: number;
+  paid_at: string;
 };
 
 type BankHints = {
@@ -29,6 +38,7 @@ type ValidateResp = {
   dropshipper: Dropshipper;
   bank_hints: BankHints | null;
   paid_subscription: PaidSubscription | null;
+  last_payment: LastPayment | null;
 };
 
 type Step = "identify" | "bank_data" | "success";
@@ -118,6 +128,7 @@ export default function DevSuscripcionPage() {
   const [dropshipper, setDropshipper] = useState<Dropshipper | null>(null);
   const [bankHints, setBankHints] = useState<BankHints | null>(null);
   const [paidSub, setPaidSub] = useState<PaidSubscription | null>(null);
+  const [lastPayment, setLastPayment] = useState<LastPayment | null>(null);
   const [hintsApplied, setHintsApplied] = useState(false);
 
   // Step 2
@@ -157,18 +168,31 @@ export default function DevSuscripcionPage() {
       setDropshipper(data.dropshipper);
       setBankHints(data.bank_hints);
       setPaidSub(data.paid_subscription);
-      // Pre-rellena Step 2 con los datos de la cuenta Talo si existen.
-      if (data.bank_hints && !hintsApplied) {
+      setLastPayment(data.last_payment);
+      if (!hintsApplied) {
         const h = data.bank_hints;
-        if (h.holder_name) setBankHolderName(h.holder_name);
-        if (h.cbu) setBankCbu(h.cbu.replace(/\D/g, "").slice(0, 22));
-        if (h.alias) setBankAlias(h.alias);
-        const matched = matchBank(h.bank_name, BANCOS_AR.filter((b) => b !== "Otro"));
-        if (matched) {
-          setBankName(matched);
-        } else if (h.bank_name) {
-          setBankName("Otro");
-          setBankNameOther(h.bank_name);
+        // 1. Titular: Talo.account_owner -> fallback a User.name
+        const holder = h?.holder_name?.trim() || data.dropshipper.name?.trim() || "";
+        if (holder) setBankHolderName(holder);
+        // 2. CUIT: directo desde User.cuit (Talo no lo tiene)
+        const cuit = (data.dropshipper.cuit || "").replace(/\D/g, "");
+        if (cuit.length === 11) setBankHolderCuit(cuit);
+        // 3. CBU + Alias + Banco: solo desde Talo
+        if (h?.cbu) setBankCbu(h.cbu.replace(/\D/g, "").slice(0, 22));
+        if (h?.alias) setBankAlias(h.alias);
+        if (h?.bank_name) {
+          const matched = matchBank(h.bank_name, BANCOS_AR.filter((b) => b !== "Otro"));
+          if (matched) {
+            setBankName(matched);
+          } else {
+            setBankName("Otro");
+            setBankNameOther(h.bank_name);
+          }
+        }
+        // 4. Monto solicitado: precio mensual del plan (no el acumulado)
+        const planPrice = data.dropshipper.subscription_plan_price_arg;
+        if (planPrice && planPrice > 0) {
+          setRefundAmount(String(planPrice));
         }
         setHintsApplied(true);
       }
@@ -342,17 +366,35 @@ export default function DevSuscripcionPage() {
                   Completá los datos de la cuenta donde querés recibir la devolución.
                 </p>
 
-                {paidSub && paidSub.count > 0 && (
-                  <div className="mb-4 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2.5 text-xs text-text">
-                    Hasta hoy pagaste{" "}
-                    <span className="font-bold text-primary">{fmtMoney(paidSub.total_arg)}</span>{" "}
-                    en suscripción ({paidSub.count} cobro{paidSub.count > 1 ? "s" : ""} procesado{paidSub.count > 1 ? "s" : ""}).
+                {(dropshipper.subscription_plan_price_arg || lastPayment || dropshipper.subscription_ends_at) && (
+                  <div className="mb-4 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2.5 text-xs text-text space-y-1">
+                    {dropshipper.subscription_plan_price_arg ? (
+                      <div>
+                        Plan <span className="font-bold">{dropshipper.subscription_plan_name}</span>:{" "}
+                        <span className="font-bold text-primary">{fmtMoney(dropshipper.subscription_plan_price_arg)}</span>/mes
+                        {dropshipper.subscription_status && (
+                          <> · estado <span className="font-semibold">{dropshipper.subscription_status}</span></>
+                        )}
+                      </div>
+                    ) : null}
+                    {lastPayment && (
+                      <div>
+                        Último cobro: <span className="font-semibold">{fmtMoney(lastPayment.paid_amount_arg)}</span>{" "}
+                        el {new Date(lastPayment.paid_at).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })}
+                      </div>
+                    )}
+                    {paidSub && paidSub.count > 0 && (
+                      <div>
+                        Total acumulado: <span className="font-semibold">{fmtMoney(paidSub.total_arg)}</span>{" "}
+                        ({paidSub.count} cobro{paidSub.count > 1 ? "s" : ""})
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {bankHints && (
+                {(bankHints || dropshipper.cuit) && (
                   <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-text">
-                    Pre-cargamos los datos de tu cuenta Talo registrada.
+                    Pre-cargamos los datos que tenemos de tu cuenta{bankHints ? " Talo" : ""}{dropshipper.cuit ? " + perfil Unidrop" : ""}.
                     Verificalos antes de enviar — podés editarlos si querés cobrar en otra cuenta.
                   </div>
                 )}

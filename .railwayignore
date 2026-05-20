@@ -1,0 +1,58 @@
+# Railway ignore para deploys desde la raiz del repo.
+# El backend service tiene Root Directory=backend, asi que Railway busca
+# la carpeta backend/ adentro del snapshot — pero no necesita node_modules
+# del frontend ni venv del backend, etc.
+
+# Git internals
+.git/
+.gitignore
+
+# Frontend pesado
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/dist/
+
+# MCP node_modules si existen
+mcp/node_modules/
+mcp/dist/
+mcp/.venv/
+mcp/__pycache__/
+
+# Backend Python build artifacts
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+backend/*.log
+backend/audit.db*
+backend/users.db*
+
+# Env files (NUNCA subirlos)
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docs / scripts no necesarios para deploy
+docs/
+scripts/
+*.bat
+*.md
+JIRA_*.csv
+UNIDATA_*.csv
+
+# Claude artifacts
+.claude/

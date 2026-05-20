@@ -37,9 +37,14 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
                u.name,
                u.email,
                u.dni,
+               COALESCE(u.cuit, '')                   AS cuit,
+               COALESCE(u.phone, '')                  AS phone,
                u.fantasy_name,
-               u."subscriptionId" AS subscription_id,
-               sm.name             AS subscription_plan_name
+               u."subscriptionId"                     AS subscription_id,
+               sm.name                                AS subscription_plan_name,
+               sm.price::float                        AS subscription_plan_price_arg,
+               u.end_date_subscription::text          AS subscription_ends_at,
+               u.subscription_status::text            AS subscription_status
         FROM public."User" u
         LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
         WHERE u.dni = :dni
@@ -57,18 +62,28 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
     sub_id = row["subscription_id"]
     bank_hints = _latest_talo_account(eng, user_id)
     paid_subscription = _paid_subscription_snapshot(eng, user_id)
+    last_payment = _last_subscription_payment(eng, user_id)
 
     return {
         "id": user_id,
         "name": row["name"],
         "email": row["email"],
         "dni": row["dni"],
+        "cuit": (row["cuit"] or "").strip() or None,
+        "phone": (row["phone"] or "").strip() or None,
         "fantasy_name": row["fantasy_name"],
         "subscription_id": int(sub_id) if sub_id is not None else None,
         "subscription_plan_name": row["subscription_plan_name"],
+        "subscription_plan_price_arg": (
+            round(float(row["subscription_plan_price_arg"]), 2)
+            if row["subscription_plan_price_arg"] is not None else None
+        ),
+        "subscription_ends_at": row["subscription_ends_at"],
+        "subscription_status": row["subscription_status"],
         "has_active_subscription": sub_id is not None,
         "bank_hints": bank_hints,
         "paid_subscription": paid_subscription,
+        "last_payment": last_payment,
     }
 
 
@@ -120,6 +135,37 @@ def _latest_talo_account(eng, user_id: int) -> dict | None:
         "alias": alias or None,
         "bank_name": (row.get("bank_name") or "").strip() or None if "bank_name" in keys else None,
         "holder_name": (row.get("account_owner") or "").strip() or None if "account_owner" in keys else None,
+    }
+
+
+def _last_subscription_payment(eng, user_id: int) -> dict | None:
+    """Ultimo PaymentIntentSubscription PROCESSED del user — el cobro mas reciente."""
+    pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
+    if not pis_cols or "userId" not in pis_cols:
+        return None
+    amount_col = '"paidAmount"' if "paidAmount" in pis_cols else (
+        '"amount"' if "amount" in pis_cols else "0"
+    )
+    sql = text(f"""
+        SELECT COALESCE({amount_col}, 0)::float AS paid_amount,
+               "createdAt"::text                AS paid_at
+        FROM public."PaymentIntentSubscription"
+        WHERE "userId" = :uid
+          AND status::text = 'PROCESSED'
+        ORDER BY "createdAt" DESC NULLS LAST
+        LIMIT 1
+    """)
+    try:
+        with eng.connect() as cx:
+            row = cx.execute(sql, {"uid": user_id}).mappings().first()
+    except Exception as e:
+        log.warning("last_payment lookup fallo para user %s: %s", user_id, e)
+        return None
+    if not row:
+        return None
+    return {
+        "paid_amount_arg": round(float(row["paid_amount"] or 0), 2),
+        "paid_at": row["paid_at"],
     }
 
 

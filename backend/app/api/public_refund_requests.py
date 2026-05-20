@@ -132,11 +132,16 @@ def validate(request: Request, body: ValidateBody) -> dict:
         "dropshipper": {
             "name": ds["name"],
             "fantasy_name": ds["fantasy_name"],
+            "cuit": ds.get("cuit"),
             "subscription_id": ds["subscription_id"],
             "subscription_plan_name": ds["subscription_plan_name"],
+            "subscription_plan_price_arg": ds.get("subscription_plan_price_arg"),
+            "subscription_ends_at": ds.get("subscription_ends_at"),
+            "subscription_status": ds.get("subscription_status"),
         },
         "bank_hints": ds.get("bank_hints"),
         "paid_subscription": ds.get("paid_subscription"),
+        "last_payment": ds.get("last_payment"),
     }
 
 
