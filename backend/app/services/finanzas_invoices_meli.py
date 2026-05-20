@@ -30,7 +30,7 @@ def finanzas_invoices_meli(
     plan: str = "all",
     tipo: str = "all",
     search: str | None = None,
-    limit: int = 200,
+    limit: int | None = None,
     from_iso: str | None = None,
     to_iso: str | None = None,
 ) -> dict:
@@ -39,7 +39,7 @@ def finanzas_invoices_meli(
     plan: 'all' | str(subscriptionId)
     tipo: 'all' | 'FCA' | 'FCB'
     search: prefix-match en numeroComprobante, razon_social, dni, email, fantasy_name
-    limit: tope de filas devueltas en items[]
+    limit: tope de filas devueltas en items[]. Default None = todo (hard cap 10000).
     """
     w = resolve_window(period, from_iso, to_iso)
     eng = get_engine("unidrop")
@@ -207,7 +207,9 @@ def finanzas_invoices_meli(
 
     # Listing
     items_params = dict(params)
-    items_params["limit"] = max(1, min(int(limit), 1000))
+    HARD_CAP = 10000
+    effective_limit = HARD_CAP if limit is None else max(1, min(int(limit), HARD_CAP))
+    items_params["limit"] = effective_limit
     rows = q(eng, f"""
         SELECT ci.id,
                ci."tipoFc",
@@ -272,7 +274,7 @@ def finanzas_invoices_meli(
         "by_tipo": by_tipo,
         "items": items,
         "items_count": len(items),
-        "items_truncated": len(items) >= items_params["limit"],
+        "items_truncated": len(items) >= effective_limit,
         "plans": plans,
         "filters": {"plan": plan, "tipo": tipo, "search": search or ""},
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),

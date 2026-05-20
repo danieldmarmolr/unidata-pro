@@ -230,7 +230,7 @@ def get_finanzas_invoices_meli(
     plan: Annotated[str, Query()] = "all",
     tipo: Annotated[Literal["all", "FCA", "FCB"], Query()] = "all",
     search: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:

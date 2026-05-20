@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ExternalLink, Search, Download, X } from "lucide-react";
+import { ExternalLink, Search, Download, X, Filter as FilterIcon, RotateCcw } from "lucide-react";
 import { KpiCard } from "@/components/kpi-card";
 import { CategoryTable } from "@/components/generic-table";
 import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
@@ -98,7 +98,6 @@ export function FacturasSuscripcionesMeliPanel() {
     if (plan !== "all") base.set("plan", plan);
     if (tipo !== "all") base.set("tipo", tipo);
     if (search) base.set("search", search);
-    base.set("limit", "500");
     return base.toString();
   }, [periodQs, plan, tipo, search]);
 
@@ -108,6 +107,34 @@ export function FacturasSuscripcionesMeliPanel() {
     staleTime: 60_000,
   });
 
+  const planNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const p of (data?.plans ?? [])) m.set(p.id, p.name);
+    return m;
+  }, [data?.plans]);
+
+  const activePlanName = plan !== "all" && /^\d+$/.test(plan)
+    ? planNameById.get(Number(plan)) ?? `Plan ${plan}`
+    : null;
+  const hasActiveFilters = plan !== "all" || tipo !== "all" || search !== "";
+  const clearAllFilters = () => { setPlan("all"); setTipo("all"); setSearch(""); setSearchInput(""); };
+
+  // Click handler para CategoryTable de plan / tipo
+  const handlePlanClick = (row: { category: string; value: number; extra?: Record<string, number | string | boolean | null> | null }) => {
+    const pid = row.extra?.plan_id;
+    if (typeof pid === "number" && pid > 0) setPlan(String(pid));
+  };
+  const handleTipoClick = (row: { category: string; value: number; extra?: Record<string, number | string | boolean | null> | null }) => {
+    const t = row.category;
+    if (t === "FCA" || t === "FCB") setTipo(t);
+  };
+
+  // Total visible (suma de items filtrados ya devueltos)
+  const visibleTotal = useMemo(
+    () => (data?.items ?? []).reduce((acc, r) => acc + (r.total || 0), 0),
+    [data?.items],
+  );
+
   return (
     <div>
       {error && (
@@ -116,6 +143,7 @@ export function FacturasSuscripcionesMeliPanel() {
         </div>
       )}
 
+      {/* KPIs */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
         {isLoading || !data
           ? Array.from({ length: 6 }).map((_, i) => (
@@ -124,6 +152,7 @@ export function FacturasSuscripcionesMeliPanel() {
           : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
       </div>
 
+      {/* Trend */}
       <div className="mb-6">
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
@@ -155,13 +184,14 @@ export function FacturasSuscripcionesMeliPanel() {
         )}
       </div>
 
+      {/* Breakdowns (click filtra el listing) */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
         ) : (
           <CategoryTable
             caption="Facturacion por plan"
-            subtitle="SubscriptionMeli del dropshipper"
+            subtitle="Click un plan para filtrar el listado de abajo"
             data={data.by_plan}
             formatter="currency"
             extraColumns={[
@@ -169,6 +199,7 @@ export function FacturasSuscripcionesMeliPanel() {
               { key: "precio", label: "Precio", format: "currency" },
             ]}
             autoDrill={false}
+            onRowClick={handlePlanClick}
           />
         )}
         {isLoading || !data ? (
@@ -176,23 +207,27 @@ export function FacturasSuscripcionesMeliPanel() {
         ) : (
           <CategoryTable
             caption="Facturacion por tipo de comprobante"
-            subtitle="ContabilliumInvoice.tipoFc"
+            subtitle="Click FCA o FCB para filtrar el listado de abajo"
             data={data.by_tipo}
             formatter="currency"
             extraColumns={[{ key: "cantidad", label: "Cant", format: "number" }]}
             autoDrill={false}
+            onRowClick={handleTipoClick}
           />
         )}
       </div>
 
+      {/* Listing */}
       <div className="bg-surface border border-border rounded-xl p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        {/* Header del listing */}
+        <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-3 mb-3">
           <div>
             <div className="text-sm font-bold text-text">Listado de facturas</div>
             <div className="text-xs text-text-muted mt-0.5">
               {isFetching && !data
                 ? "Cargando..."
-                : `${data?.items_count ?? 0} resultados${data?.items_truncated ? " (limite 500 — refina con filtros)" : ""}`}
+                : `${(data?.items_count ?? 0).toLocaleString("es-AR")} facturas · ${formatCurrency(visibleTotal)} total`}
+              {data?.items_truncated && <span className="text-amber-700 ml-2">· tope 10.000 alcanzado, refina con filtros</span>}
             </div>
           </div>
           <div className="flex flex-wrap gap-2 items-center">
@@ -260,40 +295,73 @@ export function FacturasSuscripcionesMeliPanel() {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Indicador de filtros activos */}
+        {hasActiveFilters && (
+          <div className="flex flex-wrap items-center gap-2 mb-3 pt-3 border-t border-border">
+            <FilterIcon size={12} className="text-text-muted" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Filtros activos:</span>
+            {tipo !== "all" && (
+              <FilterChip label={`Tipo: ${tipo}`} onClear={() => setTipo("all")} />
+            )}
+            {activePlanName && (
+              <FilterChip label={`Plan: ${activePlanName}`} onClear={() => setPlan("all")} />
+            )}
+            {search && (
+              <FilterChip label={`Búsqueda: ${search}`} onClear={() => { setSearch(""); setSearchInput(""); }} />
+            )}
+            <button
+              type="button"
+              onClick={clearAllFilters}
+              className="inline-flex items-center gap-1 text-[11px] font-semibold text-text-muted hover:text-primary transition px-2 py-0.5"
+            >
+              <RotateCcw size={11} /> Limpiar todo
+            </button>
+          </div>
+        )}
+
+        {/* Tabla */}
+        <div className="overflow-x-auto -mx-4 sm:mx-0 max-h-[640px] overflow-y-auto rounded-lg border border-border">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-[11px] font-semibold uppercase tracking-wider text-text-muted border-b border-border">
-                <th className="py-2 pr-2">Fecha</th>
-                <th className="py-2 pr-2">Tipo</th>
-                <th className="py-2 pr-2">Numero</th>
-                <th className="py-2 pr-2">Dropshipper</th>
-                <th className="py-2 pr-2">DNI</th>
-                <th className="py-2 pr-2">Plan</th>
-                <th className="py-2 pr-2">Estado sub</th>
-                <th className="py-2 pr-2 text-right">Total</th>
-                <th className="py-2 pr-2 text-right">Factura</th>
+            <thead className="sticky top-0 z-10 bg-soft">
+              <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                <th className="py-2.5 px-3">Fecha</th>
+                <th className="py-2.5 px-2">Tipo</th>
+                <th className="py-2.5 px-2">Numero</th>
+                <th className="py-2.5 px-2">Dropshipper</th>
+                <th className="py-2.5 px-2">DNI</th>
+                <th className="py-2.5 px-2">Plan</th>
+                <th className="py-2.5 px-2">Estado sub</th>
+                <th className="py-2.5 px-2 text-right">Total</th>
+                <th className="py-2.5 px-3 text-right">Factura</th>
               </tr>
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={9} className="py-8 text-center text-text-muted text-sm">Cargando...</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-text-muted text-sm">Cargando...</td></tr>
               )}
               {!isLoading && (!data || data.items.length === 0) && (
-                <tr><td colSpan={9} className="py-8 text-center text-text-muted text-sm">Sin facturas para los filtros aplicados.</td></tr>
+                <tr><td colSpan={9} className="py-12 text-center text-text-muted text-sm">Sin facturas para los filtros aplicados.</td></tr>
               )}
-              {!isLoading && data?.items.map((r) => (
-                <tr key={r.id} className="border-b border-border hover:bg-soft transition">
-                  <td className="py-2 pr-2 text-text-muted text-xs tabular-nums whitespace-nowrap">{r.fecha_emision ?? "—"}</td>
-                  <td className="py-2 pr-2">
-                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                      r.tipo === "FCA" ? "bg-purple-50 text-purple-700 border border-purple-200"
-                                       : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
+              {!isLoading && data?.items.map((r, i) => (
+                <tr
+                  key={r.id}
+                  className={`border-t border-border hover:bg-soft transition ${i % 2 === 1 ? "bg-soft/30" : ""}`}
+                >
+                  <td className="py-2 px-3 text-text-muted text-xs tabular-nums whitespace-nowrap">{r.fecha_emision ?? "—"}</td>
+                  <td className="py-2 px-2">
+                    <button
+                      type="button"
+                      onClick={() => setTipo(r.tipo === "FCA" || r.tipo === "FCB" ? r.tipo as "FCA" | "FCB" : "all")}
+                      title={`Filtrar por ${r.tipo}`}
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer hover:ring-2 hover:ring-primary/30 transition ${
+                        r.tipo === "FCA" ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                         : "bg-blue-50 text-blue-700 border border-blue-200"}`}
+                    >
                       {r.tipo || "—"}
-                    </span>
+                    </button>
                   </td>
-                  <td className="py-2 pr-2 font-mono text-xs">{r.numero || "—"}</td>
-                  <td className="py-2 pr-2 max-w-[220px]">
+                  <td className="py-2 px-2 font-mono text-xs whitespace-nowrap">{r.numero || "—"}</td>
+                  <td className="py-2 px-2 max-w-[220px]">
                     {r.user_id ? (
                       <Link
                         href={`/dashboard/dropshipper/${r.user_id}`}
@@ -311,9 +379,22 @@ export function FacturasSuscripcionesMeliPanel() {
                       <div className="text-[10px] text-text-muted truncate" title={r.user_email}>{r.user_email}</div>
                     )}
                   </td>
-                  <td className="py-2 pr-2 text-xs font-mono tabular-nums">{r.user_dni || r.cliente_dni || "—"}</td>
-                  <td className="py-2 pr-2 text-xs">{r.plan_name || "—"}</td>
-                  <td className="py-2 pr-2">
+                  <td className="py-2 px-2 text-xs font-mono tabular-nums whitespace-nowrap">{r.user_dni || r.cliente_dni || "—"}</td>
+                  <td className="py-2 px-2 text-xs">
+                    {r.plan_id ? (
+                      <button
+                        type="button"
+                        onClick={() => setPlan(String(r.plan_id))}
+                        title={`Filtrar por ${r.plan_name}`}
+                        className="text-left hover:text-primary hover:underline transition"
+                      >
+                        {r.plan_name || `Plan ${r.plan_id}`}
+                      </button>
+                    ) : (
+                      <span className="text-text-muted">—</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-2">
                     {r.subscription_status ? (
                       <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold ${
                         r.subscription_status === "ACTIVE"
@@ -326,8 +407,8 @@ export function FacturasSuscripcionesMeliPanel() {
                       <div className="text-[10px] text-text-muted mt-0.5">Vto: {r.subscription_end_date}</div>
                     )}
                   </td>
-                  <td className="py-2 pr-2 text-right tabular-nums font-semibold">{formatCurrency(r.total)}</td>
-                  <td className="py-2 pr-2 text-right">
+                  <td className="py-2 px-2 text-right tabular-nums font-semibold whitespace-nowrap">{formatCurrency(r.total)}</td>
+                  <td className="py-2 px-3 text-right">
                     {r.link_publico ? (
                       <a
                         href={r.link_publico}
@@ -342,9 +423,36 @@ export function FacturasSuscripcionesMeliPanel() {
                 </tr>
               ))}
             </tbody>
+            {!isLoading && (data?.items.length ?? 0) > 0 && (
+              <tfoot className="sticky bottom-0 bg-surface border-t-2 border-primary/30">
+                <tr>
+                  <td colSpan={7} className="py-2 px-3 text-xs font-semibold text-text">
+                    Total visible ({(data?.items_count ?? 0).toLocaleString("es-AR")} facturas)
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums font-bold text-text">{formatCurrency(visibleTotal)}</td>
+                  <td className="py-2 px-3" />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </div>
     </div>
+  );
+}
+
+function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-primary/10 text-primary text-[11px] font-semibold border border-primary/20">
+      {label}
+      <button
+        type="button"
+        onClick={onClear}
+        className="hover:bg-primary/20 rounded-full p-0.5 transition"
+        aria-label={`Limpiar ${label}`}
+      >
+        <X size={10} />
+      </button>
+    </span>
   );
 }
