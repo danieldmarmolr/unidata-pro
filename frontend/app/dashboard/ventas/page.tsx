@@ -221,6 +221,13 @@ export default function VentasPage() {
  )}
  </div>
 
+ {/* Tabla de órdenes Unistore (solo Unistore) */}
+ {unit === "unistore" && (
+ <div className="mb-6">
+ <UnistoreOrdersTable externalPayFilter={paymentFilter} />
+ </div>
+ )}
+
  {/* Region AR + Horario (solo Unistore) */}
  {unit === "unistore" && data && (
  <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
@@ -293,13 +300,6 @@ export default function VentasPage() {
  }}
  />
  )
- )}
-
- {/* Tabla de órdenes Unistore (solo Unistore) */}
- {unit === "unistore" && (
- <div className="mb-6">
- <UnistoreOrdersTable externalPayFilter={paymentFilter} />
- </div>
  )}
  </div>
 
