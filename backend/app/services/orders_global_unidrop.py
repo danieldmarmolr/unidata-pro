@@ -32,7 +32,9 @@ def _exec_safe(engine, sql: str, params: dict | None = None) -> list:
 
 
 def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
-    """Fetch ML orders en el rango. Solo orders DROP-*."""
+    """Fetch ML orders en el rango. Solo orders DROP-*.
+    Schema OML real: NO existe paymentStatus ni shippingStatus.
+    Usamos status + tags (array) + label_downloaded para derivar estado."""
     sql = """
         SELECT
             COALESCE(u.id, 0)::int                                                AS user_id,
@@ -41,8 +43,6 @@ def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             o.id::text                                                            AS external_id,
             o."dateCreated"::text                                                 AS fecha,
             COALESCE(o."status"::text, '')                                        AS status,
-            COALESCE(o."paymentStatus"::text, '')                                 AS payment_status,
-            COALESCE(o."shippingStatus"::text, '')                                AS shipping_status,
             COALESCE(o."totalAmount", 0)::float                                   AS total,
             COALESCE(o."merchandise_cost", 0)::float                              AS merch_cost,
             COALESCE(o."shipping_cost", 0)::float                                 AS shipping_cost,
@@ -50,7 +50,8 @@ def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             COALESCE(o."buyer_name", '')                                          AS buyer_name,
             COALESCE(o."shipping_option_reference", '')                           AS shipping_type,
             COALESCE(o."label_downloaded", FALSE)                                 AS label_downloaded,
-            COALESCE(o."cancel_by_unidrop", FALSE)                                AS cancel_by_unidrop
+            COALESCE(o."cancel_by_unidrop", FALSE)                                AS cancel_by_unidrop,
+            COALESCE(o.tags, ARRAY[]::text[])                                     AS tags
         FROM mercado_libre_dev."OrderMercadoLibre" o
         LEFT JOIN public."User" u
              ON u.dni::text = split_part(o."number", '-', 2)
@@ -62,6 +63,17 @@ def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
     rows = _exec_safe(eng, sql, {"from_ts": from_ts, "to_ts": to_ts})
     out = []
     for r in rows:
+        tags = list(r[14] or [])
+        status_raw = (r[5] or "").lower()
+        # Derivar payment_status / shipping_status desde status + tags
+        payment_status = "paid" if status_raw == "paid" or "paid" in tags else status_raw
+        shipping_status = ""
+        if "delivered" in tags:
+            shipping_status = "delivered"
+        elif "shipped" in tags:
+            shipping_status = "shipped"
+        elif "ready_to_print" in tags or "ready_to_ship" in tags:
+            shipping_status = "ready_to_ship"
         out.append({
             "user_id": int(r[0]) if r[0] else 0,
             "dropshipper_name": r[1] or "",
@@ -70,26 +82,29 @@ def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             "external_id": r[3] or "",
             "fecha": str(r[4]) if r[4] else "",
             "status": r[5] or "",
-            "payment_status": r[6] or "",
-            "shipping_status": r[7] or "",
-            "total": round(float(r[8] or 0), 2),
-            "merch_cost": round(float(r[9] or 0), 2),
-            "shipping_cost": round(float(r[10] or 0), 2),
-            "profit_unidrop": round(float(r[11] or 0), 2),
-            "buyer_name": r[12] or "",
-            "shipping_type": r[13] or "",
-            "label_downloaded": bool(r[14]),
-            "cancel_by_unidrop": bool(r[15]),
+            "payment_status": payment_status,
+            "shipping_status": shipping_status,
+            "total": round(float(r[6] or 0), 2),
+            "merch_cost": round(float(r[7] or 0), 2),
+            "shipping_cost": round(float(r[8] or 0), 2),
+            "profit_unidrop": round(float(r[9] or 0), 2),
+            "buyer_name": r[10] or "",
+            "shipping_type": r[11] or "",
+            "label_downloaded": bool(r[12]),
+            "cancel_by_unidrop": bool(r[13]),
             "buyer_city": "",
             "buyer_province": "",
-            "is_combo": False,  # enriched en bulk despues
+            "is_combo": False,
         })
     log.info("orders_global ML fetched: %d rows", len(out))
     return out
 
 
 def _fetch_tn(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
-    """Fetch TN orders en el rango. Asocia user_id via tno.user_id."""
+    """Fetch TN orders en el rango.
+    Schema TN real: NO existe shipping_cost (usar shipping_price o shipping_option_cost).
+    NO existe contact_name (usar contact_identification o shipping_address->>'name').
+    """
     sql = """
         SELECT
             COALESCE(u.id, 0)::int                                                AS user_id,
@@ -98,11 +113,17 @@ def _fetch_tn(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             tno.tienda_nube_id::text                                              AS external_id,
             tno.created_at::text                                                  AS fecha,
             COALESCE(tno.payment_status::text, '')                                AS payment_status,
+            COALESCE(tno.shipping_status::text, '')                               AS shipping_status,
             COALESCE(tno.total, 0)::float                                         AS total,
-            GREATEST(COALESCE(tno.total_cost, 0)::float - COALESCE(tno.shipping_cost, 0)::float, 0) AS merch_cost,
-            COALESCE(tno.shipping_cost, 0)::float                                 AS shipping_cost,
-            COALESCE(NULLIF(tno.contact_name, ''), '')                            AS buyer_name,
-            COALESCE(tno.shipping_option, '')                                     AS shipping_type
+            GREATEST(COALESCE(tno.total_cost, 0)::float
+                     - COALESCE(tno.shipping_price, tno.shipping_option_cost, 0)::float,
+                     0)                                                            AS merch_cost,
+            COALESCE(tno.shipping_price, tno.shipping_option_cost, 0)::float       AS shipping_cost,
+            COALESCE(NULLIF(tno.shipping_address->>'name', ''),
+                     tno.contact_identification, '')                              AS buyer_name,
+            COALESCE(tno.shipping_option, '')                                     AS shipping_type,
+            COALESCE(tno.label_downloaded, FALSE)                                 AS label_downloaded,
+            COALESCE(tno.cancel_by_unidrop, FALSE)                                AS cancel_by_unidrop
         FROM public.tienda_nube_orders tno
         LEFT JOIN public."User" u ON u.id = tno.user_id
         WHERE tno.created_at >= :from_ts
@@ -121,15 +142,15 @@ def _fetch_tn(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             "fecha": str(r[4]) if r[4] else "",
             "status": r[5] or "",
             "payment_status": r[5] or "",
-            "shipping_status": "",
-            "total": round(float(r[6] or 0), 2),
-            "merch_cost": round(float(r[7] or 0), 2),
-            "shipping_cost": round(float(r[8] or 0), 2),
+            "shipping_status": r[6] or "",
+            "total": round(float(r[7] or 0), 2),
+            "merch_cost": round(float(r[8] or 0), 2),
+            "shipping_cost": round(float(r[9] or 0), 2),
             "profit_unidrop": 0.0,
-            "buyer_name": r[9] or "",
-            "shipping_type": r[10] or "",
-            "label_downloaded": False,
-            "cancel_by_unidrop": False,
+            "buyer_name": r[10] or "",
+            "shipping_type": r[11] or "",
+            "label_downloaded": bool(r[12]),
+            "cancel_by_unidrop": bool(r[13]),
             "buyer_city": "",
             "buyer_province": "",
             "is_combo": False,
