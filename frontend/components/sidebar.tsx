@@ -130,8 +130,9 @@ const ITEMS: NavItem[] = [
     roles: ONLY_GERENCIA,
     areas: ["finanzas", "administracion"],
     children: [
-      { label: "Vista general",       href: "/dashboard/finanzas",                   icon: Wallet    },
-      { label: "Dev. Suscripciones",  href: "/dashboard/finanzas/dev-suscripciones", icon: RotateCcw },
+      { label: "Vista general",          href: "/dashboard/finanzas",                                icon: Wallet    },
+      { label: "Facturas Suscripciones", href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText  },
+      { label: "Dev. Suscripciones",     href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw },
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
