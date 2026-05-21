@@ -56,6 +56,13 @@ def get_kpis(user: Annotated[dict, Depends(current_user)]) -> dict:
     return ff.kpis()
 
 
+@router.get("/home-dashboard")
+def get_home_dashboard(user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Datos extra para home: tendencia facturacion 60d + distribucion gastos mes + acuerdos urgentes + setup KPIs."""
+    _guard(user)
+    return ff.home_dashboard()
+
+
 # ============================================================
 # Erogaciones
 # ============================================================

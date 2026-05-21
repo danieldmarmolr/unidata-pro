@@ -832,6 +832,86 @@ def delete_facturacion(fid: int) -> bool:
 # KPIs
 # ============================================================
 
+def home_dashboard() -> dict:
+    """Datos extra para home: tendencia facturacion 60d + distribucion gastos mes + acuerdos urgentes + setup."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT CURRENT_DATE::text AS hoy")
+        hoy = cur.fetchone()["hoy"]
+        # Tendencia facturacion 60d agregado por dia
+        cur.execute(
+            """
+            SELECT fecha::text AS fecha, SUM(monto) AS monto, BOOL_OR(es_real) AS es_real_dia
+            FROM public."facturacion_diaria"
+            WHERE fecha >= CURRENT_DATE - INTERVAL '60 days' AND fecha <= CURRENT_DATE
+            GROUP BY fecha ORDER BY fecha ASC
+            """
+        )
+        tendencia = [
+            {"fecha": r["fecha"], "monto": float(r["monto"]), "es_real": bool(r["es_real_dia"])}
+            for r in cur.fetchall()
+        ]
+        # Distribucion gastos del mes (categorias)
+        cur.execute(
+            """
+            SELECT COALESCE(categoria, '(sin categoria)') AS categoria,
+                   COUNT(*) AS count, SUM(monto) AS total
+            FROM public."erogaciones"
+            WHERE oculto = FALSE AND estado::text NOT IN ('cancelado','rechazado')
+              AND DATE_TRUNC('month', fecha_pago) = DATE_TRUNC('month', CURRENT_DATE)
+            GROUP BY categoria ORDER BY total DESC LIMIT 10
+            """
+        )
+        distribucion = [
+            {"categoria": r["categoria"], "count": int(r["count"]), "total": float(r["total"])}
+            for r in cur.fetchall()
+        ]
+        # Acuerdos urgentes
+        cur.execute(
+            """
+            SELECT a.id, a.compromiso, a.fecha_compromiso::text AS fecha, a.monto_compromiso, a.estado::text AS estado,
+                   p.nombre AS proveedor_nombre,
+                   CASE WHEN a.fecha_compromiso < CURRENT_DATE THEN 'vencido'
+                        WHEN a.fecha_compromiso <= CURRENT_DATE + 7 THEN 'proximo'
+                   END AS urgencia
+            FROM public."acuerdos" a
+            LEFT JOIN public."proveedores" p ON p.id = a.proveedor_id
+            WHERE a.estado::text = 'pendiente'
+              AND a.fecha_compromiso IS NOT NULL
+              AND a.fecha_compromiso <= CURRENT_DATE + 7
+            ORDER BY a.fecha_compromiso ASC LIMIT 10
+            """
+        )
+        acuerdos_urgentes = [
+            {"id": int(r["id"]), "compromiso": r["compromiso"], "fecha": r["fecha"],
+             "monto": float(r["monto_compromiso"]) if r["monto_compromiso"] else None,
+             "estado": r["estado"], "proveedor_nombre": r["proveedor_nombre"],
+             "urgencia": r["urgencia"]}
+            for r in cur.fetchall()
+        ]
+        # Setup KPIs (cuántas entidades hay)
+        cur.execute("""
+            SELECT
+              (SELECT COUNT(*) FROM public."empresas" WHERE activa = TRUE) AS empresas,
+              (SELECT COUNT(*) FROM public."unidades_negocio" WHERE activa = TRUE) AS unidades,
+              (SELECT COUNT(*) FROM public."bancos_medios_pago" WHERE activo = TRUE AND nombre != 'Total consolidado') AS bancos,
+              (SELECT COUNT(*) FROM public."proveedores") AS proveedores
+        """)
+        s = cur.fetchone()
+        setup = {
+            "empresas": {"count": int(s["empresas"]), "meta": 4},
+            "unidades": {"count": int(s["unidades"]), "meta": 3},
+            "bancos": {"count": int(s["bancos"]), "meta": 5},
+            "proveedores": {"count": int(s["proveedores"]), "meta": 0},
+        }
+    return {
+        "fecha_hoy": hoy,
+        "tendencia_facturacion": tendencia,
+        "distribucion_gastos_mes": distribucion,
+        "acuerdos_urgentes": acuerdos_urgentes,
+        "setup": setup,
+    }
+
+
 def kpis(*, fecha_hoy: str | None = None) -> dict:
     with get_conn() as c, c.cursor() as cur:
         if fecha_hoy is None:
