@@ -263,6 +263,14 @@ function RequestCard({ request: r }: { request: Request }) {
     },
   });
 
+  const revertMut = useMutation({
+    mutationFn: () =>
+      api(`/api/refund-requests/${r.id}/revert-to-pending`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["refund-requests"] });
+    },
+  });
+
   const { data: invoiceData } = useQuery<InvoiceUrlResp>({
     queryKey: ["refund-invoice", r.id],
     queryFn: () => api(`/api/refund-requests/${r.id}/invoice-url`),
@@ -443,20 +451,35 @@ function RequestCard({ request: r }: { request: Request }) {
             )}
 
             {r.status === "transferred" && (
-              <button
-                onClick={() => setShowCancelConfirm(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold shadow hover:bg-red-700 transition"
-              >
-                <AlertCircle size={12} /> Cancelar integración MELI
-              </button>
+              <>
+                <button
+                  onClick={() => setShowCancelConfirm(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold shadow hover:bg-red-700 transition"
+                >
+                  <AlertCircle size={12} /> Cancelar integración MELI
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm("¿Revertir esta solicitud a Pendiente? Se borrarán los datos de la transferencia (fecha, autor, nota). Útil solo para pruebas o corrección de errores.")) {
+                      revertMut.mutate();
+                    }
+                  }}
+                  disabled={revertMut.isPending}
+                  title="Vuelve la solicitud al estado Pendiente (borra el audit de la transferencia)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-text-muted hover:text-text hover:bg-bg text-xs font-semibold transition disabled:opacity-50"
+                >
+                  <RotateCcw size={12} /> {revertMut.isPending ? "Revirtiendo..." : "Revertir a Pendiente"}
+                </button>
+              </>
             )}
           </div>
 
-          {(transferMut.isError || rejectMut.isError || cancelMut.isError) && (
+          {(transferMut.isError || rejectMut.isError || cancelMut.isError || revertMut.isError) && (
             <div className="text-xs bg-red-50 border border-red-200 text-error rounded-lg px-3 py-2">
               {(transferMut.error as Error)?.message ??
                 (rejectMut.error as Error)?.message ??
-                (cancelMut.error as Error)?.message}
+                (cancelMut.error as Error)?.message ??
+                (revertMut.error as Error)?.message}
             </div>
           )}
         </div>

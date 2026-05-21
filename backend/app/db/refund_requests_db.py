@@ -242,6 +242,42 @@ def mark_integration_cancelled(
     return _to_dict(row) if row else None
 
 
+def revert_to_pending(
+    request_id: int,
+    *,
+    user_id: int,
+    user_email: str,
+) -> dict | None:
+    """Limpia los campos transferred_* y vuelve a status='pending'.
+
+    Solo aplica si la solicitud esta en estado 'transferred'. Los campos de
+    audit del paso transferido se borran (no se mantienen). El monto
+    solicitado NO se toca (queda el actual). Pensado para pruebas/correccion
+    de errores antes de cancelar la integracion MELI.
+    """
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE subscription_refund_requests
+            SET status = 'pending',
+                transferred_at = NULL,
+                transferred_by_user_id = NULL,
+                transferred_by_email = NULL,
+                transferred_note = NULL,
+                updated_at = NOW()
+            WHERE id = %s AND status = 'transferred'
+            RETURNING *
+            """,
+            (request_id,),
+        )
+        row = cur.fetchone()
+    if row:
+        log.info("revert_to_pending: req#%s revertida por %s (%s)",
+                 request_id, user_email, user_id)
+    return _to_dict(row) if row else None
+
+
 def mark_rejected(
     request_id: int,
     *,

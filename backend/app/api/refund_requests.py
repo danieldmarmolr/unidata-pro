@@ -142,6 +142,34 @@ def invoice_url(
     return result or {"url": None, "numero": "", "total": 0.0, "fecha": "", "tipo": ""}
 
 
+@router.post("/{request_id}/revert-to-pending")
+def revert_to_pending(
+    request_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Vuelve una solicitud Transferida al estado Pendiente.
+
+    Util para correccion de errores o pruebas. Borra los campos
+    transferred_* (no se preserva audit). NO funciona desde estados
+    terminales (integration_cancelled, rejected).
+    """
+    require_area(user, _AREAS)
+    existing = refund_requests_db.get_request(request_id)
+    if not existing:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if existing["status"] != "transferred":
+        raise HTTPException(
+            409,
+            f"Solo se pueden revertir solicitudes 'transferred' a 'pending' (actual: {existing['status']})",
+        )
+    result = refund_requests_db.revert_to_pending(
+        request_id, user_id=user["id"], user_email=user["email"],
+    )
+    if not result:
+        raise HTTPException(409, "No se pudo actualizar (estado cambio concurrentemente)")
+    return result
+
+
 @router.post("/{request_id}/reject")
 def reject(
     request_id: int,
