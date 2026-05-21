@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -492,10 +492,28 @@ function RequestCard({ request: r }: { request: Request }) {
 
 function InvoiceButton({ data }: { data: InvoiceUrlResp }) {
   const [hover, setHover] = useState(false);
-  if (!data.url) return null;
-  const code = data.numero
+  const [copied, setCopied] = useState(false);
+  const code = data.url && data.numero
     ? `${data.tipo ? data.tipo + " " : ""}${data.numero}`.trim()
     : "";
+
+  useEffect(() => {
+    if (!hover || !code) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "c") return;
+      const sel = window.getSelection();
+      if (sel && sel.toString().length > 0) return;
+      e.preventDefault();
+      navigator.clipboard.writeText(code).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }).catch(() => {});
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [hover, code]);
+
+  if (!data.url) return null;
   return (
     <div
       className="relative inline-block"
@@ -512,12 +530,14 @@ function InvoiceButton({ data }: { data: InvoiceUrlResp }) {
       </a>
       {hover && code && (
         <div
-          className="absolute left-0 top-full mt-1 z-20 bg-zinc-900 text-white text-[11px] font-mono px-2.5 py-1.5 rounded shadow-lg whitespace-nowrap select-all cursor-text"
+          className="absolute left-0 top-full mt-1 z-20 bg-zinc-900 text-white text-[11px] font-mono px-2.5 py-1.5 rounded shadow-lg whitespace-nowrap cursor-text"
           style={{ userSelect: "all" }}
           onClick={(e) => e.stopPropagation()}
         >
           {code}
-          <span className="ml-2 text-zinc-400 select-none">Ctrl+C para copiar</span>
+          <span className="ml-2 text-zinc-400 select-none font-sans">
+            {copied ? "Copiado" : "Ctrl+C para copiar"}
+          </span>
         </div>
       )}
     </div>
