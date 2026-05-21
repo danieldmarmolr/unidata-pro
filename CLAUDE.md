@@ -33,7 +33,6 @@ App productiva en `https://app.unidatacenter.com.ar`
 | `frontend` | `app.unidatacenter.com.ar` | `frontend/` | Sí (push a main) |
 | `backend` | `api.unidatacenter.com.ar` | `backend/` | Sí (push a main) |
 | `mcp` | `mcp-production-b8c5.up.railway.app` | `mcp/` | Sí (push a main) |
-| `flujo-fondos` | `caja.unidatacenter.com.ar` | `services/flujo-fondos/` | Sí (push a main) — sub-app sincronizada vía git subtree desde `pedroabba123/flujo-fondos` |
 
 Deploy manual cuando hace falta:
 ```bash
@@ -432,23 +431,29 @@ railway deployment list --service backend
 
 ---
 
-## Sub-apps sincronizadas (Modo B del skill `port-to-unidata`)
+## Flujo de Fondos — port nativo a UNIDATA (en progreso)
 
-UNIDATA absorbe apps externas full-stack vivas en otros repos GitHub vendorizándolas con `git subtree --squash`. NO se reescriben al stack UNIDATA — viven con su propio stack en un service Railway separado y subdominio propio. UNIDATA aporta el sidebar entry + sync workflow + control de DB/auth (eventualmente).
+ERP de tesorería del grupo desarrollado por **Pedro Abbiati** (`pedro.abbiati@unistore.ar`) originalmente en [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos) (Next.js + Drizzle + Supabase Auth).
 
-| Sub-app | Repo upstream | Dueño | Subdominio | Path | Sync script |
-|---------|---------------|-------|------------|------|-------------|
-| Flujo de Fondos (tesorería) | [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos) | Pedro Abbiati (`pedro.abbiati@unistore.ar`) | `caja.unidatacenter.com.ar` | `services/flujo-fondos/` | `pwsh scripts/sync-flujo-fondos.ps1` |
+**Decisión 2026-05-21**: NO mantenemos como sub-app sincronizada con sub-dominio propio. Lo portamos al stack UNIDATA (FastAPI + Next.js + JWT propio + RBAC nativo) para que viva como una pantalla más bajo `Cross > Finanzas > Flujo de Fondos`.
 
-### Reglas críticas
+| Componente | Estado |
+|------------|--------|
+| DB migrada al Supabase UNIDATA (11 tablas + 538 filas + 9 enums + user) | ✅ Hecho |
+| Subtree `services/flujo-fondos/` como **referencia de código** (NO se deploya) | ✅ Mantenido |
+| Backend FastAPI `/api/flujo-fondos/*` (modelos SQLAlchemy + endpoints) | 🟡 En progreso |
+| Frontend Next.js `dashboard/finanzas/flujo-fondos/*` | 🟡 En progreso |
+| Sidebar entry interno bajo `Cross > Finanzas > Flujo de Fondos` | ✅ Wired |
 
-1. **NUNCA editar archivos dentro de `services/<slug>/` localmente** — rompe el sync con upstream. Si necesitás un cambio, abrí PR al repo del dueño.
-2. **El sync se hace en branch dedicada**, no en `main`. El script tiene una guarda pero se puede bypassear con `y`.
-3. **Auth fase 1**: cada sub-app mantiene su auth original (Supabase Auth de Pedro, etc.). El usuario hace doble login. Fase 2 (futuro) puede bridgear JWT UNIDATA.
-4. **DB**: idealmente migrar al Supabase de UNIDATA (schema dedicado por sub-app, ej. `flujo_fondos`) para que IT controle backups + access.
-5. **Sidebar**: usar `external: true` en el child del nav item — el renderer usa `<a target="_blank">` con icono `ExternalLink`.
+### Reglas
 
-Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.md) y el skill `~/.claude/skills/port-to-unidata/SKILL.md` (sección "Paso 4b — Modo B").
+1. **El subtree `services/flujo-fondos/` es solo referencia.** No deployar. No editar. Las features se portan a `backend/app/services/flujo_fondos/` y `frontend/app/dashboard/finanzas/flujo-fondos/`.
+2. **DB compartida con UNIDATA**: las 11 tablas viven en `public` del Supabase UNIDATA. SQLAlchemy del backend las mapea directamente.
+3. **Auth**: usar el JWT propio de UNIDATA, no Supabase Auth. La tabla `perfiles` queda obsoleta para el port nativo (Pedro será un user normal de UNIDATA con area_slug=finanzas).
+4. **RBAC**: cada endpoint con `require_area(["finanzas", "administracion"])` (admin/gerencia bypass automático).
+5. **Lógica compleja a portar**: `proyeccion.ts` (motor central), `pagos-atrasados.ts` (sugerencias), `detectar-patrones.ts`, `DIFERIMIENTO_POR_UNIDAD` (Unistore Mayorista cobra día X+1).
+
+Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.md).
 
 ---
 
@@ -467,4 +472,4 @@ Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.
 - **Meta Ads integration** — esperando token + ad account IDs de Tomi para sync
 - **US-XXX** Contabilium drilldown desde modal (link existe, integración profunda pendiente)
 - **US-XXX** Forecast con segmentación combo vs individual
-- **Flujo de Fondos sub-app** (2026-05-21): subtree vendorizado en `services/flujo-fondos`, sidebar wired. Pendiente: dump DB de Supabase de Pedro → schema `flujo_fondos` en Supabase UNIDATA · crear service Railway `flujo-fondos` · DNS `caja.unidatacenter.com.ar` · coordinar con Pedro
+- **Flujo de Fondos port nativo** (2026-05-21): pivote a port nativo (NO sub-app). DB ya migrada a Supabase UNIDATA. Subtree `services/flujo-fondos/` como referencia. Pendiente: backend FastAPI + frontend Next.js portados al stack UNIDATA. Fase 1 = home + erogaciones + proyección.

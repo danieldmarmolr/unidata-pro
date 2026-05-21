@@ -1,159 +1,139 @@
-# Flujo de Fondos — integración como sub-app sincronizada en UNIDATA
+# Flujo de Fondos — port nativo a UNIDATA
 
-## Resumen
+## Decisión arquitectónica (2026-05-21)
 
-`flujo-fondos` es un ERP web de tesorería/flujo de caja del grupo Unistore desarrollado por **Pedro Abbiati** (`pedro.abbiati@unistore.ar`) en el repo público [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos). Producción actual: https://flujo-fondos.vercel.app (Vercel + Supabase).
+El proyecto [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos) (Next.js + Drizzle + Supabase Auth, dueño Pedro Abbiati) se integra a UNIDATA como **port nativo** (Modo A del skill `port-to-unidata`), NO como sub-app sincronizada (Modo B).
 
-UNIDATA lo absorbe como **sub-app sincronizada** (Modo B del skill `port-to-unidata`):
+**Por qué port nativo y no sub-app sincronizada**: el usuario decidió que la app debe vivir dentro de UNIDATA bajo `Cross > Finanzas > Flujo de Fondos`, con la look-and-feel del panel (Topbar morado, gradientes UNIDATA, Tailwind tokens), RBAC nativo de UNIDATA (JWT propio + `require_area`), y endpoints FastAPI propios. NO redirect a un sub-dominio externo. Razón: la solapa Finanzas debe ser un único contexto unificado para el área de finanzas, sin "saltos" a otra app.
 
-- **Vendoring**: el repo upstream se vendoriza vía `git subtree --squash` en `services/flujo-fondos/`. NO se reescribe a stack UNIDATA.
-- **Deploy**: service Railway propio (`flujo-fondos`) con root path `services/flujo-fondos`. Subdominio público `caja.unidatacenter.com.ar` apuntando al service.
-- **Sidebar UNIDATA**: item `Cross > Finanzas > Caja (Flujo de Fondos)` con link externo (`target=_blank`).
-- **Sync upstream**: `pwsh scripts/sync-flujo-fondos.ps1` hace `git subtree pull --squash` desde `pedroabba123/flujo-fondos:master`.
-- **Auth fase 1**: sigue usando Supabase Auth original (login independiente). Coordinar con Pedro si pasamos a bridge JWT.
-- **DB**: migrar a Supabase de UNIDATA en schema `flujo_fondos` (decisión 2026-05-21). Pedro mantiene control del schema vía sus migraciones Drizzle.
+## Lo que se reutiliza del trabajo previo (Modo B descartado)
 
-## Stack vendorizado (no tocar)
+**DB ya migrada al Supabase UNIDATA** (no se pierde):
 
-| Capa | Tech |
-|------|------|
-| Framework | Next.js 16.2.6 (App Router) — `AGENTS.md` upstream advierte que tiene breaking changes vs Next 14/15 |
-| Lenguaje | TypeScript 5 strict |
-| UI | Tailwind v4 · `@base-ui/react` (NO Radix) · shadcn registry custom |
-| Forms | `react-hook-form` + `zod` |
-| Gráficos | `recharts` 3.x |
-| Tablas | `@tanstack/react-table` |
-| Auth | Supabase Auth (`@supabase/ssr`, `@supabase/supabase-js`) |
-| DB | Postgres (hoy Supabase, pasar a Supabase de UNIDATA schema `flujo_fondos`) |
-| ORM | Drizzle ORM 0.45 + driver `postgres-js` 3.4 (`prepare: false` por pooler) |
-| Migraciones | `drizzle-kit` 0.31 (`npm run db:migrate`) |
-| Excel | `xlsx` (SheetJS) |
-| Iconos | `lucide-react` |
+| Tabla | Filas |
+|-------|-------|
+| empresas | 4 |
+| unidades_negocio | 3 |
+| bancos_medios_pago | 6 |
+| proveedores | 0 |
+| recurrencias | 0 |
+| erogaciones | 308 |
+| acuerdos | 0 |
+| facturacion_diaria | 209 |
+| ingresos_puntuales | 4 |
+| saldos_iniciales | 4 |
+| perfiles | 1 |
 
-Detalle completo en [`services/flujo-fondos/docs/HANDOFF.md`](../services/flujo-fondos/docs/HANDOFF.md).
+Las 11 tablas viven en `public` del Supabase UNIDATA (project `pmeuexynoftqyyoeyhyn`). Junto con:
+- 9 enums custom (`canal_unidad_negocio`, `estado_erogacion`, `tipo_banco`, etc.)
+- 14 foreign keys
+- RLS policies (irrelevante en port nativo porque conectamos via SQLAlchemy con role `postgres`, bypass RLS)
+- 2 functions (`es_admin`, `handle_new_user`) y 1 trigger en `auth.users` — quedan ahí pero el port nativo NO los usa (auth de UNIDATA es JWT propio, no Supabase Auth)
 
-## Workflow de sync con upstream
+**Subtree `services/flujo-fondos/`** queda como referencia de código (NO se deploya, NO se edita):
+- `src/db/schema/*.ts` — schemas Drizzle (referencia para los modelos SQLAlchemy)
+- `src/lib/proyeccion.ts` — motor central de proyección de saldos (por portar)
+- `src/lib/pagos-atrasados.ts` — algoritmo de re-fechas (por portar)
+- `src/lib/detectar-patrones.ts` — detector de recurrencias (por portar)
+- `src/app/(app)/*/page.tsx` — 20 pantallas (referencia de UX, NO se copian — se reimplementan con identidad UNIDATA)
+- `drizzle/0000_*.sql` a `0010_*.sql` — migraciones aplicadas (referencia)
 
-### Operación normal — ver qué hay nuevo en upstream
+**Lo que NO se reutiliza** (descartado del Modo B):
+- ❌ Service Railway `flujo-fondos` (eliminado 2026-05-21)
+- ❌ Custom domain `caja.unidatacenter.com.ar` (eliminado)
+- ❌ CNAME en Cloudflare (eliminado)
+- ❌ Login via Supabase Auth (UNIDATA usa JWT propio)
+- ❌ Tabla `perfiles` (UNIDATA tiene su propia `users` + `areas`)
+- ❌ FK `perfiles.id → auth.users(id)` (Pedro como user de Supabase legacy quedó en `auth.users` pero el port nativo no lo usa)
+- ❌ Trigger `on_auth_user_created` (irrelevante para el port nativo)
 
-```powershell
-pwsh scripts/sync-flujo-fondos.ps1 -DryRun
-```
+## Arquitectura del port nativo
 
-Lista los últimos 20 commits del `master` de Pedro y, si encuentra el commit del último squash en el historial local, también lista solo los commits nuevos desde ese punto.
+### Backend FastAPI
 
-### Aplicar el sync
+`backend/app/services/flujo_fondos/`:
+- `models.py` — SQLAlchemy ORM mapping 1:1 con las 11 tablas en `public`
+- `proyeccion.py` — motor de proyección de saldos (port de `src/lib/proyeccion.ts`)
+- `pagos_atrasados.py` — sugerencias de re-fechas (port de `src/lib/pagos-atrasados.ts`)
+- `excel_importers.py` — parsers de plantillas Excel (port de los API routes de Next.js)
 
-```powershell
-# Desde una branch dedicada (no main)
-git checkout -b chore/sync-flujo-fondos-$(Get-Date -Format yyyy-MM-dd)
-pwsh scripts/sync-flujo-fondos.ps1
-```
+`backend/app/api/flujo_fondos.py`:
+- `GET /api/flujo-fondos/health`
+- `GET /api/flujo-fondos/kpis` — para home (pendiente, en_curso, atrasadas, etc.)
+- `GET/POST/PATCH/DELETE /api/flujo-fondos/erogaciones`
+- `GET /api/flujo-fondos/proyeccion?dias=30` — motor central
+- `GET/POST /api/flujo-fondos/facturacion-diaria`
+- `GET/POST /api/flujo-fondos/ingresos-puntuales`
+- `GET /api/flujo-fondos/saldos-iniciales`
+- `GET/POST /api/flujo-fondos/empresas` (maestro)
+- `GET/POST /api/flujo-fondos/bancos` (maestro)
+- `GET/POST /api/flujo-fondos/proveedores` (maestro)
+- `GET/POST /api/flujo-fondos/unidades-negocio` (maestro)
 
-El script:
-1. Verifica que `flujo-fondos-upstream` remote exista (lo agrega si falta).
-2. `git fetch flujo-fondos-upstream master`.
-3. Verifica que el working tree esté limpio.
-4. `git subtree pull --prefix=services/flujo-fondos flujo-fondos-upstream master --squash`.
-5. Imprime los próximos pasos (revisar diff, validar build, deploy).
+Todos los endpoints con `Depends(current_user)` + `require_area(["finanzas", "administracion"])` (admin/gerencia bypass).
 
-Si hay conflictos (ej. alguien editó archivos del subtree localmente — NO recomendado), git los reporta y hay que resolverlos a mano antes de commitear.
+### Frontend Next.js (en monorepo UNIDATA)
 
-### Regla de oro: NO tocar `services/flujo-fondos/` localmente
+`frontend/app/dashboard/finanzas/flujo-fondos/`:
+- `layout.tsx` — Topbar UNIDATA + tab nav (Home, Erogaciones, Proyección, etc.)
+- `page.tsx` — home con KPIs + mini-charts
+- `erogaciones/page.tsx` — CRUD completo
+- `proyeccion/page.tsx` — gráfico de área + tabla
+- (Fase N): calendario, pagos-atrasados, importar, maestros, etc.
 
-Toda customización va en archivos hermanos del repo unidata-pro:
-- Item del sidebar → `frontend/components/sidebar.tsx`
-- Documentación → `docs/FLUJO_FONDOS_INTEGRATION.md`
-- Script de sync → `scripts/sync-flujo-fondos.ps1`
-- (Futuro) DB schema migration script → `scripts/...`
+`frontend/app/dashboard/finanzas/flujo-fondos/_components/`:
+- `KpiCard.tsx`
+- `ErogacionForm.tsx`
+- `ProyeccionChart.tsx`
+- `MoneyArs.tsx` (formato `$ 1.234.567,89`)
 
-Si necesitás un cambio dentro de `services/flujo-fondos/` (ej. bridge JWT, fix de bug), abrí PR contra el upstream de Pedro y esperá que mergee. Editar el subtree local crea conflictos en el próximo sync.
+### Conexión a la DB
 
-## Pasos manuales pendientes (NO automatizables por Claude)
+UNIDATA backend ya conecta al Supabase UNIDATA via `app.db.local_persistence.get_conn()`. Para Flujo de Fondos usaremos un engine SQLAlchemy propio apuntando al mismo Supabase pero con sus propios models. **NO mezclar** con las queries de los otros dominios (Unistore/Unidrop/Unidev tienen sus propios engines via SSH tunnel).
 
-### 1. DB — migración a Supabase de UNIDATA (schema `flujo_fondos`)
+## Plan por fases
 
-Requiere:
-- `pg_dump` de la DB actual de flujo-fondos (Pedro tiene el `DIRECT_URL` con password).
-- Crear schema `flujo_fondos` en el Supabase de UNIDATA.
-- `psql ... < dump.sql` apuntando al schema nuevo.
-- Generar nuevas env vars `DATABASE_URL` (transaction pooler 6543) y `DIRECT_URL` (5432) del Supabase UNIDATA con `?options=search_path=flujo_fondos` (o `currentSchema=flujo_fondos`).
-- Validar que `npm run db:migrate` no rompa contra la base ya migrada (idealmente la dejamos sin pending migrations).
+### Fase 1 (sesión actual) — MVP usable
+- Backend: models SQLAlchemy + motor de proyección + ~8 endpoints (CRUD erogaciones, kpis, proyección, maestros básicos)
+- Frontend: home + erogaciones (con tabla + filtros básicos + crear/editar) + proyección (gráfico + tabla)
+- Sidebar: entry interno `/dashboard/finanzas/flujo-fondos` (ya wireado)
 
-### 2. Railway — crear service `flujo-fondos`
+### Fase 2 — features de operación
+- Pagos atrasados con sugerencias
+- Calendario mensual de caja
+- Ingresos puntuales + recurrencias + acuerdos
+- Detector de patrones
 
-Desde dashboard de Railway:
-1. Settings → Source → Root directory: `services/flujo-fondos`
-2. Build command: `npm install && npm run build`
-3. Start command: `npm run start`
-4. Env vars (todas obligatorias):
-   - `DATABASE_URL` (pooler 6543, `prepare: false`)
-   - `DIRECT_URL` (directo 5432, solo para drizzle-kit)
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-   - `SUPABASE_SECRET_KEY`
+### Fase 3 — features de importación y maestros
+- Importadores Excel (4 plantillas)
+- Maestros completos (CRUD de empresas, bancos, proveedores, unidades de negocio)
+- Análisis agregado, precisión, promedios
 
-Setear con:
-```bash
-railway variables --service flujo-fondos \
-  --set "DATABASE_URL=postgres://..." \
-  --set "DIRECT_URL=postgres://..." \
-  --set "NEXT_PUBLIC_SUPABASE_URL=https://..." \
-  --set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=eyJ..." \
-  --set "SUPABASE_SECRET_KEY=eyJ..." \
-  --skip-deploys
-railway redeploy --service flujo-fondos --yes
-```
+### Fase 4 — paridad con la app original
+- Cmd+K búsqueda global
+- Bulk operations en erogaciones
+- Exportar CSV
+- Detalle dropdown lateral en calendario
 
-### 3. DNS — subdominio `caja.unidatacenter.com.ar`
+## Coordinación con Pedro
 
-1. Railway → service `flujo-fondos` → Settings → Networking → Custom Domain → agregar `caja.unidatacenter.com.ar`.
-2. Railway devuelve un CNAME target (`<random>.up.railway.app`).
-3. Cloudflare DNS de `unidatacenter.com.ar`: agregar registro **CNAME** `caja` → `<railway target>` con **proxy OFF** (DNS only) para que Railway emita el cert.
-4. Esperar 2-5 min y verificar `curl -I https://caja.unidatacenter.com.ar` → 200 o 30x al login de Supabase.
+El subtree `services/flujo-fondos/` sigue viviendo en el repo como referencia. Si Pedro sigue desarrollando en su repo `pedroabba123/flujo-fondos`, podemos correr `pwsh scripts/sync-flujo-fondos.ps1` para tener su última versión como referencia (NO afecta el port nativo).
 
-### 4. Coordinación con Pedro
+Pedro queda libre de seguir usando su deploy en Vercel (https://flujo-fondos.vercel.app) hasta que el port nativo cubra suficientes features. Cuando estemos listos, le anunciamos el switch.
 
-Notificarle por email/Slack/Jira:
-- UNIDATA absorbió flujo-fondos en `services/flujo-fondos/` vía `git subtree --squash`.
-- El repo upstream sigue siendo la source of truth. UNIDATA hará `git subtree pull` periódicamente.
-- Si Pedro va a hacer cambios al sistema de auth (Supabase → otro), avisar primero para sincronizar el bridge JWT que UNIDATA piense hacer en fase 2.
-- La DB pasó al Supabase de UNIDATA (si seguimos el plan). Pedro mantiene Drizzle como source of truth del schema, pero las migraciones se aplican apuntando al Supabase UNIDATA.
+**Datos**: los 538 rows + el user de Pedro están en el Supabase UNIDATA. Si Pedro quiere ver/editar a través del port nativo, hay que crearle un user en `users` de UNIDATA con `area_slug='finanzas'` y `is_admin=true`.
 
-## Sidebar UNIDATA
+## Anti-patterns
 
-Item agregado en `frontend/components/sidebar.tsx` bajo el grupo `Cross > Finanzas`:
-
-```tsx
-{
-  label: "Caja (Flujo de Fondos)",
-  href: "https://caja.unidatacenter.com.ar",
-  icon: PiggyBank,
-  external: true,
-},
-```
-
-El renderer del sidebar detecta `external: true` y usa `<a target="_blank" rel="noreferrer">` en lugar de `<Link>`.
-
-## Fase 2 (futuro) — Bridge auth
-
-Cuando IT decida unificar el login:
-- Opción 1: cookie cross-subdomain (`Domain=.unidatacenter.com.ar`) que la sub-app lee como JWT en su middleware.
-- Opción 2: refactor del auth de la sub-app (`src/lib/supabase/*`) reemplazándolo por un cliente que valida el JWT HS256 de UNIDATA.
-
-Coordinar con Pedro antes de implementar — el cambio toca el subtree y conflicta con sus commits si no se sincroniza.
-
-## Anti-patterns (NO HACER)
-
-- ❌ Editar archivos dentro de `services/flujo-fondos/` directamente — rompe el sync.
-- ❌ Hacer un `git subtree pull` sin squash — importa miles de commits ajenos.
-- ❌ Levantar el service Railway desde `frontend/` o `backend/` — el subtree debe vivir en `services/`.
-- ❌ Reescribir páginas de flujo-fondos al stack UNIDATA (FastAPI + Next.js + Tailwind tokens UNIDATA) — destruye el sync y duplica trabajo cada vez que Pedro mergea algo.
-- ❌ Hardcodear el subdominio en código — usar `process.env.NEXT_PUBLIC_FLUJO_FONDOS_URL` si llega a necesitarse desde otros lugares.
+- ❌ Editar archivos dentro de `services/flujo-fondos/` — no hace nada, ese subtree no se deploya. Editar `backend/app/services/flujo_fondos/` y `frontend/app/dashboard/finanzas/flujo-fondos/`.
+- ❌ Usar Drizzle ORM en el port nativo — usar SQLAlchemy del backend UNIDATA.
+- ❌ Usar Supabase Auth — usar JWT propio de UNIDATA (`current_user`).
+- ❌ Reescribir RLS policies — el bypass via `SUPABASE_SECRET_KEY` no aplica acá; UNIDATA backend conecta con role `postgres` y bypassea RLS naturalmente.
+- ❌ Copiar componentes shadcn de `@base-ui/react` del subtree — UNIDATA usa su propio shadcn registry.
 
 ## Referencias
 
-- Skill: `~/.claude/skills/port-to-unidata/SKILL.md` (sección "Paso 4b — Ejecutar Modo B")
-- Repo upstream: https://github.com/pedroabba123/flujo-fondos
-- Doc upstream (handoff a IT): [`services/flujo-fondos/docs/HANDOFF.md`](../services/flujo-fondos/docs/HANDOFF.md)
-- Doc upstream (estado proyecto): [`services/flujo-fondos/docs/REPORTE_ESTADO.md`](../services/flujo-fondos/docs/REPORTE_ESTADO.md)
+- Skill: `~/.claude/skills/port-to-unidata/SKILL.md` (Modo A — Port nativo)
+- Subtree referencia: [`services/flujo-fondos/`](../services/flujo-fondos/)
+- Doc original Pedro: [`services/flujo-fondos/docs/HANDOFF.md`](../services/flujo-fondos/docs/HANDOFF.md)
+- DB Supabase UNIDATA: project `pmeuexynoftqyyoeyhyn` (las 11 tablas viven en `public`)

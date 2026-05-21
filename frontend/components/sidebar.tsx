@@ -137,7 +137,7 @@ const ITEMS: NavItem[] = [
       { label: "Vista general",            href: "/dashboard/finanzas",                                icon: Wallet     },
       { label: "Facturas Suscripciones",   href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText   },
       { label: "Dev. Suscripciones",       href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw  },
-      { label: "Caja (Flujo de Fondos)",   href: "https://caja.unidatacenter.com.ar",                  icon: PiggyBank, external: true },
+      { label: "Flujo de Fondos",          href: "/dashboard/finanzas/flujo-fondos",                   icon: PiggyBank  },
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
