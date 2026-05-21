@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs, fmtDate } from "../_components/helpers";
 
 type Recurrencia = {
@@ -20,13 +21,32 @@ export default function RecurrenciasPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Recurrencia | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-
   const q = useQuery<{ items: Recurrencia[]; count: number }>({ queryKey: ["ff", "recurrencias"], queryFn: () => api("/api/flujo-fondos/recurrencias") });
   const proveedores = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "proveedores"], queryFn: () => api("/api/flujo-fondos/proveedores"), staleTime: 5 * 60_000 });
   const empresas = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "empresas"], queryFn: () => api("/api/flujo-fondos/empresas"), staleTime: 5 * 60_000 });
   const bancos = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "bancos"], queryFn: () => api("/api/flujo-fondos/bancos"), staleTime: 5 * 60_000 });
-
   const del = useMutation({ mutationFn: (id: number) => api(`/api/flujo-fondos/recurrencias/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "recurrencias"] }) });
+
+  const columns: Column<Recurrencia>[] = [
+    { key: "descripcion", label: "Descripcion", getValue: (r) => r.descripcion },
+    {
+      key: "frecuencia", label: "Frecuencia", getValue: (r) => r.frecuencia,
+      render: (r) => <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100">{r.frecuencia}</span>,
+    },
+    {
+      key: "monto_base", label: "Monto base", align: "right", type: "number",
+      getValue: (r) => r.monto_base != null ? Number(r.monto_base) : null,
+      render: (r) => r.monto_base != null ? <span className="font-semibold">{fmtArs(r.monto_base)}</span> : <span className="text-text-muted">—</span>,
+    },
+    { key: "fecha_inicio", label: "Desde", type: "date", getValue: (r) => r.fecha_inicio, render: (r) => <span className="whitespace-nowrap">{fmtDate(r.fecha_inicio)}</span> },
+    {
+      key: "fecha_fin", label: "Hasta", type: "date",
+      getValue: (r) => r.fecha_fin ?? "",
+      render: (r) => r.fecha_fin ? <span className="whitespace-nowrap">{fmtDate(r.fecha_fin)}</span> : <span className="text-text-muted">indef.</span>,
+    },
+    { key: "proveedor_nombre", label: "Proveedor", getValue: (r) => r.proveedor_nombre ?? "", className: "text-text-muted" },
+    { key: "activa", label: "Activa", align: "center", getValue: (r) => r.activa ? "si" : "no", render: (r) => r.activa ? "✓" : "—" },
+  ];
 
   return (
     <PageWrapper>
@@ -34,31 +54,20 @@ export default function RecurrenciasPage() {
         <div className="text-sm text-text-muted">{q.data?.count ?? "..."} recurrencias definidas</div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nueva recurrencia</button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState label="Aun no hay recurrencias definidas" /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Descripcion</th><th className="text-left px-3 py-2">Frecuencia</th><th className="text-right px-3 py-2">Monto base</th><th className="text-left px-3 py-2">Desde</th><th className="text-left px-3 py-2">Hasta</th><th className="text-left px-3 py-2">Proveedor</th><th className="text-center px-3 py-2">Activa</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((r) => (
-                <tr key={r.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2">{r.descripcion}</td>
-                  <td className="px-3 py-2"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100">{r.frecuencia}</span></td>
-                  <td className="px-3 py-2 text-right font-semibold">{r.monto_base != null ? fmtArs(r.monto_base) : "—"}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(r.fecha_inicio)}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{r.fecha_fin ? fmtDate(r.fecha_fin) : "indef."}</td>
-                  <td className="px-3 py-2 text-text-muted">{r.proveedor_nombre ?? "—"}</td>
-                  <td className="px-3 py-2 text-center">{r.activa ? "✓" : "—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar recurrencia?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "fecha_inicio", dir: "desc" }}
+          emptyLabel="Aun no hay recurrencias definidas"
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar recurrencia?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && (
         <RecurrenciaModal item={editing} proveedores={proveedores.data?.items ?? []} empresas={empresas.data?.items ?? []} bancos={bancos.data?.items ?? []} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "recurrencias"] }); }} />

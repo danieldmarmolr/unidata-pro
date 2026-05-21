@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, X, Loader2, Trash2 } from "lucide-react";
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs, fmtArsCompact, fmtDate } from "../_components/helpers";
 
 type Fila = {
@@ -18,19 +19,18 @@ type Unidad = { id: number; nombre: string };
 export default function FacturacionPage() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  const [unidadFiltro, setUnidadFiltro] = useState<string>("");
   const today = new Date();
   const desde60 = new Date(today.getTime() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   const unidades = useQuery<{ items: Unidad[] }>({ queryKey: ["ff", "unidades"], queryFn: () => api("/api/flujo-fondos/unidades-negocio"), staleTime: 5 * 60_000 });
   const empresas = useQuery<{ items: { id: number; nombre: string }[] }>({ queryKey: ["ff", "empresas"], queryFn: () => api("/api/flujo-fondos/empresas"), staleTime: 5 * 60_000 });
 
-  const url = `/api/flujo-fondos/facturacion?fecha_desde=${desde60}&limit=500${unidadFiltro ? `&unidad_id=${unidadFiltro}` : ""}`;
-  const q = useQuery<{ items: Fila[]; count: number }>({ queryKey: ["ff", "facturacion", unidadFiltro], queryFn: () => api(url) });
+  const url = `/api/flujo-fondos/facturacion?fecha_desde=${desde60}&limit=500`;
+  const q = useQuery<{ items: Fila[]; count: number }>({ queryKey: ["ff", "facturacion"], queryFn: () => api(url) });
 
   const del = useMutation({ mutationFn: (id: number) => api(`/api/flujo-fondos/facturacion/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "facturacion"] }) });
 
-  // Serie agregada por fecha
+  // Serie agregada por fecha para el grafico
   const serie = (() => {
     if (!q.data) return [];
     const map = new Map<string, number>();
@@ -41,17 +41,35 @@ export default function FacturacionPage() {
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([fecha, monto]) => ({ fecha, monto }));
   })();
 
+  const columns: Column<Fila>[] = [
+    { key: "fecha", label: "Fecha", type: "date", getValue: (r) => r.fecha, render: (r) => <span className="whitespace-nowrap">{fmtDate(r.fecha)}</span> },
+    { key: "unidad_nombre", label: "Unidad", getValue: (r) => r.unidad_nombre ?? `#${r.unidad_negocio_id}` },
+    { key: "empresa_nombre", label: "Empresa", getValue: (r) => r.empresa_nombre ?? "", className: "text-text-muted" },
+    {
+      key: "monto", label: "Monto", align: "right", type: "number",
+      getValue: (r) => Number(r.monto),
+      render: (r) => <span className="font-semibold">{fmtArs(r.monto)}</span>,
+    },
+    {
+      key: "es_real", label: "Real", align: "center",
+      getValue: (r) => r.es_real ? "si" : "no",
+      render: (r) => r.es_real ? "✓" : "—",
+    },
+    {
+      key: "es_evento_puntual", label: "Evento puntual", align: "center",
+      getValue: (r) => r.es_evento_puntual ? "si" : "no",
+      render: (r) => r.es_evento_puntual ? <span className="text-amber-700 text-xs">⚠</span> : "—",
+    },
+    { key: "origen", label: "Origen", getValue: (r) => r.origen, className: "text-text-muted text-xs" },
+  ];
+
   return (
     <PageWrapper>
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="text-sm text-text-muted">{q.data?.count ?? "..."} filas de facturacion (ultimos 60 dias)</div>
-        <div className="flex gap-2 items-center">
-          <select value={unidadFiltro} onChange={(e) => setUnidadFiltro(e.target.value)} className="px-2 py-1.5 border border-border rounded-md text-sm bg-surface"><option value="">Todas las unidades</option>{unidades.data?.items.map(u => <option key={u.id} value={u.id}>{u.nombre}</option>)}</select>
-          <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Carga manual</button>
-        </div>
+        <div className="text-sm text-text-muted">{q.data?.count ?? "..."} filas (ultimos 60 dias)</div>
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Carga manual</button>
       </div>
 
-      {/* Grafico */}
       {serie.length > 0 && (
         <div className="rounded-xl border border-border bg-surface p-5">
           <h2 className="text-sm font-bold mb-3">Evolucion diaria · {desde60} → hoy</h2>
@@ -69,31 +87,16 @@ export default function FacturacionPage() {
         </div>
       )}
 
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Fecha</th><th className="text-left px-3 py-2">Unidad</th><th className="text-left px-3 py-2">Empresa</th><th className="text-right px-3 py-2">Monto</th><th className="text-center px-3 py-2">Real</th><th className="text-center px-3 py-2">Evento puntual</th><th className="text-left px-3 py-2">Origen</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.slice(0, 200).map((f) => (
-                <tr key={f.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(f.fecha)}</td>
-                  <td className="px-3 py-2">{f.unidad_nombre ?? `#${f.unidad_negocio_id}`}</td>
-                  <td className="px-3 py-2 text-text-muted">{f.empresa_nombre ?? "—"}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{fmtArs(f.monto)}</td>
-                  <td className="px-3 py-2 text-center">{f.es_real ? "✓" : "—"}</td>
-                  <td className="px-3 py-2 text-center">{f.es_evento_puntual ? <span className="text-amber-700 text-xs">⚠</span> : "—"}</td>
-                  <td className="px-3 py-2 text-text-muted text-xs">{f.origen}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => { if (confirm(`Eliminar fila?`)) del.mutate(f.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {q.data && q.data.items.length > 200 && <div className="px-3 py-2 text-center text-text-muted text-xs bg-soft">Mostrando primeras 200 de {q.data.items.length} filas</div>}
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "fecha", dir: "desc" }}
+          maxHeight="max-h-[600px]"
+          emptyLabel="Sin facturacion en el periodo"
+          renderActions={(r) => <button onClick={() => { if (confirm(`Eliminar fila?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>}
+        />
       )}
 
       {showCreate && <FacturacionModal unidades={unidades.data?.items ?? []} empresas={empresas.data?.items ?? []} onClose={() => setShowCreate(false)} onSaved={() => { setShowCreate(false); qc.invalidateQueries({ queryKey: ["ff", "facturacion"] }); }} />}
@@ -102,11 +105,7 @@ export default function FacturacionPage() {
 }
 
 function FacturacionModal({ unidades, empresas, onClose, onSaved }: { unidades: Unidad[]; empresas: { id: number; nombre: string }[]; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({
-    fecha: new Date().toISOString().slice(0, 10),
-    monto: "", unidad_negocio_id: unidades[0]?.id ?? 0, empresa_id: "",
-    es_real: true, es_evento_puntual: false,
-  });
+  const [form, setForm] = useState({ fecha: new Date().toISOString().slice(0, 10), monto: "", unidad_negocio_id: unidades[0]?.id ?? 0, empresa_id: "", es_real: true, es_evento_puntual: false });
   const m = useMutation({
     mutationFn: (body: Record<string, unknown>) => api("/api/flujo-fondos/facturacion", { method: "POST", body: JSON.stringify(body) }),
     onSuccess: () => onSaved(),

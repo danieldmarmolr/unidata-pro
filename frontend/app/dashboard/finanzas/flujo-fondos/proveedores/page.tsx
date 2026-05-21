@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs } from "../_components/helpers";
 
 type Proveedor = { id: number; nombre: string; cuit: string | null; prioridad: string; saldo_pendiente: number | string; notas: string | null; tags: string[] };
@@ -23,35 +24,45 @@ export default function ProveedoresPage() {
     mutationFn: (id: number) => api(`/api/flujo-fondos/proveedores/${id}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "proveedores"] }),
   });
+
+  const columns: Column<Proveedor>[] = [
+    { key: "nombre", label: "Nombre", getValue: (r) => r.nombre, render: (r) => <span className="font-semibold">{r.nombre}</span> },
+    { key: "cuit", label: "CUIT", getValue: (r) => r.cuit ?? "", className: "text-text-muted" },
+    {
+      key: "prioridad", label: "Prioridad", align: "center", getValue: (r) => r.prioridad,
+      render: (r) => <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${PRIORIDAD_COLOR[r.prioridad] ?? ""}`}>{r.prioridad}</span>,
+    },
+    {
+      key: "saldo_pendiente", label: "Saldo pendiente", align: "right", type: "number",
+      getValue: (r) => Number(r.saldo_pendiente),
+      render: (r) => <span className="font-semibold">{fmtArs(r.saldo_pendiente)}</span>,
+    },
+    {
+      key: "tags", label: "Tags",
+      getValue: (r) => r.tags?.join(", ") ?? "",
+      render: (r) => <span className="text-text-muted text-xs">{r.tags?.length ? r.tags.join(", ") : "—"}</span>,
+    },
+  ];
+
   return (
     <PageWrapper>
       <div className="flex items-center justify-between">
         <div className="text-sm text-text-muted">{q.data?.count ?? "..."} proveedores</div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nuevo proveedor</button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Nombre</th><th className="text-left px-3 py-2">CUIT</th><th className="text-center px-3 py-2">Prioridad</th><th className="text-right px-3 py-2">Saldo pendiente</th><th className="text-left px-3 py-2">Tags</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((p) => (
-                <tr key={p.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 font-semibold">{p.nombre}</td>
-                  <td className="px-3 py-2 text-text-muted">{p.cuit ?? "—"}</td>
-                  <td className="px-3 py-2 text-center"><span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${PRIORIDAD_COLOR[p.prioridad] ?? ""}`}>{p.prioridad}</span></td>
-                  <td className="px-3 py-2 text-right font-semibold">{fmtArs(p.saldo_pendiente)}</td>
-                  <td className="px-3 py-2 text-text-muted text-xs">{p.tags?.length ? p.tags.join(", ") : "—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(p)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar ${p.nombre}?`)) del.mutate(p.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "nombre", dir: "asc" }}
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar ${r.nombre}?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && <ProveedorModal item={editing} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "proveedores"] }); }} />}
     </PageWrapper>

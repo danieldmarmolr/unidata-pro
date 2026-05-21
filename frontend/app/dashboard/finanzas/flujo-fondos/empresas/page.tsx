@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 
 type Empresa = { id: number; nombre: string; cuit: string | null; activa: boolean; created_at: string };
 
@@ -23,6 +24,16 @@ export default function EmpresasPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "empresas"] }),
   });
 
+  const columns: Column<Empresa>[] = [
+    { key: "nombre", label: "Nombre", getValue: (r) => r.nombre, render: (r) => <span className="font-semibold">{r.nombre}</span> },
+    { key: "cuit", label: "CUIT", getValue: (r) => r.cuit ?? "" },
+    {
+      key: "activa", label: "Activa", align: "center", type: "string",
+      getValue: (r) => r.activa ? "si" : "no",
+      render: (r) => r.activa ? <span className="text-emerald-600 text-xs">✓</span> : <span className="text-text-muted text-xs">—</span>,
+    },
+  ];
+
   return (
     <PageWrapper>
       <div className="flex items-center justify-between">
@@ -32,34 +43,20 @@ export default function EmpresasPage() {
         </button>
       </div>
 
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr>
-                <th className="text-left px-3 py-2">Nombre</th>
-                <th className="text-left px-3 py-2">CUIT</th>
-                <th className="text-center px-3 py-2">Activa</th>
-                <th className="text-right px-3 py-2">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((e) => (
-                <tr key={e.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 font-semibold">{e.nombre}</td>
-                  <td className="px-3 py-2 text-text-muted">{e.cuit ?? "—"}</td>
-                  <td className="px-3 py-2 text-center">
-                    {e.activa ? <span className="text-emerald-600 text-xs">✓</span> : <span className="text-text-muted text-xs">—</span>}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(e)} className="text-text-muted hover:text-primary p-1" title="Editar"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar ${e.nombre}?`)) del.mutate(e.id); }} className="text-text-muted hover:text-rose-600 p-1" title="Eliminar"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "nombre", dir: "asc" }}
+          emptyLabel="Sin empresas cargadas"
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1" title="Editar"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar ${r.nombre}?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1" title="Eliminar"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
 
       {(showCreate || editing) && (
@@ -89,12 +86,8 @@ function EmpresaModal({ item, onClose, onSaved }: { item: Empresa | null; onClos
           <button onClick={onClose} className="text-text-muted hover:text-text"><X size={18} /></button>
         </div>
         <form onSubmit={(e) => { e.preventDefault(); m.mutate({ nombre: form.nombre.trim(), cuit: form.cuit.trim() || null, activa: form.activa }); }} className="p-5 space-y-3">
-          <Field label="Nombre *">
-            <input required type="text" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} className="w-full px-2 py-1.5 border border-border rounded-md text-sm focus:ring-1 focus:ring-primary outline-none" />
-          </Field>
-          <Field label="CUIT">
-            <input type="text" value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} className="w-full px-2 py-1.5 border border-border rounded-md text-sm focus:ring-1 focus:ring-primary outline-none" />
-          </Field>
+          <div><label className="block text-[10px] uppercase font-bold text-text-muted mb-1">Nombre *</label><input required type="text" value={form.nombre} onChange={(e) => setForm({ ...form, nombre: e.target.value })} className="w-full px-2 py-1.5 border border-border rounded-md text-sm focus:ring-1 focus:ring-primary outline-none" /></div>
+          <div><label className="block text-[10px] uppercase font-bold text-text-muted mb-1">CUIT</label><input type="text" value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} className="w-full px-2 py-1.5 border border-border rounded-md text-sm focus:ring-1 focus:ring-primary outline-none" /></div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.activa} onChange={(e) => setForm({ ...form, activa: e.target.checked })} /> Activa</label>
           {m.error && <div className="text-rose-600 text-xs">{(m.error as Error).message}</div>}
           <div className="flex justify-end gap-2 pt-2 border-t border-border">
@@ -105,15 +98,6 @@ function EmpresaModal({ item, onClose, onSaved }: { item: Empresa | null; onClos
           </div>
         </form>
       </div>
-    </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <label className="block text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">{label}</label>
-      {children}
     </div>
   );
 }

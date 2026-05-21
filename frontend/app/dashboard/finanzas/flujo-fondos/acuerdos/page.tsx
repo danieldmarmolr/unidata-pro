@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs, fmtDate } from "../_components/helpers";
 
 type Acuerdo = {
@@ -22,46 +23,46 @@ export default function AcuerdosPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Acuerdo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [filtroEstado, setFiltroEstado] = useState<string>("");
-
-  const url = filtroEstado ? `/api/flujo-fondos/acuerdos?estado=${filtroEstado}` : `/api/flujo-fondos/acuerdos`;
-  const q = useQuery<{ items: Acuerdo[]; count: number }>({ queryKey: ["ff", "acuerdos", filtroEstado], queryFn: () => api(url) });
+  const q = useQuery<{ items: Acuerdo[]; count: number }>({ queryKey: ["ff", "acuerdos"], queryFn: () => api("/api/flujo-fondos/acuerdos") });
   const proveedores = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "proveedores"], queryFn: () => api("/api/flujo-fondos/proveedores"), staleTime: 5 * 60_000 });
   const del = useMutation({ mutationFn: (id: number) => api(`/api/flujo-fondos/acuerdos/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "acuerdos"] }) });
 
+  const columns: Column<Acuerdo>[] = [
+    { key: "proveedor_nombre", label: "Proveedor", getValue: (r) => r.proveedor_nombre ?? `#${r.proveedor_id}`, render: (r) => <span className="font-semibold">{r.proveedor_nombre ?? `#${r.proveedor_id}`}</span> },
+    { key: "tipo", label: "Tipo", getValue: (r) => r.tipo, render: (r) => <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100">{r.tipo}</span> },
+    { key: "compromiso", label: "Compromiso", getValue: (r) => r.compromiso, render: (r) => <span className="block max-w-md truncate" title={r.compromiso}>{r.compromiso}</span> },
+    { key: "fecha_compromiso", label: "Fecha", type: "date", getValue: (r) => r.fecha_compromiso ?? "", render: (r) => r.fecha_compromiso ? <span className="whitespace-nowrap">{fmtDate(r.fecha_compromiso)}</span> : <span className="text-text-muted">—</span> },
+    {
+      key: "monto_compromiso", label: "Monto", align: "right", type: "number",
+      getValue: (r) => r.monto_compromiso != null ? Number(r.monto_compromiso) : null,
+      render: (r) => r.monto_compromiso != null ? <span className="font-semibold">{fmtArs(r.monto_compromiso)}</span> : <span className="text-text-muted">—</span>,
+    },
+    {
+      key: "estado", label: "Estado", align: "center", getValue: (r) => r.estado,
+      render: (r) => <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${ESTADO_COLOR[r.estado] ?? ""}`}>{r.estado}</span>,
+    },
+  ];
+
   return (
     <PageWrapper>
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="text-sm text-text-muted">{q.data?.count ?? "..."} acuerdos {filtroEstado && `(${filtroEstado})`}</div>
-        <div className="flex gap-2 items-center">
-          <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)} className="px-2 py-1.5 border border-border rounded-md text-sm bg-surface"><option value="">Todos los estados</option>{ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}</select>
-          <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nuevo acuerdo</button>
-        </div>
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-text-muted">{q.data?.count ?? "..."} acuerdos</div>
+        <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nuevo acuerdo</button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState label="Aun no hay acuerdos cargados" /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-left px-3 py-2">Tipo</th><th className="text-left px-3 py-2">Compromiso</th><th className="text-left px-3 py-2">Fecha</th><th className="text-right px-3 py-2">Monto</th><th className="text-center px-3 py-2">Estado</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((a) => (
-                <tr key={a.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 font-semibold">{a.proveedor_nombre ?? `#${a.proveedor_id}`}</td>
-                  <td className="px-3 py-2"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100">{a.tipo}</span></td>
-                  <td className="px-3 py-2 max-w-md truncate">{a.compromiso}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">{a.fecha_compromiso ? fmtDate(a.fecha_compromiso) : "—"}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{a.monto_compromiso != null ? fmtArs(a.monto_compromiso) : "—"}</td>
-                  <td className="px-3 py-2 text-center"><span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${ESTADO_COLOR[a.estado] ?? ""}`}>{a.estado}</span></td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(a)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar acuerdo?`)) del.mutate(a.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "fecha_compromiso", dir: "desc" }}
+          emptyLabel="Aun no hay acuerdos cargados"
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar acuerdo?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && <AcuerdoModal item={editing} proveedores={proveedores.data?.items ?? []} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "acuerdos"] }); }} />}
     </PageWrapper>

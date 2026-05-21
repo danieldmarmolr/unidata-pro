@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 
 type Unidad = { id: number; nombre: string; canal: string; activa: boolean };
 const CANALES = ["directo", "marketplace", "dropshipping", "otro"] as const;
@@ -22,6 +23,19 @@ export default function UnidadesPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "unidades"] }),
   });
 
+  const columns: Column<Unidad>[] = [
+    { key: "nombre", label: "Nombre", getValue: (r) => r.nombre, render: (r) => <span className="font-semibold">{r.nombre}</span> },
+    {
+      key: "canal", label: "Canal", getValue: (r) => r.canal,
+      render: (r) => <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">{r.canal}</span>,
+    },
+    {
+      key: "activa", label: "Activa", align: "center",
+      getValue: (r) => r.activa ? "si" : "no",
+      render: (r) => r.activa ? "✓" : "—",
+    },
+  ];
+
   return (
     <PageWrapper>
       <div className="flex items-center justify-between">
@@ -30,27 +44,19 @@ export default function UnidadesPage() {
           <Plus size={14} /> Nueva unidad
         </button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Nombre</th><th className="text-left px-3 py-2">Canal</th><th className="text-center px-3 py-2">Activa</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((u) => (
-                <tr key={u.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 font-semibold">{u.nombre}</td>
-                  <td className="px-3 py-2"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">{u.canal}</span></td>
-                  <td className="px-3 py-2 text-center">{u.activa ? "✓" : "—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(u)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar ${u.nombre}?`)) del.mutate(u.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "nombre", dir: "asc" }}
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar ${r.nombre}?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && <UnidadModal item={editing} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "unidades"] }); }} />}
     </PageWrapper>

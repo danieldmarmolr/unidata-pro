@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs, fmtDate } from "../_components/helpers";
 
 type Ingreso = {
@@ -18,18 +19,23 @@ export default function IngresosPuntualesPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Ingreso | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-
-  const q = useQuery<{ items: Ingreso[]; count: number }>({
-    queryKey: ["ff", "ingresos-puntuales"],
-    queryFn: () => api("/api/flujo-fondos/ingresos-puntuales"),
-  });
+  const q = useQuery<{ items: Ingreso[]; count: number }>({ queryKey: ["ff", "ingresos-puntuales"], queryFn: () => api("/api/flujo-fondos/ingresos-puntuales") });
   const empresas = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "empresas"], queryFn: () => api("/api/flujo-fondos/empresas"), staleTime: 5 * 60_000 });
   const bancos = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "bancos"], queryFn: () => api("/api/flujo-fondos/bancos"), staleTime: 5 * 60_000 });
+  const del = useMutation({ mutationFn: (id: number) => api(`/api/flujo-fondos/ingresos-puntuales/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "ingresos-puntuales"] }) });
 
-  const del = useMutation({
-    mutationFn: (id: number) => api(`/api/flujo-fondos/ingresos-puntuales/${id}`, { method: "DELETE" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "ingresos-puntuales"] }),
-  });
+  const columns: Column<Ingreso>[] = [
+    { key: "fecha", label: "Fecha", type: "date", getValue: (r) => r.fecha, render: (r) => <span className="whitespace-nowrap">{fmtDate(r.fecha)}</span> },
+    { key: "descripcion", label: "Descripcion", getValue: (r) => r.descripcion, render: (r) => <span className="block max-w-md truncate" title={r.descripcion}>{r.descripcion}</span> },
+    { key: "empresa_nombre", label: "Empresa", getValue: (r) => r.empresa_nombre ?? "", className: "text-text-muted" },
+    { key: "banco_nombre", label: "Banco", getValue: (r) => r.banco_nombre ?? "", className: "text-text-muted" },
+    { key: "categoria", label: "Categoria", getValue: (r) => r.categoria ?? "", className: "text-text-muted" },
+    {
+      key: "monto", label: "Monto", align: "right", type: "number",
+      getValue: (r) => Number(r.monto),
+      render: (r) => <span className="font-semibold text-emerald-700 whitespace-nowrap">{fmtArs(r.monto)}</span>,
+    },
+  ];
 
   return (
     <PageWrapper>
@@ -37,30 +43,19 @@ export default function IngresosPuntualesPage() {
         <div className="text-sm text-text-muted">{q.data?.count ?? "..."} ingresos puntuales · NO afectan los promedios de proyeccion</div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nuevo ingreso</button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Fecha</th><th className="text-left px-3 py-2">Descripcion</th><th className="text-left px-3 py-2">Empresa</th><th className="text-left px-3 py-2">Banco</th><th className="text-left px-3 py-2">Categoria</th><th className="text-right px-3 py-2">Monto</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((i) => (
-                <tr key={i.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtDate(i.fecha)}</td>
-                  <td className="px-3 py-2 max-w-md truncate">{i.descripcion}</td>
-                  <td className="px-3 py-2 text-text-muted">{i.empresa_nombre ?? "—"}</td>
-                  <td className="px-3 py-2 text-text-muted">{i.banco_nombre ?? "—"}</td>
-                  <td className="px-3 py-2 text-text-muted">{i.categoria ?? "—"}</td>
-                  <td className="px-3 py-2 text-right font-semibold text-emerald-700 whitespace-nowrap">{fmtArs(i.monto)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(i)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar este ingreso?`)) del.mutate(i.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "fecha", dir: "desc" }}
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar este ingreso?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && (
         <IngresoModal item={editing} empresas={empresas.data?.items ?? []} bancos={bancos.data?.items ?? []} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "ingresos-puntuales"] }); }} />

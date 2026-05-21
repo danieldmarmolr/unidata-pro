@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
-import { PageWrapper, LoadingState, ErrorState, EmptyState } from "../_components/PageWrapper";
+import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
+import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs } from "../_components/helpers";
 
 type Banco = { id: number; nombre: string; tipo: string; saldo_actual: number | string | null; moneda: string; activo: boolean };
@@ -23,35 +24,40 @@ export default function BancosPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "bancos"] }),
   });
 
+  const columns: Column<Banco>[] = [
+    { key: "nombre", label: "Nombre", getValue: (r) => r.nombre, render: (r) => <span className="font-semibold">{r.nombre}</span> },
+    {
+      key: "tipo", label: "Tipo", getValue: (r) => r.tipo,
+      render: (r) => <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">{r.tipo}</span>,
+    },
+    {
+      key: "saldo_actual", label: "Saldo declarado", align: "right", type: "number",
+      getValue: (r) => r.saldo_actual != null ? Number(r.saldo_actual) : null,
+      render: (r) => r.saldo_actual != null ? <span className="font-semibold">{fmtArs(r.saldo_actual)}</span> : <span className="text-text-muted">—</span>,
+    },
+    { key: "moneda", label: "Moneda", getValue: (r) => r.moneda, className: "text-text-muted" },
+    { key: "activo", label: "Activo", align: "center", getValue: (r) => r.activo ? "si" : "no", render: (r) => r.activo ? "✓" : "—" },
+  ];
+
   return (
     <PageWrapper>
       <div className="flex items-center justify-between">
         <div className="text-sm text-text-muted">{q.data?.count ?? "..."} bancos</div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2 text-sm font-semibold hover:opacity-90"><Plus size={14} /> Nuevo banco</button>
       </div>
-      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : q.data && q.data.items.length === 0 ? <EmptyState /> : (
-        <div className="rounded-xl border border-border bg-surface overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-soft border-b border-border text-[10px] uppercase tracking-wider text-text-muted">
-              <tr><th className="text-left px-3 py-2">Nombre</th><th className="text-left px-3 py-2">Tipo</th><th className="text-right px-3 py-2">Saldo declarado</th><th className="text-left px-3 py-2">Moneda</th><th className="text-center px-3 py-2">Activo</th><th className="text-right px-3 py-2">Acciones</th></tr>
-            </thead>
-            <tbody>
-              {q.data?.items.map((b) => (
-                <tr key={b.id} className="border-t border-border hover:bg-soft">
-                  <td className="px-3 py-2 font-semibold">{b.nombre}</td>
-                  <td className="px-3 py-2"><span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">{b.tipo}</span></td>
-                  <td className="px-3 py-2 text-right font-semibold">{b.saldo_actual != null ? fmtArs(b.saldo_actual) : "—"}</td>
-                  <td className="px-3 py-2 text-text-muted">{b.moneda}</td>
-                  <td className="px-3 py-2 text-center">{b.activo ? "✓" : "—"}</td>
-                  <td className="px-3 py-2 text-right">
-                    <button onClick={() => setEditing(b)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
-                    <button onClick={() => { if (confirm(`Eliminar ${b.nombre}?`)) del.mutate(b.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {q.isLoading ? <LoadingState /> : q.error ? <ErrorState message={(q.error as Error).message} /> : (
+        <DataTable
+          data={q.data?.items ?? []}
+          columns={columns}
+          rowKey={(r) => r.id}
+          defaultSort={{ key: "nombre", dir: "asc" }}
+          renderActions={(r) => (
+            <>
+              <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
+              <button onClick={() => { if (confirm(`Eliminar ${r.nombre}?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
+            </>
+          )}
+        />
       )}
       {(showCreate || editing) && <BancoModal item={editing} onClose={() => { setShowCreate(false); setEditing(null); }} onSaved={() => { setShowCreate(false); setEditing(null); qc.invalidateQueries({ queryKey: ["ff", "bancos"] }); }} />}
     </PageWrapper>
