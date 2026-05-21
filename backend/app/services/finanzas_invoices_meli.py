@@ -29,7 +29,7 @@ _GRAN_CONFIG = {
     "day":     {"trunc": "day",     "fmt": "%Y-%m-%d", "interval": "60 days"},
     "week":    {"trunc": "week",    "fmt": "%G-W%V",   "interval": "26 weeks"},
     "month":   {"trunc": "month",   "fmt": "%Y-%m",    "interval": "24 months"},
-    "quarter": {"trunc": "quarter", "fmt": "%Y-Q",     "interval": "12 quarters"},
+    "quarter": {"trunc": "quarter", "fmt": "%Y-Q",     "interval": "36 months"},
     "year":    {"trunc": "year",    "fmt": "%Y",       "interval": "5 years"},
 }
 
@@ -77,6 +77,8 @@ def finanzas_invoices_meli(
             OR u.email ILIKE :s
         ) """
 
+    # Filtramos por createdAt (cuando se sync la factura) NO por fechaEmision
+    # (que Contabilium setea a fecha futura del proximo ciclo de la sub).
     base_from = f"""
         FROM contabillium_dev."ContabilliumInvoice" ci
         {SUBS_FILTER_SQL}
@@ -84,7 +86,7 @@ def finanzas_invoices_meli(
         LEFT JOIN public."User" u ON u.dni = cc.nro_doc
         LEFT JOIN mercado_libre_dev."SubscriptionMeli" sm ON sm.id = u."subscriptionId"
         WHERE {SUBS_WHERE_SQL}
-          AND ci."fechaEmision" >= :from_ts AND ci."fechaEmision" < :to_ts
+          AND ci."createdAt" >= :from_ts AND ci."createdAt" < :to_ts
           {extra_where}
     """
 
@@ -93,19 +95,15 @@ def finanzas_invoices_meli(
     totals = q(eng, f"""
         SELECT COUNT(*)::int AS n,
                COALESCE(SUM(ci.total),0)::float AS total,
-               COALESCE(AVG(ci.total),0)::float AS ticket,
                COUNT(*) FILTER (WHERE ci."tipoFc"='FCA')::int AS fca,
-               COALESCE(SUM(CASE WHEN ci."tipoFc"='FCA' THEN ci.total ELSE 0 END),0)::float AS total_fca,
                COUNT(*) FILTER (WHERE ci."tipoFc"='FCB')::int AS fcb,
-               COALESCE(SUM(CASE WHEN ci."tipoFc"='FCB' THEN ci.total ELSE 0 END),0)::float AS total_fcb,
                COUNT(DISTINCT ci."idCliente")::int AS clientes
         {base_from}
-    """, params) or [(0, 0.0, 0.0, 0, 0.0, 0, 0.0, 0)]
+    """, params) or [(0, 0.0, 0, 0, 0)]
     r = totals[0]
-    n_inv, total, ticket, fca, total_fca, fcb, total_fcb, clientes = (
-        int(r[0] or 0), float(r[1] or 0), float(r[2] or 0),
-        int(r[3] or 0), float(r[4] or 0), int(r[5] or 0), float(r[6] or 0),
-        int(r[7] or 0),
+    n_inv, total, fca, fcb, clientes = (
+        int(r[0] or 0), float(r[1] or 0),
+        int(r[2] or 0), int(r[3] or 0), int(r[4] or 0),
     )
 
     # Periodo previo equivalente para delta
@@ -119,9 +117,38 @@ def finanzas_invoices_meli(
         FROM contabillium_dev."ContabilliumInvoice" ci
         {SUBS_FILTER_SQL}
         WHERE {SUBS_WHERE_SQL}
-          AND ci."fechaEmision" >= :from_ts_prev AND ci."fechaEmision" < :to_ts_prev
+          AND ci."createdAt" >= :from_ts_prev AND ci."createdAt" < :to_ts_prev
     """, p_prev) or 0)
     delta_total = ((total - prev_total) / prev_total * 100) if prev_total > 0 else None
+
+    # Nuevos suscriptos por plan en el periodo: users cuya PRIMERA factura cae en el periodo
+    nuevos_por_plan_rows = q(eng, """
+        WITH first_inv AS (
+            SELECT cc.contabilium_id AS id_cliente,
+                   u."subscriptionId" AS plan_id,
+                   MIN(ci."createdAt") AS first_at
+            FROM contabillium_dev."ContabilliumInvoice" ci
+            LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml.id = ci."idVentaIntegracion"
+            LEFT JOIN public.tienda_nube_orders tn ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
+            LEFT JOIN contabillium_dev."ContabiliumClient" cc ON cc.contabilium_id = ci."idCliente"
+            LEFT JOIN public."User" u ON u.dni = cc.nro_doc
+            WHERE oml.id IS NULL AND tn.tienda_nube_id IS NULL
+              AND u."subscriptionId" IS NOT NULL
+            GROUP BY cc.contabilium_id, u."subscriptionId"
+        )
+        SELECT plan_id, COUNT(*)::int AS nuevos
+        FROM first_inv
+        WHERE first_at >= :from_ts AND first_at < :to_ts
+        GROUP BY plan_id
+    """, {"from_ts": w["from_ts"], "to_ts": w["to_ts"]}) or []
+    nuevos_map = {int(r[0]): int(r[1]) for r in nuevos_por_plan_rows if r[0] is not None}
+
+    # Nombre + precio de los 4 planes activos (orden por id para layout consistente)
+    plan_rows = q(eng, """
+        SELECT id, name, price::float
+        FROM mercado_libre_dev."SubscriptionMeli"
+        ORDER BY id
+    """) or []
 
     cards.append({
         "label": f"Facturado ({period})", "value": round(total, 0), "prefix": "$ ",
@@ -133,39 +160,37 @@ def finanzas_invoices_meli(
         "hint": f"{fca:,} FCA + {fcb:,} FCB",
     })
     cards.append({
-        "label": "Ticket promedio", "value": round(ticket, 0), "prefix": "$ ",
-        "hint": "total / cantidad",
-    })
-    cards.append({
         "label": "Dropshippers facturados", "value": clientes,
-        "hint": "idCliente unicos",
-    })
-    cards.append({
-        "label": "Total FCA", "value": round(total_fca, 0), "prefix": "$ ",
-        "hint": f"{fca:,} comprobantes",
-    })
-    cards.append({
-        "label": "Total FCB", "value": round(total_fcb, 0), "prefix": "$ ",
-        "hint": f"{fcb:,} comprobantes",
+        "hint": "Clientes Contabilium unicos",
     })
 
-    # Trend con granularidad ajustable
+    # 4 cards: nuevos suscriptos por plan
+    for pr in plan_rows:
+        plan_id = int(pr[0])
+        plan_name = pr[1] or f"Plan {plan_id}"
+        plan_price = float(pr[2] or 0)
+        n_nuevos = nuevos_map.get(plan_id, 0)
+        cards.append({
+            "label": f"Nuevos en {plan_name}",
+            "value": n_nuevos,
+            "hint": f"Primera factura en el periodo · ${plan_price:,.0f}/mes",
+        })
+
+    # Trend con granularidad ajustable: 1 serie por plan (4 planes)
     gran = chart_granularity if chart_granularity in _GRAN_CONFIG else "month"
     gconf = _GRAN_CONFIG[gran]
     rows = q(eng, f"""
-        SELECT date_trunc('{gconf['trunc']}', ci."fechaEmision")::date AS bucket,
-               COUNT(*)::int AS n,
-               COALESCE(SUM(ci.total),0)::float AS total,
-               COALESCE(SUM(CASE WHEN ci."tipoFc"='FCA' THEN ci.total ELSE 0 END),0)::float AS total_fca,
-               COALESCE(SUM(CASE WHEN ci."tipoFc"='FCB' THEN ci.total ELSE 0 END),0)::float AS total_fcb
+        SELECT date_trunc('{gconf['trunc']}', ci."createdAt")::date AS bucket,
+               COALESCE(u."subscriptionId", 0) AS plan_id,
+               COALESCE(SUM(ci.total),0)::float AS total
         FROM contabillium_dev."ContabilliumInvoice" ci
-        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml
-          ON oml.id = ci."idVentaIntegracion"
-        LEFT JOIN public.tienda_nube_orders tn
-          ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
+        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml.id = ci."idVentaIntegracion"
+        LEFT JOIN public.tienda_nube_orders tn ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
+        LEFT JOIN contabillium_dev."ContabiliumClient" cc ON cc.contabilium_id = ci."idCliente"
+        LEFT JOIN public."User" u ON u.dni = cc.nro_doc
         WHERE oml.id IS NULL AND tn.tienda_nube_id IS NULL
-          AND ci."fechaEmision" >= date_trunc('{gconf['trunc']}', NOW() - INTERVAL '{gconf['interval']}')
-        GROUP BY 1 ORDER BY 1
+          AND ci."createdAt" >= date_trunc('{gconf['trunc']}', NOW() - INTERVAL '{gconf['interval']}')
+        GROUP BY 1, 2 ORDER BY 1
     """) or []
 
     def _fmt_bucket(d) -> str:
@@ -175,20 +200,30 @@ def finanzas_invoices_meli(
             return f"{d.year}-Q{((d.month - 1) // 3) + 1}"
         return d.strftime(gconf["fmt"])
 
-    trends = [
-        {
-            "label": "Facturacion total",
-            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[2] or 0)} for r in rows],
-        },
-        {
-            "label": "FCA",
-            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[3] or 0)} for r in rows],
-        },
-        {
-            "label": "FCB",
-            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[4] or 0)} for r in rows],
-        },
-    ]
+    # Pivotear: { bucket -> { plan_id -> total } }
+    bucket_map: dict[str, dict[int, float]] = {}
+    for r in rows:
+        b = _fmt_bucket(r[0])
+        if not b:
+            continue
+        bucket_map.setdefault(b, {})[int(r[1] or 0)] = float(r[2] or 0)
+    sorted_buckets = sorted(bucket_map.keys())
+
+    # 4 series por plan (mas 1 fallback "Sin plan" si existe)
+    plan_id_to_name = {int(pr[0]): pr[1] or f"Plan {pr[0]}" for pr in plan_rows}
+    trends = []
+    for plan_id, plan_name in sorted(plan_id_to_name.items()):
+        trends.append({
+            "label": plan_name,
+            "points": [{"date": b, "value": bucket_map.get(b, {}).get(plan_id, 0)} for b in sorted_buckets],
+        })
+    # Bucket "Sin plan" (user no matcheo): solo si tiene datos
+    has_sin_plan = any(bucket_map.get(b, {}).get(0, 0) > 0 for b in sorted_buckets)
+    if has_sin_plan:
+        trends.append({
+            "label": "Sin plan",
+            "points": [{"date": b, "value": bucket_map.get(b, {}).get(0, 0)} for b in sorted_buckets],
+        })
 
     # Distribucion por plan
     rows = q(eng, f"""
@@ -251,9 +286,10 @@ def finanzas_invoices_meli(
                u."subscriptionId" AS plan_id,
                sm.name AS plan_name,
                u.subscription_status::text AS sub_status,
-               u.end_date_subscription::date::text AS sub_end_date
+               u.end_date_subscription::date::text AS sub_end_date,
+               ci."createdAt"::text AS fecha_sync
         {base_from}
-        ORDER BY ci."fechaEmision" DESC NULLS LAST, ci.id DESC
+        ORDER BY ci."createdAt" DESC NULLS LAST, ci.id DESC
         LIMIT :limit
     """, items_params) or []
     items = [{
@@ -261,6 +297,7 @@ def finanzas_invoices_meli(
         "tipo": r[1] or "",
         "numero": r[2] or "",
         "fecha_emision": r[3],
+        "fecha_sync": r[20],
         "total": float(r[4] or 0),
         "id_venta_integracion": r[5],
         "id_cliente": int(r[6] or 0) if r[6] else None,
@@ -286,6 +323,89 @@ def finanzas_invoices_meli(
     """) or []
     plans = [{"id": int(r[0]), "name": r[1] or f"Plan {r[0]}", "price": float(r[2] or 0)} for r in rows]
 
+    # Comparador por plan: facturado + nuevos + activos + deltas vs periodo previo
+    facturado_por_plan_rows = q(eng, f"""
+        SELECT COALESCE(u."subscriptionId", 0) AS plan_id,
+               COALESCE(SUM(ci.total),0)::float AS total
+        {base_from}
+        GROUP BY 1
+    """, params) or []
+    facturado_map = {int(r[0]): float(r[1] or 0) for r in facturado_por_plan_rows}
+
+    # Mismo cálculo pero en período previo, con los mismos filtros plan/tipo/search
+    prev_params = dict(params)
+    prev_params["from_ts"] = w["from_ts"] - dt.timedelta(days=prev_window_days)
+    prev_params["to_ts"] = w["from_ts"]
+    facturado_prev_rows = q(eng, f"""
+        SELECT COALESCE(u."subscriptionId", 0) AS plan_id,
+               COALESCE(SUM(ci.total),0)::float AS total
+        {base_from}
+        GROUP BY 1
+    """, prev_params) or []
+    facturado_prev_map = {int(r[0]): float(r[1] or 0) for r in facturado_prev_rows}
+
+    # Nuevos en periodo previo
+    nuevos_prev_rows = q(eng, """
+        WITH first_inv AS (
+            SELECT cc.contabilium_id AS id_cliente,
+                   u."subscriptionId" AS plan_id,
+                   MIN(ci."createdAt") AS first_at
+            FROM contabillium_dev."ContabilliumInvoice" ci
+            LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml.id = ci."idVentaIntegracion"
+            LEFT JOIN public.tienda_nube_orders tn ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
+            LEFT JOIN contabillium_dev."ContabiliumClient" cc ON cc.contabilium_id = ci."idCliente"
+            LEFT JOIN public."User" u ON u.dni = cc.nro_doc
+            WHERE oml.id IS NULL AND tn.tienda_nube_id IS NULL
+              AND u."subscriptionId" IS NOT NULL
+            GROUP BY cc.contabilium_id, u."subscriptionId"
+        )
+        SELECT plan_id, COUNT(*)::int AS nuevos
+        FROM first_inv
+        WHERE first_at >= :from_ts_prev AND first_at < :to_ts_prev
+        GROUP BY plan_id
+    """, p_prev) or []
+    nuevos_prev_map = {int(r[0]): int(r[1]) for r in nuevos_prev_rows if r[0] is not None}
+
+    # Activos por plan (snapshot actual, no afectado por periodo)
+    activos_rows = q(eng, """
+        SELECT u."subscriptionId" AS plan_id, COUNT(*)::int AS activos
+        FROM public."User" u
+        WHERE u.subscription_status::text = 'ACTIVE'
+          AND u.end_date_subscription > NOW()
+          AND COALESCE(u."isActive", true) IS TRUE
+          AND u."subscriptionId" IS NOT NULL
+        GROUP BY 1
+    """) or []
+    activos_map = {int(r[0]): int(r[1]) for r in activos_rows if r[0] is not None}
+
+    def _delta(curr: float, prev: float) -> float | None:
+        if prev <= 0:
+            return None
+        return round((curr - prev) / prev * 100, 1)
+
+    comparator_by_plan = []
+    for pr in plan_rows:
+        plan_id = int(pr[0])
+        plan_name = pr[1] or f"Plan {plan_id}"
+        plan_price = float(pr[2] or 0)
+        facturado_curr = facturado_map.get(plan_id, 0.0)
+        facturado_prev = facturado_prev_map.get(plan_id, 0.0)
+        nuevos_curr = nuevos_map.get(plan_id, 0)
+        nuevos_prev = nuevos_prev_map.get(plan_id, 0)
+        activos = activos_map.get(plan_id, 0)
+        comparator_by_plan.append({
+            "plan_id": plan_id,
+            "plan_name": plan_name,
+            "plan_price": plan_price,
+            "facturado": round(facturado_curr, 0),
+            "facturado_prev": round(facturado_prev, 0),
+            "facturado_delta_pct": _delta(facturado_curr, facturado_prev),
+            "nuevos": nuevos_curr,
+            "nuevos_prev": nuevos_prev,
+            "nuevos_delta_pct": _delta(nuevos_curr, nuevos_prev),
+            "activos": activos,
+        })
+
     return {
         "unit": "unidrop",
         "period": period,
@@ -297,6 +417,7 @@ def finanzas_invoices_meli(
         "items_count": len(items),
         "items_truncated": len(items) >= effective_limit,
         "plans": plans,
+        "comparator_by_plan": comparator_by_plan,
         "filters": {"plan": plan, "tipo": tipo, "search": search or ""},
         "chart_granularity": gran,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),

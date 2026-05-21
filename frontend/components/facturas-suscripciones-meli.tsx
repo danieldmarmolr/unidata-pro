@@ -17,6 +17,7 @@ type InvoiceItem = {
   tipo: string;
   numero: string;
   fecha_emision: string | null;
+  fecha_sync: string | null;
   total: number;
   id_venta_integracion: string | null;
   id_cliente: number | null;
@@ -39,6 +40,19 @@ type Plan = { id: number; name: string; price: number };
 
 type ChartGranularity = "day" | "week" | "month" | "quarter" | "year";
 
+type ComparatorEntry = {
+  plan_id: number;
+  plan_name: string;
+  plan_price: number;
+  facturado: number;
+  facturado_prev: number;
+  facturado_delta_pct: number | null;
+  nuevos: number;
+  nuevos_prev: number;
+  nuevos_delta_pct: number | null;
+  activos: number;
+};
+
 type Resp = {
   unit: string;
   period: string;
@@ -50,9 +64,20 @@ type Resp = {
   items_count: number;
   items_truncated: boolean;
   plans: Plan[];
+  comparator_by_plan: ComparatorEntry[];
   filters: { plan: string; tipo: string; search: string };
   chart_granularity: ChartGranularity;
   generated_at: string;
+};
+
+const PERIOD_LABEL: Record<string, string> = {
+  today: "HOY",
+  yesterday: "AYER",
+  "7d": "Últimos 7 días",
+  "30d": "Últimos 30 días",
+  "90d": "Últimos 90 días",
+  "12m": "Últimos 12 meses",
+  custom: "Período custom",
 };
 
 const GRAN_OPTIONS: { value: ChartGranularity; label: string; window: string }[] = [
@@ -65,7 +90,7 @@ const GRAN_OPTIONS: { value: ChartGranularity; label: string; window: string }[]
 
 function downloadCsv(items: InvoiceItem[]) {
   const header = [
-    "fecha_emision", "tipo", "numero", "total", "cae",
+    "fecha_sync", "fecha_emision", "tipo", "numero", "total", "cae",
     "cliente_razon_social", "cliente_dni", "cliente_email",
     "fantasy_name", "user_dni", "user_email", "plan_name",
     "subscription_status", "subscription_end_date", "link_publico",
@@ -156,13 +181,34 @@ export function FacturasSuscripcionesMeliPanel() {
         </div>
       )}
 
-      {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
+      {/* Comparador por plan estilo Ventas Unidrop */}
+      {data?.comparator_by_plan?.length ? (
+        <ComparatorBanner period={period} entries={data.comparator_by_plan} />
+      ) : (
+        !isLoading && null
+      )}
+
+      {/* KPIs: 3 globales (Facturado, Facturas, Dropshippers) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
         {isLoading || !data
-          ? Array.from({ length: 6 }).map((_, i) => (
+          ? Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
             ))
-          : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
+          : data.cards.slice(0, 3).map((c) => <KpiCard key={c.label} data={c} />)}
+      </div>
+
+      {/* KPIs: 4 cards de nuevos suscriptos por plan */}
+      <div className="mb-6">
+        <div className="text-xs font-semibold uppercase tracking-wider text-text-muted mb-2">
+          Nuevos suscriptos por plan · primera factura dentro del periodo
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {isLoading || !data
+            ? Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
+              ))
+            : data.cards.slice(3).map((c) => <KpiCard key={c.label} data={c} />)}
+        </div>
       </div>
 
       {/* Trend con selector de granularidad */}
@@ -173,10 +219,11 @@ export function FacturasSuscripcionesMeliPanel() {
           <div className="bg-surface border border-border rounded-xl p-4 sm:p-5">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
               <div>
-                <div className="text-sm font-bold text-text">Facturacion suscripciones MELI</div>
+                <div className="text-sm font-bold text-text">Facturacion por plan a lo largo del tiempo</div>
                 <div className="text-xs text-text-muted mt-0.5">
-                  Ventana: {GRAN_OPTIONS.find((g) => g.value === granularity)?.window}
-                  {" · "}FCA = Responsable Inscripto / Monotributo · FCB = Consumidor Final
+                  Ventana: {GRAN_OPTIONS.find((g) => g.value === granularity)?.window} · agrupado por fecha de sync
+                  <br />
+                  Una serie por cada plan de suscripcion MELI
                 </div>
               </div>
               <div className="inline-flex bg-soft border border-border rounded-lg p-1">
@@ -212,7 +259,7 @@ export function FacturasSuscripcionesMeliPanel() {
                 key: s.label,
                 label: s.label,
                 kind: "currency" as const,
-                color: ["#7a3eae", "#10b981", "#f59e0b"][i % 3],
+                color: ["#7a3eae", "#10b981", "#f59e0b", "#3b82f6", "#94a3b8"][i % 5],
               }))}
               defaultPrimary={data.trends?.[0]?.label}
               defaultSecondary={data.trends?.[1]?.label}
@@ -362,7 +409,8 @@ export function FacturasSuscripcionesMeliPanel() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10 bg-soft">
               <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-text-muted">
-                <th className="py-2.5 px-3">Fecha</th>
+                <th className="py-2.5 px-3" title="Fecha de sincronización al sistema (cuándo se generó la factura)">Sync</th>
+                <th className="py-2.5 px-2" title="Fecha AFIP del comprobante (puede ser futura)">F. AFIP</th>
                 <th className="py-2.5 px-2">Tipo</th>
                 <th className="py-2.5 px-2">Numero</th>
                 <th className="py-2.5 px-2">Dropshipper</th>
@@ -375,17 +423,22 @@ export function FacturasSuscripcionesMeliPanel() {
             </thead>
             <tbody>
               {isLoading && (
-                <tr><td colSpan={9} className="py-12 text-center text-text-muted text-sm">Cargando...</td></tr>
+                <tr><td colSpan={10} className="py-12 text-center text-text-muted text-sm">Cargando...</td></tr>
               )}
               {!isLoading && (!data || data.items.length === 0) && (
-                <tr><td colSpan={9} className="py-12 text-center text-text-muted text-sm">Sin facturas para los filtros aplicados.</td></tr>
+                <tr><td colSpan={10} className="py-12 text-center text-text-muted text-sm">Sin facturas para los filtros aplicados.</td></tr>
               )}
               {!isLoading && data?.items.map((r, i) => (
                 <tr
                   key={r.id}
                   className={`border-t border-border hover:bg-soft transition ${i % 2 === 1 ? "bg-soft/30" : ""}`}
                 >
-                  <td className="py-2 px-3 text-text-muted text-xs tabular-nums whitespace-nowrap">{r.fecha_emision ?? "—"}</td>
+                  <td className="py-2 px-3 text-text text-xs tabular-nums whitespace-nowrap" title="Fecha de sync">
+                    {r.fecha_sync ? r.fecha_sync.slice(0, 10) : "—"}
+                  </td>
+                  <td className="py-2 px-2 text-text-muted text-xs tabular-nums whitespace-nowrap" title="Fecha AFIP del comprobante">
+                    {r.fecha_emision ?? "—"}
+                  </td>
                   <td className="py-2 px-2">
                     <button
                       type="button"
@@ -464,7 +517,7 @@ export function FacturasSuscripcionesMeliPanel() {
             {!isLoading && (data?.items.length ?? 0) > 0 && (
               <tfoot className="sticky bottom-0 bg-surface border-t-2 border-primary/30">
                 <tr>
-                  <td colSpan={7} className="py-2 px-3 text-xs font-semibold text-text">
+                  <td colSpan={8} className="py-2 px-3 text-xs font-semibold text-text">
                     Total visible ({(data?.items_count ?? 0).toLocaleString("es-AR")} facturas)
                   </td>
                   <td className="py-2 px-2 text-right tabular-nums font-bold text-text">{formatCurrency(visibleTotal)}</td>
@@ -475,6 +528,75 @@ export function FacturasSuscripcionesMeliPanel() {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ComparatorBanner({
+  period,
+  entries,
+}: {
+  period: string;
+  entries: ComparatorEntry[];
+}) {
+  if (!entries.length) return null;
+  return (
+    <div className="bg-gradient-to-r from-primary/6 to-accent/6 border border-primary/20 rounded-xl px-4 py-3 mb-6">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wider text-primary">
+            {PERIOD_LABEL[period] ?? period} · Comparador por plan
+          </div>
+          <div className="text-[10px] text-text-muted mt-0.5">
+            Facturado / Nuevos vs período anterior equivalente · Activos = snapshot actual
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {entries.map((e) => (
+          <div key={e.plan_id} className="bg-surface border border-border rounded-lg p-3">
+            <div className="flex items-baseline justify-between mb-2">
+              <div className="text-xs font-bold text-text truncate" title={e.plan_name}>
+                {e.plan_name}
+              </div>
+              <div className="text-[10px] text-text-muted tabular-nums shrink-0">
+                {formatCurrency(e.plan_price)}/mes
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <ComparatorMetric label="Facturado" value={formatCurrency(e.facturado)} delta={e.facturado_delta_pct} />
+              <ComparatorMetric label="Nuevos" value={e.nuevos.toLocaleString("es-AR")} delta={e.nuevos_delta_pct} />
+              <ComparatorMetric label="Activos" value={e.activos.toLocaleString("es-AR")} delta={null} hint="snapshot" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ComparatorMetric({
+  label,
+  value,
+  delta,
+  hint,
+}: {
+  label: string;
+  value: string;
+  delta: number | null;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <div className="text-[9px] uppercase tracking-wider text-text-muted font-semibold">{label}</div>
+      <div className="text-sm font-bold text-text tabular-nums leading-tight">{value}</div>
+      {delta !== null && delta !== undefined ? (
+        <div className={"text-[10px] font-semibold " + (delta >= 0 ? "text-emerald-600" : "text-error")}>
+          {delta >= 0 ? "↑" : "↓"}{Math.abs(delta).toFixed(0)}%
+        </div>
+      ) : (
+        <div className="text-[10px] text-text-muted">{hint ?? "—"}</div>
+      )}
     </div>
   );
 }
