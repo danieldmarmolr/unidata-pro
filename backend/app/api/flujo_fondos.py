@@ -12,6 +12,9 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from fastapi import File, UploadFile
+from fastapi.responses import Response
+
 from app.auth.security import current_user, require_area
 from app.db import flujo_fondos_db as ff
 from app.services.flujo_fondos.proyeccion import (
@@ -22,6 +25,7 @@ from app.services.flujo_fondos.proyeccion import (
     COLCHON_DEFAULT,
     HORIZONTE_BUSQUEDA_DIAS,
 )
+from app.services.flujo_fondos import importadores
 
 router = APIRouter(prefix="/api/flujo-fondos", tags=["flujo-fondos"])
 
@@ -879,3 +883,64 @@ def update_proveedor(pid: int, body: ProveedorUpdate, user: Annotated[dict, Depe
 def delete_proveedor(pid: int, user: Annotated[dict, Depends(current_user)]):
     _guard(user)
     if not ff.delete_proveedor(pid): raise HTTPException(404, "No encontrado")
+
+
+# ============================================================
+# Importadores Excel
+# ============================================================
+
+class AplicarItems(BaseModel):
+    items: list[dict[str, Any]]
+
+
+@router.get("/importar/plantilla/{kind}")
+def descargar_plantilla(kind: Literal["erogaciones", "ingresos", "facturacion"], user: Annotated[dict, Depends(current_user)]):
+    _guard(user)
+    if kind == "erogaciones":
+        data = importadores.generar_plantilla_erogaciones()
+    elif kind == "ingresos":
+        data = importadores.generar_plantilla_ingresos()
+    elif kind == "facturacion":
+        data = importadores.generar_plantilla_facturacion()
+    else:
+        raise HTTPException(400, "kind invalido")
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=plantilla-{kind}.xlsx"},
+    )
+
+
+@router.post("/importar/parsear/{kind}")
+async def parsear_excel(
+    kind: Literal["erogaciones", "ingresos", "facturacion"],
+    user: Annotated[dict, Depends(current_user)],
+    file: UploadFile = File(...),
+) -> dict:
+    _guard(user)
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(400, "Solo .xlsx")
+    data = await file.read()
+    if kind == "erogaciones":
+        return importadores.parsear_erogaciones(data)
+    if kind == "ingresos":
+        return importadores.parsear_ingresos(data)
+    if kind == "facturacion":
+        return importadores.parsear_facturacion(data)
+    raise HTTPException(400, "kind invalido")
+
+
+@router.post("/importar/aplicar/{kind}")
+def aplicar_excel(
+    kind: Literal["erogaciones", "ingresos", "facturacion"],
+    body: AplicarItems,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    _guard(user)
+    if kind == "erogaciones":
+        return importadores.aplicar_erogaciones(body.items)
+    if kind == "ingresos":
+        return importadores.aplicar_ingresos(body.items)
+    if kind == "facturacion":
+        return importadores.aplicar_facturacion(body.items)
+    raise HTTPException(400, "kind invalido")

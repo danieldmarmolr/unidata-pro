@@ -23,6 +23,7 @@ import {
   Boxes,
   Landmark,
   Users,
+  Upload,
 } from "lucide-react";
 
 type NavItem = { href: string; label: string; icon: typeof PiggyBank };
@@ -45,6 +46,7 @@ const NAV: NavGroup[] = [
       { href: "/dashboard/finanzas/flujo-fondos/acuerdos", label: "Acuerdos", icon: Handshake },
       { href: "/dashboard/finanzas/flujo-fondos/calendario", label: "Calendario de caja", icon: CalendarRange },
       { href: "/dashboard/finanzas/flujo-fondos/saldos", label: "Saldos iniciales", icon: Wallet },
+      { href: "/dashboard/finanzas/flujo-fondos/importar", label: "Importar Excel", icon: Upload },
     ],
   },
   {
