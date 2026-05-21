@@ -480,7 +480,7 @@ function RequestCard({ request: r }: { request: Request }) {
       {showCancelConfirm && (
         <CancelIntegrationModal
           loading={cancelMut.isPending}
-          email={r.dropshipper_email}
+          dropshipperUserId={r.dropshipper_user_id}
           dropshipperName={r.dropshipper_name}
           onCancel={() => setShowCancelConfirm(false)}
           onConfirm={() => cancelMut.mutate()}
@@ -706,46 +706,58 @@ function RejectModal({
 }
 
 function CancelIntegrationModal({
-  loading, email, dropshipperName, onCancel, onConfirm,
+  loading, dropshipperUserId, dropshipperName, onCancel, onConfirm,
 }: {
   loading: boolean;
-  email: string;
+  dropshipperUserId: number;
   dropshipperName: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const [openedUnidrop, setOpenedUnidrop] = useState(false);
+  const unidropUrl = `https://unidrop.com.ar/panel/users/${dropshipperUserId}`;
+
+  function handleOpenUnidrop() {
+    window.open(unidropUrl, "_blank", "noopener,noreferrer");
+    setOpenedUnidrop(true);
+  }
+
   return (
     <ModalShell onClose={onCancel} title="Cancelar integración MELI">
       <div className="space-y-3">
         <div className="text-sm text-text">
-          Esta acción va a desasignar la suscripción MELI de{" "}
-          <span className="font-bold">{dropshipperName}</span> en Unidrop.
+          La desvinculación de Mercado Libre se hace manual desde el panel de
+          Unidrop de <span className="font-bold">{dropshipperName}</span>.
         </div>
-        <div className="text-xs text-text-muted bg-red-50 border border-red-200 rounded p-3">
-          <div className="font-semibold text-red-700 mb-1">⚠️ No es reversible automáticamente</div>
-          Si te equivocás, la reasignación tiene que hacerse manualmente desde Unidrop.
-          Asegurate de que la transferencia bancaria ya se concretó.
-        </div>
-        <div className="text-xs text-text-muted">
-          Se va a llamar:{" "}
-          <code className="bg-bg px-1.5 py-0.5 rounded font-mono">
-            DELETE api.unidrop.com.ar/mercado-libre/subscriptions/unassign/{email}
-          </code>
+        <ol className="text-xs text-text-muted list-decimal list-inside space-y-1 bg-bg border border-border rounded p-3">
+          <li>Abrí el panel del dropshipper (botón abajo).</li>
+          <li>En el bloque <span className="font-semibold">Integraciones</span>, marcá el checkbox <span className="font-semibold">Mercado Libre</span> y apretá <span className="font-semibold">Desvincular</span>.</li>
+          <li>Volvé acá y apretá <span className="font-semibold">Marcar como cancelada</span> para cerrar la solicitud.</li>
+        </ol>
+        <div className="text-[11px] text-text-muted">
+          URL: <code className="bg-bg px-1.5 py-0.5 rounded font-mono">{unidropUrl}</code>
         </div>
       </div>
-      <div className="flex justify-end gap-2 mt-4">
+      <div className="flex flex-wrap justify-end gap-2 mt-4">
         <button
           onClick={onCancel}
           className="px-3 py-1.5 rounded-lg border border-border text-text-muted hover:bg-bg text-xs font-semibold"
         >
-          Cancelar
+          Cerrar
         </button>
         <button
-          disabled={loading}
-          onClick={onConfirm}
-          className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold shadow disabled:opacity-60"
+          onClick={handleOpenUnidrop}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-primary bg-primary/10 text-primary text-xs font-semibold hover:bg-primary/20 transition"
         >
-          {loading ? "Cancelando..." : "Sí, cancelar integración"}
+          <ExternalLink size={12} /> Abrir panel Unidrop
+        </button>
+        <button
+          disabled={loading || !openedUnidrop}
+          onClick={onConfirm}
+          title={!openedUnidrop ? "Primero abrí el panel de Unidrop y desvinculá MELI" : ""}
+          className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold shadow disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? "Marcando..." : "Marcar como cancelada"}
         </button>
       </div>
     </ModalShell>

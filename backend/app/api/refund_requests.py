@@ -5,7 +5,7 @@ suscripcion MELI (cola del area Finanzas).
 GET    /api/refund-requests                       -> listar
 GET    /api/refund-requests/{id}                  -> detalle
 POST   /api/refund-requests/{id}/mark-transferred -> Finanzas marca como transferido
-POST   /api/refund-requests/{id}/cancel-integration -> dispara DELETE en api.unidrop.com.ar
+POST   /api/refund-requests/{id}/cancel-integration -> marca como cancelado (desvinculacion manual en panel Unidrop)
 POST   /api/refund-requests/{id}/reject           -> rechazar
 """
 from __future__ import annotations
@@ -13,12 +13,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth.security import current_user, require_area
 from app.db import refund_requests_db
-from app.services.refund_requests.unidrop_api_client import unassign_meli_subscription
 from app.services.finanzas_invoices_meli import get_latest_subscription_invoice_for_dni
 
 log = logging.getLogger("unidata.api.refund_requests")
@@ -98,6 +97,14 @@ def cancel_integration(
     request_id: int,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    """Marca la solicitud como integration_cancelled.
+
+    La desvinculacion real de Mercado Libre se hace MANUAL en el panel de
+    Unidrop (unidrop.com.ar/panel/users/{user_id}) — desde el frontend se
+    abre esa URL y el admin marca el checkbox + Desvincular alli. Este
+    endpoint solo registra que el paso ya se hizo, sin llamar a la API de
+    Unidrop (que requeriria UNIDROP_API_TOKEN, no disponible aun).
+    """
     require_area(user, _AREAS)
     existing = refund_requests_db.get_request(request_id)
     if not existing:
@@ -108,16 +115,7 @@ def cancel_integration(
             f"Solo se puede cancelar la integracion despues de marcar como transferido (actual: {existing['status']})",
         )
 
-    try:
-        api_response = unassign_meli_subscription(existing["dropshipper_email"])
-    except RuntimeError as e:
-        log.error("unidrop_api unassign fallo para request %s: %s", request_id, e)
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY,
-            f"Unidrop API rechazo la desasignacion: {e}",
-        )
-
-    audit = f"HTTP {api_response['status_code']}: {api_response['body'][:500]}"
+    audit = f"Desvinculacion manual en panel Unidrop (user_id={existing['dropshipper_user_id']})"
     result = refund_requests_db.mark_integration_cancelled(
         request_id,
         user_id=user["id"],
@@ -125,11 +123,9 @@ def cancel_integration(
         api_response=audit,
     )
     if not result:
-        raise HTTPException(
-            409,
-            "Unidrop API respondio OK pero no se pudo actualizar el registro (estado cambio concurrentemente)",
-        )
-    log.info("request %s: integracion MELI cancelada por %s", request_id, user["email"])
+        raise HTTPException(409, "No se pudo actualizar (estado cambio concurrentemente)")
+    log.info("request %s: integracion MELI marcada como cancelada por %s (desvinculacion manual)",
+             request_id, user["email"])
     return result
 
 
