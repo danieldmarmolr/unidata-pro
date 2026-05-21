@@ -13,6 +13,40 @@ type Result = {
   columns: string[];
   rows: unknown[][];
   row_count: number;
+  /** Si esta presente, se renderiza una franja de totales arriba de la tabla.
+   * Lo usa /api/drilldowns/orders/paid para mostrar ingreso vs ganancia neta vs
+   * efectivo pendiente del periodo. Otros drilldowns lo omiten y la franja
+   * desaparece. */
+  summary?: {
+    total_orders?: number;
+    total_ingreso?: number;
+    total_ganancia_neta?: number;
+    margen_pct?: number;
+    cash_pendiente_total?: number;
+    cash_cobrado_total?: number;
+    online_total?: number;
+    cost_coverage_pct?: number;
+    orders_sin_costo?: number;
+    breakdown?: { iibb?: number; iva_neto_a_pagar?: number; gateway_fee?: number; costo_con_iva?: number };
+  };
+};
+
+type ProfitDict = {
+  ingreso_bruto?: number;
+  costo_con_iva?: number;
+  base_imponible_venta?: number;
+  iva_aliquot?: number;
+  iva_aliquot_source?: string;
+  iva_ventas?: number;
+  iva_compras?: number;
+  iva_neto_a_pagar?: number;
+  iibb?: number;
+  gateway_fee?: number;
+  gateway_fee_rate?: number;
+  ganancia_neta?: number;
+  margen_pct?: number;
+  has_cost?: boolean;
+  is_cash?: boolean;
 };
 
 // Una columna se considera "moneda $" si su NOMBRE incluye cualquiera de estos
@@ -61,6 +95,58 @@ function waNumber(raw: string): string {
   return digits;
 }
 
+const METODO_PAGO_TIPO_HINT = /^(metodo_pago_tipo|payment_type)$/i;
+const GANANCIA_NETA_HINT = /^(ganancia_neta|profit_net|net_profit)$/i;
+
+function MetodoPagoTipoBadge({ tipo }: { tipo: string }) {
+  const lc = tipo.toLowerCase();
+  if (lc === "efectivo") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold uppercase tracking-wider"
+        title="Cobro fuera del gateway (efectivo / transferencia / deposito presencial)"
+      >
+        💵 Efectivo
+      </span>
+    );
+  }
+  if (lc === "online") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 border border-violet-300 text-[10px] font-bold uppercase tracking-wider"
+        title="Cobro online (Pago Nube / GoCuotas / Mercado Pago)"
+      >
+        🟣 Online
+      </span>
+    );
+  }
+  return <span className="text-text-muted text-[10px] uppercase">{tipo}</span>;
+}
+
+function GananciaNetaCell({ value, profit }: { value: number; profit: ProfitDict | null }) {
+  const color = value >= 0 ? "text-emerald-700" : "text-error";
+  const margen = profit?.margen_pct;
+  if (!profit) return <span className={color}>{formatCurrency(value)}</span>;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 ${color} font-semibold`}
+      title={[
+        `Ingreso bruto:        ${formatCurrency(profit.ingreso_bruto ?? 0)}`,
+        `- Costo (c/IVA):      ${formatCurrency(profit.costo_con_iva ?? 0)}`,
+        `- IVA neto a pagar:   ${formatCurrency(profit.iva_neto_a_pagar ?? 0)} (alic ${((profit.iva_aliquot ?? 0) * 100).toFixed(1)}% ${profit.iva_aliquot_source})`,
+        `- IIBB (5% base imp): ${formatCurrency(profit.iibb ?? 0)}`,
+        `- Fee gateway (${((profit.gateway_fee_rate ?? 0) * 100).toFixed(2)}%): ${formatCurrency(profit.gateway_fee ?? 0)}`,
+        `= GANANCIA NETA:      ${formatCurrency(value)} (${(margen ?? 0).toFixed(1)}%)`,
+      ].join("\n")}
+    >
+      {formatCurrency(value)}
+      {margen !== undefined && (
+        <span className="text-[9px] text-text-muted">({margen.toFixed(0)}%)</span>
+      )}
+    </span>
+  );
+}
+
 export function CellRenderer({
   col,
   v,
@@ -74,6 +160,18 @@ export function CellRenderer({
   columns?: string[];
 }) {
   if (v === null || v === undefined || v === "") return <>—</>;
+
+  // Tipo de medio de pago → badge color (efectivo / online)
+  if (METODO_PAGO_TIPO_HINT.test(col)) {
+    return <MetodoPagoTipoBadge tipo={String(v)} />;
+  }
+
+  // Ganancia neta → moneda + tooltip con desglose contable (lee 'profit' dict de la misma fila)
+  if (GANANCIA_NETA_HINT.test(col) && typeof v === "number" && row && columns) {
+    const profitIdx = columns.findIndex((c) => /^profit$/i.test(c));
+    const profit = (profitIdx >= 0 ? row[profitIdx] : null) as ProfitDict | null;
+    return <GananciaNetaCell value={v} profit={profit} />;
+  }
 
   // Numero de orden TN: linkear a TN admin usando el id de la misma fila
   if (/^(numero|order_number|order_numero)$/i.test(col) && row && columns) {
@@ -684,6 +782,49 @@ export function DrillDownModal({
               Sin resultados para esta seleccion en el periodo actual.
             </div>
           )}
+          {data?.summary && (
+            <div className="mx-2 my-2 rounded-xl border border-border bg-gradient-to-br from-violet-50 via-surface to-amber-50/40 p-3 sm:p-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-text-muted">Ingreso total</div>
+                  <div className="text-base font-bold text-text">{formatCurrency(data.summary.total_ingreso ?? 0)}</div>
+                  <div className="text-[10px] text-text-muted">
+                    {data.summary.total_orders ?? 0} órdenes
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-text-muted">Ganancia neta</div>
+                  <div className="text-base font-bold text-emerald-700">{formatCurrency(data.summary.total_ganancia_neta ?? 0)}</div>
+                  <div className="text-[10px] text-text-muted">
+                    margen {(data.summary.margen_pct ?? 0).toFixed(1)}% · cobertura costo {(data.summary.cost_coverage_pct ?? 0).toFixed(0)}%
+                  </div>
+                </div>
+                <div className="border-l border-amber-200 pl-3">
+                  <div className="text-[10px] uppercase tracking-wider text-amber-900">💵 Efectivo a esperar</div>
+                  <div className="text-base font-bold text-amber-900">{formatCurrency(data.summary.cash_pendiente_total ?? 0)}</div>
+                  <div className="text-[10px] text-text-muted">
+                    ya cobrado: {formatCurrency(data.summary.cash_cobrado_total ?? 0)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-violet-700">🟣 Online (gateways)</div>
+                  <div className="text-base font-bold text-violet-700">{formatCurrency(data.summary.online_total ?? 0)}</div>
+                  <div className="text-[10px] text-text-muted">
+                    fee gateway: {formatCurrency(data.summary.breakdown?.gateway_fee ?? 0)}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10px] text-text-muted flex flex-wrap gap-x-4 gap-y-1">
+                <span>− costo c/IVA: <strong className="text-text">{formatCurrency(data.summary.breakdown?.costo_con_iva ?? 0)}</strong></span>
+                <span>− IVA neto (vs crédito): <strong className="text-text">{formatCurrency(data.summary.breakdown?.iva_neto_a_pagar ?? 0)}</strong></span>
+                <span>− IIBB 5%: <strong className="text-text">{formatCurrency(data.summary.breakdown?.iibb ?? 0)}</strong></span>
+                <span>− Fee gateway 0.5%: <strong className="text-text">{formatCurrency(data.summary.breakdown?.gateway_fee ?? 0)}</strong></span>
+                {(data.summary.orders_sin_costo ?? 0) > 0 && (
+                  <span className="text-warn">⚠ {data.summary.orders_sin_costo} órdenes sin costo cargado (no contadas en ganancia)</span>
+                )}
+              </div>
+            </div>
+          )}
           {data && data.rows.length > 0 && (() => {
             // Detectar columnas redundantes que se ocultan globalmente:
             //  - shipping si hay payment (pipeline cubre ambos)
@@ -699,6 +840,8 @@ export function DrillDownModal({
               if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
               if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
               if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
+              // Columnas tecnicas del engine de ganancia (se exponen via tooltip / badge)
+              if (/^(profit|gateway_id)$/i.test(c)) return true;
               return false;
             };
             const labelFor = (c: string) => {
@@ -744,6 +887,13 @@ export function DrillDownModal({
                   const totalVal = totalIdx >= 0 ? Number(r[totalIdx]) : NaN;
                   const isVip = !!tierVal || (!Number.isNaN(totalVal) && totalVal >= 300000);
 
+                  // Highlight efectivo pendiente (paymentStatus=pending + gateway=offline)
+                  const tipoIdx = data.columns.findIndex((c) => METODO_PAGO_TIPO_HINT.test(c));
+                  const paymentIdx = data.columns.findIndex((c) => /^(payment|paymentStatus|pago|payment_status)$/i.test(c));
+                  const tipoVal = tipoIdx >= 0 ? String(r[tipoIdx] ?? "").toLowerCase() : "";
+                  const paymentVal = paymentIdx >= 0 ? String(r[paymentIdx] ?? "").toLowerCase() : "";
+                  const isCashPending = tipoVal === "efectivo" && paymentVal === "pending";
+
                   // Visual por tier (gold > silver > bronze) con fallback amber para "compra alta"
                   const vipVisual = (() => {
                     if (tierVal === "gold")   return { icon: "👑", bg: "from-yellow-400 to-amber-500", row: "from-yellow-50 via-amber-50 to-transparent border-amber-300", label: "VIP Gold" };
@@ -753,15 +903,19 @@ export function DrillDownModal({
                     return { icon: "★", bg: "from-amber-400 to-orange-500", row: "from-amber-50/80 via-amber-50/40 to-transparent border-amber-200", label: `Compra alta: ${formatCurrency(totalVal)}` };
                   })();
 
+                  const rowClassName = isCashPending
+                    ? "border-t border-amber-300 bg-amber-50/60 hover:bg-amber-100/60 transition relative"
+                    : isVip
+                      ? `border-t bg-gradient-to-r ${vipVisual.row} hover:brightness-95 transition relative`
+                      : "border-t border-border hover:bg-soft transition";
+                  const rowTitle = isCashPending
+                    ? "Efectivo pendiente · esperar cobro presencial"
+                    : isVip ? vipVisual.label : undefined;
                   return (
                     <tr
                       key={i}
-                      className={
-                        isVip
-                          ? `border-t bg-gradient-to-r ${vipVisual.row} hover:brightness-95 transition relative`
-                          : "border-t border-border hover:bg-soft transition"
-                      }
-                      title={isVip ? vipVisual.label : undefined}
+                      className={rowClassName}
+                      title={rowTitle}
                     >
                       {r.map((v, j) => {
                         const col = data.columns[j];

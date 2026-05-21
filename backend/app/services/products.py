@@ -90,7 +90,8 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
     cards.append({"label": "SKUs Digip", "value": skus_digip, "hint": "En el WMS"})
     cards.append({"label": "Stock critico", "value": sku_critico, "hint": "<= 5 unidades totales"})
 
-    top_revenue = q(eng_uni, """
+    # Top SKUs por revenue (universo top 80 para luego derivar ganancia per SKU)
+    top_revenue_raw = q(eng_uni, """
         SELECT oi.sku, MAX(oi.name) AS name, MAX(oi."productId")::text AS product_id,
                SUM(oi.quantity)::int AS units,
                SUM(oi.quantity * oi.price)::float AS revenue,
@@ -106,19 +107,83 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
           AND oi.sku IS NOT NULL
           AND oi.sku NOT ILIKE '%PVA%'
         GROUP BY oi.sku
-        ORDER BY revenue DESC LIMIT 20
+        ORDER BY revenue DESC LIMIT 80
     """, p) or []
-    top_products = [{
-        "category": (r[1] or r[0])[:60],
-        "value": float(r[4] or 0),
-        "extra": {
-            "sku": r[0], "product_id": r[2],
-            "units": int(r[3] or 0),
-            "orders": int(r[5] or 0),
-            "customers": int(r[6] or 0),
-            "imagen": r[7] or "",
-        },
-    } for r in top_revenue]
+
+    # Cruzar con engine para computar ganancia NETA por SKU agregada en el periodo.
+    # Asumimos canal "online" (TaloPay 0.5%) que es ~90% de los cobros TN.
+    from app.services.profit_engine import cost_index_unistore, calc_profit
+    cost_idx = cost_index_unistore()
+    ganancia_total_periodo = 0.0
+    revenue_with_cost_periodo = 0.0
+    enriched_skus: list[dict] = []
+    for r in top_revenue_raw:
+        sku_key = (r[0] or "").strip().lower()
+        units = int(r[3] or 0)
+        rev = float(r[4] or 0)
+        cost_rec = cost_idx.get(sku_key)
+        ganancia: float | None = None
+        margen_pct: float | None = None
+        iva_aliq: float | None = None
+        if cost_rec and cost_rec.get("costo_con_iva") and units > 0 and rev > 0:
+            sin_iva = float(cost_rec.get("costo_sin_iva") or 0)
+            con_iva = float(cost_rec.get("costo_con_iva") or sin_iva)
+            iva_aliq = cost_rec.get("iva_aliquot")
+            pb = calc_profit(
+                ingreso_bruto=rev,
+                costo_sin_iva=sin_iva * units,
+                costo_con_iva=con_iva * units,
+                is_cash=False,
+                iva_aliquot_override=iva_aliq,
+            )
+            ganancia = round(pb.ganancia_neta, 0)
+            margen_pct = round(pb.margen_pct, 1)
+            ganancia_total_periodo += pb.ganancia_neta
+            revenue_with_cost_periodo += rev
+        enriched_skus.append({
+            "category": (r[1] or r[0])[:60],
+            "value": rev,
+            "extra": {
+                "sku": r[0], "product_id": r[2],
+                "units": units,
+                "orders": int(r[5] or 0),
+                "customers": int(r[6] or 0),
+                "imagen": r[7] or "",
+                "ganancia": ganancia,
+                "margen_pct": margen_pct,
+                "iva_aliquot": iva_aliq,
+                "has_cost": ganancia is not None,
+            },
+        })
+
+    # Top por revenue: los primeros 20 ya ordenados por la query
+    top_products = enriched_skus[:20]
+
+    # Top por GANANCIA NETA (este es el ranking que importa para decisiones).
+    # SKUs sin costo cargado quedan abajo (ganancia=None → tratado como 0 para orden).
+    top_ganancia_sorted = sorted(
+        [s for s in enriched_skus if s["extra"].get("ganancia") is not None],
+        key=lambda s: s["extra"]["ganancia"] or 0,
+        reverse=True,
+    )
+    top_ganancia = []
+    for s in top_ganancia_sorted[:20]:
+        item = {
+            "category": s["category"],
+            "value": s["extra"]["ganancia"],  # ahora "value" es la GANANCIA, no el revenue
+            "extra": {**s["extra"], "revenue": s["value"]},  # revenue queda en extra
+        }
+        top_ganancia.append(item)
+
+    # KPI cards adicionales: ganancia agregada + margen promedio del periodo
+    if revenue_with_cost_periodo > 0:
+        margen_periodo = ganancia_total_periodo / revenue_with_cost_periodo * 100
+        cards.append({
+            "label": f"Ganancia neta ({period})",
+            "value": round(ganancia_total_periodo, 0),
+            "prefix": "$ ",
+            "hint": f"Margen {margen_periodo:.1f}% sobre $ {revenue_with_cost_periodo:,.0f} con costo cargado",
+        })
 
     top_brands = q(eng_uni, """
         SELECT COALESCE(NULLIF(TRIM(p.brand),''),'(sin marca)') AS brand,
@@ -194,7 +259,8 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         "period": period,
         "channel": channel,
         "cards": cards,
-        "top_products": top_products,
+        "top_products": top_products,            # top por revenue (mantenido por compat)
+        "top_ganancia": top_ganancia,            # NUEVO: top por ganancia neta (el ranking que importa)
         "top_brands": top_brands_list,
         "sin_movimiento": sin_movimiento_list,
         "stock_critico_alerta": stock_critico_alerta,
@@ -447,17 +513,55 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
                 "Lote con data legacy - re-importar CSV VALOR PRODUCTO."
             )
         elif cost_info and cost_info.get("cost_ars") and total_rev and total_units:
-            # Margen = revenue - units_sold * cost_unit_ars_sin_iva
-            # cost_ars ya viene PER UNIT en ARS directamente desde el CSV
-            # (la planilla calcula con TC al momento de importar).
-            unit_cost_ars = cost_info["cost_ars"]
-            margen_ars = total_rev - total_units * unit_cost_ars
-            margen_pct = (margen_ars / total_rev * 100) if total_rev > 0 else None
-            cost_info["margen_estimado_lifetime"] = round(margen_ars, 0)
-            if margen_pct is not None:
-                cost_info["margen_pct"] = round(margen_pct, 1)
-    except Exception:
-        pass
+            # Engine de ganancia NETA (caja real): descuenta costo c/IVA + IVA neto
+            # a pagar + IIBB 5% + fee gateway 0.5% promedio (asumimos 90% online).
+            # Alicuota IVA se DERIVA del lote del SKU (no se asume 21%).
+            from app.services.profit_engine import calc_profit, derive_iva_aliquot
+            unit_sin_iva = float(cost_info.get("cost_unit_ars") or 0)
+            unit_con_iva = float(cost_info.get("cost_con_iva_unit_ars") or unit_sin_iva)
+            iva_aliq = derive_iva_aliquot(unit_sin_iva, unit_con_iva)
+            costo_sin_iva_total = unit_sin_iva * total_units
+            costo_con_iva_total = unit_con_iva * total_units
+
+            # Margen contable (revenue - costo) — la metrica vieja, para comparar
+            margen_simple = total_rev - costo_sin_iva_total
+            cost_info["margen_estimado_lifetime"] = round(margen_simple, 0)
+            if total_rev > 0:
+                cost_info["margen_pct"] = round(margen_simple / total_rev * 100, 1)
+
+            # Ganancia NETA caja: blend 90% online / 10% efectivo aprox.
+            # No tenemos breakdown real per orden aca (lo computa el modal),
+            # pero el blend es buen proxy lifetime.
+            pb_online = calc_profit(
+                ingreso_bruto=total_rev,
+                costo_sin_iva=costo_sin_iva_total,
+                costo_con_iva=costo_con_iva_total,
+                is_cash=False,
+                iva_aliquot_override=iva_aliq,
+            )
+            pb_cash = calc_profit(
+                ingreso_bruto=total_rev,
+                costo_sin_iva=costo_sin_iva_total,
+                costo_con_iva=costo_con_iva_total,
+                is_cash=True,
+                iva_aliquot_override=iva_aliq,
+            )
+            ganancia_neta_blend = 0.9 * pb_online.ganancia_neta + 0.1 * pb_cash.ganancia_neta
+            cost_info["ganancia_neta_lifetime"] = round(ganancia_neta_blend, 0)
+            cost_info["ganancia_neta_pct"] = round(ganancia_neta_blend / total_rev * 100, 1) if total_rev > 0 else None
+            cost_info["profit_breakdown"] = pb_online.to_dict()  # desglose ejemplo (caso online)
+            cost_info["iva_aliquot_derived"] = iva_aliq
+
+            # Card para el frontend
+            cards.append({
+                "label": "Ganancia neta (lifetime)",
+                "value": round(ganancia_neta_blend, 0),
+                "prefix": "$ ",
+                "hint": f"Margen {cost_info['ganancia_neta_pct']:.1f}% · descuenta costo + IVA + IIBB + fee gateway"
+                if cost_info.get("ganancia_neta_pct") is not None else "Caja real",
+            })
+    except Exception as e:
+        log.warning("product_detail ganancia neta fail: %s", e)
 
     if product_info:
         product_info["images"] = images
@@ -991,6 +1095,46 @@ def customer_detail(customer_id: int) -> dict:
                       "value": round(cancelled / orders * 100, 1) if orders else 0, "suffix": "%",
                       "hint": f"{cancelled} / {orders} ordenes"})
 
+        # ----- LTV-ganancia: ganancia neta real del cliente vs facturacion -----
+        # Itera sobre items de TODAS las orders paid del cliente, aplica engine.
+        try:
+            from app.services.profit_engine import cost_index_unistore, profit_for_order_items
+            cost_idx = cost_index_unistore()
+            items_rows = q(eng, """
+                SELECT o.id, o.gateway, oi.sku, oi.quantity::int, oi.price::float
+                FROM tienda_nube."Order" o
+                JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
+                WHERE o."customerId" = :cid AND o."paymentStatus" = 'paid'
+                  AND oi.sku IS NOT NULL AND oi.sku <> ''
+            """, {"cid": customer_id}) or []
+            by_order: dict[int, dict] = {}
+            for r in items_rows:
+                oid = r[0]
+                if oid not in by_order:
+                    by_order[oid] = {"gateway": r[1], "items": []}
+                by_order[oid]["items"].append((r[2], r[3], r[4]))
+
+            total_ganancia = 0.0
+            ordenes_con_costo = 0
+            ordenes_total = len(by_order)
+            for oid, od in by_order.items():
+                is_cash = (od["gateway"] or "").lower() == "offline"
+                pb = profit_for_order_items(od["items"], cost_idx=cost_idx, is_cash=is_cash)
+                if pb.has_cost:
+                    total_ganancia += pb.ganancia_neta
+                    ordenes_con_costo += 1
+
+            if ordenes_total > 0 and revenue > 0:
+                cobertura = ordenes_con_costo / ordenes_total * 100
+                ganancia_pct = total_ganancia / revenue * 100
+                cards.append({
+                    "label": "Ganancia neta lifetime",
+                    "value": round(total_ganancia, 0), "prefix": "$ ",
+                    "hint": f"Margen {ganancia_pct:.1f}% · cobertura costos {cobertura:.0f}% ({ordenes_con_costo}/{ordenes_total})",
+                })
+        except Exception as e:
+            log.warning("customer_detail ganancia LTV fail: %s", e)
+
     method_expr = _shipping_method_expr(eng)
     type_col = _shipping_type_col(eng)
     carrier_col_expr = _carrier_col(eng)
@@ -1057,14 +1201,41 @@ def customer_detail(customer_id: int) -> dict:
         GROUP BY oi.sku
         ORDER BY revenue DESC LIMIT 15
     """, {"cid": customer_id}) or []
-    top_products = [{
-        "category": (r[1] or r[0] or "?")[:60],
-        "value": float(r[3] or 0),
-        "extra": {
-            "sku": r[0], "units": int(r[2] or 0), "orders": int(r[4] or 0),
-            "imagen": r[5] or "",
-        },
-    } for r in rows]
+    # Enriquezco con ganancia neta per SKU usando el cost_idx ya construido arriba.
+    # Reutilizo el cost_idx de la seccion LTV-ganancia (variable cost_idx queda en scope local).
+    from app.services.profit_engine import calc_profit
+    _cost_idx = locals().get("cost_idx") or {}
+    top_products = []
+    for r in rows:
+        sku = r[0]
+        sku_key = (sku or "").strip().lower()
+        units = int(r[2] or 0)
+        revenue = float(r[3] or 0)
+        ganancia: float | None = None
+        margen_pct: float | None = None
+        crec = _cost_idx.get(sku_key)
+        if crec and crec.get("costo_con_iva") and units > 0 and revenue > 0:
+            sin_iva = float(crec.get("costo_sin_iva") or 0)
+            con_iva = float(crec.get("costo_con_iva") or sin_iva)
+            pb = calc_profit(
+                ingreso_bruto=revenue,
+                costo_sin_iva=sin_iva * units,
+                costo_con_iva=con_iva * units,
+                is_cash=False,
+                iva_aliquot_override=crec.get("iva_aliquot"),
+            )
+            ganancia = round(pb.ganancia_neta, 0)
+            margen_pct = round(pb.margen_pct, 1)
+        top_products.append({
+            "category": (r[1] or sku or "?")[:60],
+            "value": revenue,
+            "extra": {
+                "sku": sku, "units": units, "orders": int(r[4] or 0),
+                "imagen": r[5] or "",
+                "ganancia": ganancia,
+                "margen_pct": margen_pct,
+            },
+        })
 
     # BUGFIX: el LEFT JOIN OrderItem inflaba los counts de ordenes (contaba 1
     # fila por item). Ahora calculamos ordenes y items por separado y los
@@ -1097,6 +1268,7 @@ def customer_detail(customer_id: int) -> dict:
         LEFT JOIN items USING (mes)
         ORDER BY ord.mes
     """, {"cid": customer_id}) or []
+    # Construyo el monthly trend base
     monthly_trend = [{
         "date": r[0].strftime("%Y-%m") if r[0] else "",
         "value": float(r[4] or 0),  # revenue es la metrica default (backwards compat)
@@ -1108,7 +1280,40 @@ def customer_detail(customer_id: int) -> dict:
         "units": int(r[5] or 0),
         "skus_distintos": int(r[6] or 0),
         "ticket_promedio": round(float(r[4] or 0) / max(int(r[2] or 1), 1), 0),
+        "ganancia": 0.0,  # se rellena abajo
     } for r in rows]
+
+    # Ganancia mensual: itero items paid del cliente agrupados por mes + engine.
+    try:
+        rows_items = q(eng, """
+            SELECT date_trunc('month', o."createdAt")::date AS mes,
+                   o.id, o.gateway, oi.sku, oi.quantity::int, oi.price::float
+            FROM tienda_nube."Order" o
+            JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
+            WHERE o."customerId" = :cid AND o."paymentStatus" = 'paid'
+              AND oi.sku IS NOT NULL AND oi.sku <> ''
+            ORDER BY 1, 2
+        """, {"cid": customer_id}) or []
+        # Agrupo (mes, orderId) → items + gateway
+        by_month_order: dict = {}
+        for r in rows_items:
+            mes_str = r[0].strftime("%Y-%m") if r[0] else ""
+            oid = r[1]
+            key = (mes_str, oid)
+            if key not in by_month_order:
+                by_month_order[key] = {"gateway": r[2], "items": []}
+            by_month_order[key]["items"].append((r[3], r[4], r[5]))
+        ganancia_by_month: dict[str, float] = {}
+        from app.services.profit_engine import profit_for_order_items
+        for (mes_str, _oid), od in by_month_order.items():
+            is_cash = (od["gateway"] or "").lower() == "offline"
+            pb = profit_for_order_items(od["items"], cost_idx=_cost_idx, is_cash=is_cash)
+            if pb.has_cost:
+                ganancia_by_month[mes_str] = ganancia_by_month.get(mes_str, 0.0) + pb.ganancia_neta
+        for m in monthly_trend:
+            m["ganancia"] = round(ganancia_by_month.get(m["date"], 0.0), 0)
+    except Exception as e:
+        log.warning("customer_detail monthly ganancia fail: %s", e)
 
     return {
         "customer_info": customer_info,

@@ -502,7 +502,12 @@ def _orders_serialize(rows: list) -> dict:
     return _serialize(rows, [
         "id", "numero", "fecha", "payment", "shipping", "status",
         "total", "cliente", "provincia", "metodo_envio", "canal", "empaquetada", "customer_id",
-        "metodo_pago", "ganancia",
+        "metodo_pago",          # 13 - tienda_nube."Order"."gatewayName" (descriptivo)
+        "gateway_id",           # 14 - tienda_nube."Order".gateway ('offline','pago-nube','gocuotas',...)
+        # Ganancia neta + desglose contable (engine de profit_engine.py)
+        "ganancia_neta",        # 15 - lo que queda en caja, neto de costo + AFIP + gateway
+        "metodo_pago_tipo",     # 16 - "efectivo" | "online" | "otro"
+        "profit",               # 17 - dict con desglose completo (base_imp, IVA, IIBB, fee, etc.)
     ])
 
 
@@ -527,6 +532,7 @@ def _build_order_select(eng) -> str:
                  c.id AS customer_id,
                  {method_expr}{type_select}{carrier_select},
                  o."gatewayName",
+                 o.gateway,
                  EXISTS (
                    SELECT 1 FROM tienda_nube."OrderItem" oi
                    WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
@@ -547,55 +553,164 @@ def _build_order_select(eng) -> str:
                {canal_sql} AS canal,
                m.empaquetada,
                m.customer_id,
-               m."gatewayName"
+               m."gatewayName",
+               m.gateway
         FROM base m
         ORDER BY m.fecha DESC LIMIT 1000
     """
 
 
 def _enrich_with_ganancia(eng, rows: list) -> list:
-    """Agrega ganancia por orden cruzando items con costs_db. Retorna rows con índice 14 = ganancia."""
+    """Agrega ganancia NETA (caja real) + desglose contable por orden TN Unistore.
+
+    Usa profit_engine.calc_profit que descuenta:
+      - costo de mercaderia (con IVA, del lote)
+      - IVA neto a pagar al fisco = max(0, IVA_ventas - IVA_compras)
+      - Ingresos Brutos (5% sobre base imponible)
+      - Fee de gateway de pago (0.5% TaloPay; 0 si es efectivo presencial)
+
+    Append a cada row:
+      [14] ganancia_neta   - float | None
+      [15] metodo_pago_tipo - "efectivo" | "online" | "otro"
+      [16] profit          - dict con desglose completo (base imp, IVA, IIBB, fee)
+
+    Si el SKU no tiene costo cargado, ganancia=None y profit.has_cost=False.
+    """
     if not rows:
         return rows
+
+    from app.services.profit_engine import (
+        cost_index_unistore,
+        is_cash_payment,
+        profit_for_order_items,
+    )
+
     order_ids = [r[0] for r in rows]
     items_rows = q(eng, """
-        SELECT "orderId", sku, "quantity"::int
+        SELECT "orderId", sku, "quantity"::int, "price"::float
         FROM tienda_nube."OrderItem"
         WHERE "orderId" = ANY(:ids) AND sku IS NOT NULL AND sku <> ''
     """, {"ids": order_ids}) or []
     items_by_order: dict[int, list[tuple]] = {}
     for ir in items_rows:
-        items_by_order.setdefault(ir[0], []).append((ir[1], ir[2]))  # sku, qty
+        items_by_order.setdefault(ir[0], []).append((ir[1], ir[2], ir[3]))  # sku, qty, price
 
-    cost_by_sku: dict[str, float] = {}
     try:
-        from app.db import costs_db
-        for c in (costs_db.current_costs(limit=10000) or []):
-            sku_key = (c.get("sku") or "").strip().lower()
-            costo = c.get("costo_unit_ars") or c.get("costo_con_iva_unit_ars") or 0
-            if sku_key and costo:
-                cost_by_sku[sku_key] = float(costo)
+        cost_idx = cost_index_unistore()
     except Exception:
-        pass
+        cost_idx = {}
 
-    enriched = []
+    enriched: list = []
     for r in rows:
+        # r[6]=total, r[3]=paymentStatus, r[13]=gatewayName (descriptivo),
+        # r[14]=gateway (id canonico: 'offline','pago-nube','gocuotas',...)
+        order_total = float(r[6] or 0)
+        gateway_id = r[14] if len(r) > 14 else None
+        payment_status = r[3] if len(r) > 3 else None
         items = items_by_order.get(r[0], [])
-        ganancia = None
-        if items and cost_by_sku:
-            costo_total = sum(cost_by_sku.get((sku or "").strip().lower(), 0) * qty for sku, qty in items)
-            if costo_total > 0:
-                ganancia = round(float(r[6] or 0) - costo_total, 0)
-        enriched.append(list(r) + [ganancia])
+        is_cash = is_cash_payment(gateway_id, payment_status)
+        tipo = "efectivo" if is_cash else ("online" if gateway_id else "otro")
+
+        if items and cost_idx:
+            pb = profit_for_order_items(items, cost_idx=cost_idx, is_cash=is_cash)
+            # Si el ingreso por items no matchea el total de la orden (descuentos,
+            # envio cobrado al cliente, etc.), recalibramos sobre el TOTAL real.
+            if pb.ingreso_bruto and abs(pb.ingreso_bruto - order_total) > 1.0:
+                from app.services.profit_engine import calc_profit
+                pb = calc_profit(
+                    ingreso_bruto=order_total,
+                    costo_sin_iva=pb.costo_sin_iva,
+                    costo_con_iva=pb.costo_con_iva,
+                    is_cash=is_cash,
+                    iva_aliquot_override=pb.iva_aliquot if pb.iva_aliquot_source == "derived" else None,
+                )
+                pb.has_cost = bool(pb.costo_con_iva > 0)
+            ganancia = round(pb.ganancia_neta, 0) if pb.has_cost else None
+            profit_dict = pb.to_dict()
+        else:
+            ganancia = None
+            profit_dict = {"has_cost": False, "is_cash": is_cash}
+
+        enriched.append(list(r) + [ganancia, tipo, profit_dict])
     return enriched
 
 
 def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes paid + pending (efectivo presencial a cobrar) en la ventana.
+
+    Incluye:
+      - paymentStatus='paid' (cobradas online o ya cobradas presencial)
+      - paymentStatus='pending' con gateway='offline' (efectivo a esperar)
+    """
     eng = get_engine("unistore")
     win = resolve_window(period, from_iso, to_iso)
-    where = "o.\"paymentStatus\" = 'paid' AND o.\"createdAt\" >= :from_ts AND o.\"createdAt\" < :to_ts"
+    where = """((o."paymentStatus" = 'paid')
+                OR (o."paymentStatus" = 'pending' AND o.gateway = 'offline'))
+               AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts"""
     rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
-    return _orders_serialize(_enrich_with_ganancia(eng, rows))
+    enriched = _enrich_with_ganancia(eng, rows)
+    out = _orders_serialize(enriched)
+    out["summary"] = _orders_summary(enriched)
+    return out
+
+
+def _orders_summary(enriched_rows: list) -> dict:
+    """Sumario para el modal: totales de ingreso + ganancia + cash pendiente.
+
+    enriched_rows: filas devueltas por _enrich_with_ganancia (cada una con
+    [..., 13=gatewayName, 14=gateway, 15=ganancia_neta, 16=tipo, 17=profit]).
+    """
+    total_orders = len(enriched_rows or [])
+    total_ingreso = 0.0
+    total_ganancia = 0.0
+    ganancia_con_costo_only_ingreso = 0.0
+    total_cash_pending = 0.0   # paymentStatus='pending' AND gateway='offline'
+    total_cash_cobrado = 0.0   # paymentStatus='paid' AND gateway='offline'
+    total_online = 0.0
+    skus_sin_costo = 0
+    breakdown_acc = {"iibb": 0.0, "iva_neto_a_pagar": 0.0, "gateway_fee": 0.0, "costo_con_iva": 0.0}
+
+    for r in enriched_rows or []:
+        total = float(r[6] or 0)
+        payment_status = r[3] or ""
+        gateway_id = r[14] if len(r) > 14 else None
+        ganancia = r[15] if len(r) > 15 else None
+        profit = r[17] if len(r) > 17 else {}
+        total_ingreso += total
+        if gateway_id == "offline":
+            if payment_status == "pending":
+                total_cash_pending += total
+            else:
+                total_cash_cobrado += total
+        else:
+            total_online += total
+        if ganancia is not None:
+            total_ganancia += float(ganancia)
+            ganancia_con_costo_only_ingreso += total
+        if not profit.get("has_cost"):
+            skus_sin_costo += 1
+        for k in breakdown_acc:
+            v = profit.get(k)
+            if v is not None:
+                breakdown_acc[k] += float(v)
+
+    margen_pct = (total_ganancia / ganancia_con_costo_only_ingreso * 100.0) if ganancia_con_costo_only_ingreso else 0.0
+    coverage_pct = (
+        (total_orders - skus_sin_costo) / total_orders * 100.0
+    ) if total_orders else 100.0
+
+    return {
+        "total_orders": total_orders,
+        "total_ingreso": round(total_ingreso, 0),
+        "total_ganancia_neta": round(total_ganancia, 0),
+        "margen_pct": round(margen_pct, 1),
+        "cash_pendiente_total": round(total_cash_pending, 0),    # plata a esperar en efectivo
+        "cash_cobrado_total": round(total_cash_cobrado, 0),      # efectivo ya recibido
+        "online_total": round(total_online, 0),
+        "cost_coverage_pct": round(coverage_pct, 1),             # % de ordenes con costo cargado
+        "orders_sin_costo": skus_sin_costo,
+        "breakdown": {k: round(v, 0) for k, v in breakdown_acc.items()},
+    }
 
 
 def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
