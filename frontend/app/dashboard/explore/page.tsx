@@ -157,6 +157,8 @@ function ExploreContent() {
                 if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
                 if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
                 if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
+                // Columnas tecnicas del engine de ganancia (se exponen via tooltip / badge)
+                if (/^(profit|gateway_id)$/i.test(c)) return true;
                 return false;
               };
               const labelFor = (c: string) => {

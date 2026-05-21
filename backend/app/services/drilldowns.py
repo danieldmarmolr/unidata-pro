@@ -602,17 +602,24 @@ def _enrich_with_ganancia(eng, rows: list) -> list:
 
     enriched: list = []
     for r in rows:
-        # r[6]=total, r[3]=paymentStatus, r[13]=gatewayName (descriptivo),
+        # r[3]=paymentStatus, r[6]=total, r[10]=canal, r[13]=gatewayName,
         # r[14]=gateway (id canonico: 'offline','pago-nube','gocuotas',...)
         order_total = float(r[6] or 0)
+        canal = (r[10] or "") if len(r) > 10 else ""
         gateway_id = r[14] if len(r) > 14 else None
         payment_status = r[3] if len(r) > 3 else None
         items = items_by_order.get(r[0], [])
         is_cash = is_cash_payment(gateway_id, payment_status)
+        # Producto digital / suscripcion: el canal es "Producto Digital" cuando
+        # Fulfillment.shippingType='non-shippable' o el SKU empieza con PVA.
+        # Estos NO tienen costo de mercaderia: la ganancia es ~ingreso - IVA - IIBB - fee.
+        is_digital = "producto digital" in canal.lower() or canal.lower() == "digital"
         tipo = "efectivo" if is_cash else ("online" if gateway_id else "otro")
 
-        if items and cost_idx:
-            pb = profit_for_order_items(items, cost_idx=cost_idx, is_cash=is_cash)
+        if items:
+            pb = profit_for_order_items(
+                items, cost_idx=cost_idx, is_cash=is_cash, is_digital=is_digital,
+            )
             # Si el ingreso por items no matchea el total de la orden (descuentos,
             # envio cobrado al cliente, etc.), recalibramos sobre el TOTAL real.
             if pb.ingreso_bruto and abs(pb.ingreso_bruto - order_total) > 1.0:
@@ -622,14 +629,14 @@ def _enrich_with_ganancia(eng, rows: list) -> list:
                     costo_sin_iva=pb.costo_sin_iva,
                     costo_con_iva=pb.costo_con_iva,
                     is_cash=is_cash,
+                    is_digital=is_digital,
                     iva_aliquot_override=pb.iva_aliquot if pb.iva_aliquot_source == "derived" else None,
                 )
-                pb.has_cost = bool(pb.costo_con_iva > 0)
             ganancia = round(pb.ganancia_neta, 0) if pb.has_cost else None
             profit_dict = pb.to_dict()
         else:
             ganancia = None
-            profit_dict = {"has_cost": False, "is_cash": is_cash}
+            profit_dict = {"has_cost": False, "is_cash": is_cash, "is_digital": is_digital}
 
         enriched.append(list(r) + [ganancia, tipo, profit_dict])
     return enriched

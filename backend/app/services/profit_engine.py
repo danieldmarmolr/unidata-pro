@@ -81,6 +81,7 @@ class ProfitBreakdown:
     # Flags
     has_cost: bool              # True si tenemos costo cargado para todos los items
     is_cash: bool               # True si es cobro presencial / pendiente
+    is_digital: bool = False    # True si es producto digital / suscripcion (sin costo de inventario)
 
     def to_dict(self) -> dict:
         return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in asdict(self).items()}
@@ -92,6 +93,7 @@ def calc_profit(
     costo_sin_iva: float,
     costo_con_iva: float,
     is_cash: bool = False,
+    is_digital: bool = False,
     iva_aliquot_override: float | None = None,
     iibb_rate: float = IIBB_RATE,
     talopay_fee_rate: float = TALOPAY_FEE_RATE,
@@ -102,7 +104,14 @@ def calc_profit(
     - ingreso_bruto: lo que paga el cliente (precio × qty, antes de descuentos)
     - costo_sin_iva / costo_con_iva: ya multiplicado por qty
     - is_cash: True para efectivo presencial → fee gateway = 0
+    - is_digital: True para productos digitales / suscripciones Unidrop. Fuerza
+      costo=0 (no hay inventario que descontar). Ganancia ~ ingreso - IVA - IIBB - fee.
     """
+    # Productos digitales: no descontamos costo de mercaderia (no existe)
+    if is_digital:
+        costo_sin_iva = 0.0
+        costo_con_iva = 0.0
+
     # Alicuota IVA: override > derivado del lote > default 21%
     if iva_aliquot_override is not None:
         iva_aliq = iva_aliquot_override
@@ -142,8 +151,12 @@ def calc_profit(
         gateway_fee=gw_fee,
         ganancia_neta=ganancia,
         margen_pct=margen,
-        has_cost=bool(costo_con_iva and costo_con_iva > 0),
+        # Productos digitales son ganancia "completa": el calculo es valido aunque
+        # no haya costo de inventario (no existe). Los fisicos sin costo cargado
+        # quedan has_cost=False (data faltante).
+        has_cost=is_digital or bool(costo_con_iva and costo_con_iva > 0),
         is_cash=is_cash,
+        is_digital=is_digital,
     )
 
 
@@ -177,23 +190,26 @@ def profit_for_order_items(
     *,
     cost_idx: dict[str, dict],
     is_cash: bool = False,
+    is_digital: bool = False,
 ) -> ProfitBreakdown:
     """Agrega ganancia neta de una orden a partir de sus items.
 
     items: iterable de (sku, qty, precio_unit). Suma costos del indice
     `cost_idx` (precomputado con cost_index_unistore()).
+
+    is_digital=True: la orden es producto digital / suscripcion Unidrop. No
+    descontamos costo (no existe); ganancia ~ ingreso - IVA - IIBB - fee.
     """
     ingreso_total = 0.0
     costo_sin_iva_total = 0.0
     costo_con_iva_total = 0.0
     have_costs = True
-
-    # Tomamos la alicuota del primer item con costo cargado (orden multi-IVA
-    # es raro en Unistore; si aparece despues lo refinamos por linea).
     iva_aliq: float | None = None
 
     for sku, qty, price in items:
         ingreso_total += float(price or 0) * int(qty or 0)
+        if is_digital:
+            continue  # productos digitales no tienen costo de mercaderia
         cost = cost_idx.get((sku or "").strip().lower())
         if not cost or not cost.get("costo_con_iva"):
             have_costs = False
@@ -210,7 +226,10 @@ def profit_for_order_items(
         costo_sin_iva=costo_sin_iva_total,
         costo_con_iva=costo_con_iva_total,
         is_cash=is_cash,
+        is_digital=is_digital,
         iva_aliquot_override=iva_aliq,
     )
-    pb.has_cost = have_costs
+    # has_cost se setea en calc_profit; respetamos `have_costs` solo si no es digital
+    if not is_digital:
+        pb.has_cost = have_costs
     return pb

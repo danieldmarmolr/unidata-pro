@@ -47,6 +47,7 @@ type ProfitDict = {
   margen_pct?: number;
   has_cost?: boolean;
   is_cash?: boolean;
+  is_digital?: boolean;
 };
 
 // Una columna se considera "moneda $" si su NOMBRE incluye cualquiera de estos
@@ -127,21 +128,30 @@ function GananciaNetaCell({ value, profit }: { value: number; profit: ProfitDict
   const color = value >= 0 ? "text-emerald-700" : "text-error";
   const margen = profit?.margen_pct;
   if (!profit) return <span className={color}>{formatCurrency(value)}</span>;
+  const isDigital = profit.is_digital === true;
+  const tooltipLines = [
+    `Ingreso bruto:        ${formatCurrency(profit.ingreso_bruto ?? 0)}`,
+    isDigital
+      ? `- Sin costo (Prod. digital / suscripcion)`
+      : `- Costo (c/IVA):      ${formatCurrency(profit.costo_con_iva ?? 0)}`,
+    `- IVA neto a pagar:   ${formatCurrency(profit.iva_neto_a_pagar ?? 0)} (alic ${((profit.iva_aliquot ?? 0) * 100).toFixed(1)}% ${profit.iva_aliquot_source})`,
+    `- IIBB (5% base imp): ${formatCurrency(profit.iibb ?? 0)}`,
+    `- Fee gateway (${((profit.gateway_fee_rate ?? 0) * 100).toFixed(2)}%): ${formatCurrency(profit.gateway_fee ?? 0)}`,
+    `= GANANCIA NETA:      ${formatCurrency(value)} (${(margen ?? 0).toFixed(1)}%)`,
+  ];
   return (
     <span
       className={`inline-flex items-center gap-1 ${color} font-semibold`}
-      title={[
-        `Ingreso bruto:        ${formatCurrency(profit.ingreso_bruto ?? 0)}`,
-        `- Costo (c/IVA):      ${formatCurrency(profit.costo_con_iva ?? 0)}`,
-        `- IVA neto a pagar:   ${formatCurrency(profit.iva_neto_a_pagar ?? 0)} (alic ${((profit.iva_aliquot ?? 0) * 100).toFixed(1)}% ${profit.iva_aliquot_source})`,
-        `- IIBB (5% base imp): ${formatCurrency(profit.iibb ?? 0)}`,
-        `- Fee gateway (${((profit.gateway_fee_rate ?? 0) * 100).toFixed(2)}%): ${formatCurrency(profit.gateway_fee ?? 0)}`,
-        `= GANANCIA NETA:      ${formatCurrency(value)} (${(margen ?? 0).toFixed(1)}%)`,
-      ].join("\n")}
+      title={tooltipLines.join("\n")}
     >
       {formatCurrency(value)}
       {margen !== undefined && (
         <span className="text-[9px] text-text-muted">({margen.toFixed(0)}%)</span>
+      )}
+      {isDigital && (
+        <span className="text-[8px] px-1 rounded bg-sky-100 text-sky-800 uppercase tracking-wider" title="Producto digital / suscripcion: sin costo de inventario">
+          digital
+        </span>
       )}
     </span>
   );
