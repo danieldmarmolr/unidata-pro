@@ -47,7 +47,7 @@ type Request = {
 
 type Resp = { items: Request[]; count: number };
 
-type InvoiceUrlResp = { url: string | null; numero: string; total: number; fecha: string };
+type InvoiceUrlResp = { url: string | null; numero: string; total: number; fecha: string; tipo: string };
 
 const ABANDONMENT_LABELS: Record<string, string> = {
   costo_muy_alto:               "Costo muy alto",
@@ -107,8 +107,18 @@ function fmtMoney(v: number | null | undefined): string {
   }).format(v);
 }
 
+function planToSku(planName: string | null): string {
+  if (!planName) return "GEN";
+  const lower = planName.toLowerCase();
+  if (lower.includes("xxl")) return "XXL";
+  if (lower.includes("escalada")) return "ESC";
+  if (lower.includes("emprendedor")) return "EMP";
+  if (lower.includes("crecimiento") || lower.includes("lanzamiento")) return "CRE";
+  return planName.toUpperCase().replace(/[^A-Z0-9]/g, "") || "GEN";
+}
+
 function displayCode(r: Request): string {
-  const plan = (r.subscription_plan_name ?? "GEN").toUpperCase().replace(/[^A-Z0-9]/g, "") || "GEN";
+  const sku = planToSku(r.subscription_plan_name);
   let dd = "00", mm = "00", aa = "00";
   try {
     const d = new Date(r.created_at);
@@ -118,7 +128,7 @@ function displayCode(r: Request): string {
       aa = String(d.getFullYear() % 100).padStart(2, "0");
     }
   } catch {}
-  return `UDEV-${r.dropshipper_dni}-${plan}-${dd}${mm}${aa}`;
+  return `UDEV-${r.dropshipper_dni}-${sku}-${dd}${mm}${aa}`;
 }
 
 export default function DevSuscripcionesPage() {
@@ -412,15 +422,7 @@ function RequestCard({ request: r }: { request: Request }) {
             </Link>
 
             {invoiceData?.url && (
-              <a
-                href={invoiceData.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={invoiceData.numero ? `Factura ${invoiceData.numero} · ${fmtMoney(invoiceData.total)}` : "Ver factura Contabilium"}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs font-semibold text-text hover:bg-bg transition"
-              >
-                <Receipt size={12} /> Ver factura
-              </a>
+              <InvoiceButton data={invoiceData} />
             )}
 
             {r.status === "pending" && (
@@ -483,6 +485,40 @@ function RequestCard({ request: r }: { request: Request }) {
           onCancel={() => setShowCancelConfirm(false)}
           onConfirm={() => cancelMut.mutate()}
         />
+      )}
+    </div>
+  );
+}
+
+function InvoiceButton({ data }: { data: InvoiceUrlResp }) {
+  const [hover, setHover] = useState(false);
+  if (!data.url) return null;
+  const code = data.numero
+    ? `${data.tipo ? data.tipo + " " : ""}${data.numero}`.trim()
+    : "";
+  return (
+    <div
+      className="relative inline-block"
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
+      <a
+        href={data.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs font-semibold text-text hover:bg-bg transition"
+      >
+        <Receipt size={12} /> Ver factura
+      </a>
+      {hover && code && (
+        <div
+          className="absolute left-0 top-full mt-1 z-20 bg-zinc-900 text-white text-[11px] font-mono px-2.5 py-1.5 rounded shadow-lg whitespace-nowrap select-all cursor-text"
+          style={{ userSelect: "all" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {code}
+          <span className="ml-2 text-zinc-400 select-none">Ctrl+C para copiar</span>
+        </div>
       )}
     </div>
   );

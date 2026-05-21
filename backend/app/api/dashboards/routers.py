@@ -231,17 +231,19 @@ def get_finanzas_invoices_meli(
     tipo: Annotated[Literal["all", "FCA", "FCB"], Query()] = "all",
     search: Annotated[str | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1, le=10000)] = None,
+    chart_granularity: Annotated[Literal["day", "week", "month", "quarter", "year"], Query()] = "month",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Facturas Contabilium emitidas por cobros de suscripcion MELI (Unidrop)."""
     require_area(user, ["finanzas", "administracion"])
-    key = f"fin-inv-meli:{period}:{plan}:{tipo}:{search}:{limit}:{from_iso}:{to_iso}"
+    key = f"fin-inv-meli:{period}:{plan}:{tipo}:{search}:{limit}:{chart_granularity}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return finanzas_inv_meli_svc.finanzas_invoices_meli(
             period=period, plan=plan, tipo=tipo, search=search,
-            limit=limit, from_iso=from_iso, to_iso=to_iso,
+            limit=limit, chart_granularity=chart_granularity,
+            from_iso=from_iso, to_iso=to_iso,
         )
     return _b()
 

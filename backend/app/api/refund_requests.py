@@ -143,7 +143,7 @@ def invoice_url(
     if not row:
         raise HTTPException(404, "Solicitud no encontrada")
     result = get_latest_subscription_invoice_for_dni(row["dropshipper_dni"])
-    return result or {"url": None, "numero": "", "total": 0.0, "fecha": ""}
+    return result or {"url": None, "numero": "", "total": 0.0, "fecha": "", "tipo": ""}
 
 
 @router.post("/{request_id}/reject")

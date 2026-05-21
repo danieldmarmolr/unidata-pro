@@ -25,12 +25,22 @@ SUBS_FILTER_SQL = """
 SUBS_WHERE_SQL = " oml.id IS NULL AND tn.tienda_nube_id IS NULL "
 
 
+_GRAN_CONFIG = {
+    "day":     {"trunc": "day",     "fmt": "%Y-%m-%d", "interval": "60 days"},
+    "week":    {"trunc": "week",    "fmt": "%G-W%V",   "interval": "26 weeks"},
+    "month":   {"trunc": "month",   "fmt": "%Y-%m",    "interval": "24 months"},
+    "quarter": {"trunc": "quarter", "fmt": "%Y-Q",     "interval": "12 quarters"},
+    "year":    {"trunc": "year",    "fmt": "%Y",       "interval": "5 years"},
+}
+
+
 def finanzas_invoices_meli(
     period: str = "30d",
     plan: str = "all",
     tipo: str = "all",
     search: str | None = None,
     limit: int | None = None,
+    chart_granularity: str = "month",
     from_iso: str | None = None,
     to_iso: str | None = None,
 ) -> dict:
@@ -40,6 +50,7 @@ def finanzas_invoices_meli(
     tipo: 'all' | 'FCA' | 'FCB'
     search: prefix-match en numeroComprobante, razon_social, dni, email, fantasy_name
     limit: tope de filas devueltas en items[]. Default None = todo (hard cap 10000).
+    chart_granularity: day|week|month|quarter|year (ventana del trend chart, NO afecta KPIs)
     """
     w = resolve_window(period, from_iso, to_iso)
     eng = get_engine("unidrop")
@@ -138,9 +149,11 @@ def finanzas_invoices_meli(
         "hint": f"{fcb:,} comprobantes",
     })
 
-    # Trend mensual 12m (sin filtros adicionales, solo periodo fijo 12m)
-    rows = q(eng, """
-        SELECT date_trunc('month', ci."fechaEmision")::date AS mes,
+    # Trend con granularidad ajustable
+    gran = chart_granularity if chart_granularity in _GRAN_CONFIG else "month"
+    gconf = _GRAN_CONFIG[gran]
+    rows = q(eng, f"""
+        SELECT date_trunc('{gconf['trunc']}', ci."fechaEmision")::date AS bucket,
                COUNT(*)::int AS n,
                COALESCE(SUM(ci.total),0)::float AS total,
                COALESCE(SUM(CASE WHEN ci."tipoFc"='FCA' THEN ci.total ELSE 0 END),0)::float AS total_fca,
@@ -151,21 +164,29 @@ def finanzas_invoices_meli(
         LEFT JOIN public.tienda_nube_orders tn
           ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
         WHERE oml.id IS NULL AND tn.tienda_nube_id IS NULL
-          AND ci."fechaEmision" >= date_trunc('month', NOW() - INTERVAL '11 months')
+          AND ci."fechaEmision" >= date_trunc('{gconf['trunc']}', NOW() - INTERVAL '{gconf['interval']}')
         GROUP BY 1 ORDER BY 1
     """) or []
+
+    def _fmt_bucket(d) -> str:
+        if not d:
+            return ""
+        if gran == "quarter":
+            return f"{d.year}-Q{((d.month - 1) // 3) + 1}"
+        return d.strftime(gconf["fmt"])
+
     trends = [
         {
             "label": "Facturacion total",
-            "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[2] or 0)} for r in rows],
+            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[2] or 0)} for r in rows],
         },
         {
             "label": "FCA",
-            "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[3] or 0)} for r in rows],
+            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[3] or 0)} for r in rows],
         },
         {
             "label": "FCB",
-            "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[4] or 0)} for r in rows],
+            "points": [{"date": _fmt_bucket(r[0]), "value": float(r[4] or 0)} for r in rows],
         },
     ]
 
@@ -277,6 +298,7 @@ def finanzas_invoices_meli(
         "items_truncated": len(items) >= effective_limit,
         "plans": plans,
         "filters": {"plan": plan, "tipo": tipo, "search": search or ""},
+        "chart_granularity": gran,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
@@ -288,7 +310,8 @@ def get_latest_subscription_invoice_for_dni(dni: str) -> dict | None:
         SELECT ci."linkPublico",
                ci."numeroComprobante",
                ci.total::float,
-               ci."fechaEmision"::date::text
+               ci."fechaEmision"::date::text,
+               ci."tipoFc"
         FROM contabillium_dev."ContabilliumInvoice" ci
         LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml
           ON oml.id = ci."idVentaIntegracion"
@@ -309,4 +332,5 @@ def get_latest_subscription_invoice_for_dni(dni: str) -> dict | None:
         "numero": r[1] or "",
         "total": float(r[2] or 0),
         "fecha": r[3] or "",
+        "tipo": r[4] or "",
     }

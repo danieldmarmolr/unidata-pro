@@ -37,6 +37,8 @@ type InvoiceItem = {
 
 type Plan = { id: number; name: string; price: number };
 
+type ChartGranularity = "day" | "week" | "month" | "quarter" | "year";
+
 type Resp = {
   unit: string;
   period: string;
@@ -49,8 +51,17 @@ type Resp = {
   items_truncated: boolean;
   plans: Plan[];
   filters: { plan: string; tipo: string; search: string };
+  chart_granularity: ChartGranularity;
   generated_at: string;
 };
+
+const GRAN_OPTIONS: { value: ChartGranularity; label: string; window: string }[] = [
+  { value: "day", label: "Día", window: "60 días" },
+  { value: "week", label: "Semana", window: "26 semanas" },
+  { value: "month", label: "Mes", window: "24 meses" },
+  { value: "quarter", label: "Trimestre", window: "12 trimestres" },
+  { value: "year", label: "Año", window: "5 años" },
+];
 
 function downloadCsv(items: InvoiceItem[]) {
   const header = [
@@ -92,17 +103,19 @@ export function FacturasSuscripcionesMeliPanel() {
   const [tipo, setTipo] = useState<"all" | "FCA" | "FCB">("all");
   const [searchInput, setSearchInput] = useState<string>("");
   const [search, setSearch] = useState<string>("");
+  const [granularity, setGranularity] = useState<ChartGranularity>("month");
 
   const qs = useMemo(() => {
     const base = new URLSearchParams(periodQs);
     if (plan !== "all") base.set("plan", plan);
     if (tipo !== "all") base.set("tipo", tipo);
     if (search) base.set("search", search);
+    base.set("chart_granularity", granularity);
     return base.toString();
-  }, [periodQs, plan, tipo, search]);
+  }, [periodQs, plan, tipo, search, granularity]);
 
   const { data, isLoading, isFetching, error } = useQuery<Resp>({
-    queryKey: ["dashboards", "finanzas", "invoices-meli", period, customFrom, customTo, plan, tipo, search],
+    queryKey: ["dashboards", "finanzas", "invoices-meli", period, customFrom, customTo, plan, tipo, search, granularity],
     queryFn: () => api(`/api/dashboards/finanzas/invoices-meli?${qs}`),
     staleTime: 60_000,
   });
@@ -152,35 +165,60 @@ export function FacturasSuscripcionesMeliPanel() {
           : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
       </div>
 
-      {/* Trend */}
+      {/* Trend con selector de granularidad */}
       <div className="mb-6">
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
         ) : (
-          <InteractiveMetricChart
-            points={(() => {
-              const map = new Map<string, { date: string; [k: string]: number | string }>();
-              for (const s of (data.trends || [])) {
-                for (const p of (s.points || [])) {
-                  const existing = map.get(p.date) ?? { date: p.date };
-                  existing[s.label] = p.value;
-                  map.set(p.date, existing);
+          <div className="bg-surface border border-border rounded-xl p-4 sm:p-5">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-3">
+              <div>
+                <div className="text-sm font-bold text-text">Facturacion suscripciones MELI</div>
+                <div className="text-xs text-text-muted mt-0.5">
+                  Ventana: {GRAN_OPTIONS.find((g) => g.value === granularity)?.window}
+                  {" · "}FCA = Responsable Inscripto / Monotributo · FCB = Consumidor Final
+                </div>
+              </div>
+              <div className="inline-flex bg-soft border border-border rounded-lg p-1">
+                {GRAN_OPTIONS.map((g) => (
+                  <button
+                    key={g.value}
+                    type="button"
+                    onClick={() => setGranularity(g.value)}
+                    className={`px-2.5 py-1 text-xs font-semibold rounded-md transition whitespace-nowrap ${
+                      granularity === g.value
+                        ? "bg-surface text-primary shadow-sm"
+                        : "text-text-muted hover:text-primary"
+                    }`}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <InteractiveMetricChart
+              points={(() => {
+                const map = new Map<string, { date: string; [k: string]: number | string }>();
+                for (const s of (data.trends || [])) {
+                  for (const p of (s.points || [])) {
+                    const existing = map.get(p.date) ?? { date: p.date };
+                    existing[s.label] = p.value;
+                    map.set(p.date, existing);
+                  }
                 }
-              }
-              return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
-            })()}
-            metrics={(data.trends || []).map((s, i) => ({
-              key: s.label,
-              label: s.label,
-              kind: "currency" as const,
-              color: ["#7a3eae", "#10b981", "#f59e0b"][i % 3],
-            }))}
-            defaultPrimary={data.trends?.[0]?.label}
-            defaultSecondary={data.trends?.[1]?.label}
-            caption="Facturacion suscripciones MELI (12 meses)"
-            subtitle="FCA = Responsable Inscripto / Monotributo · FCB = Consumidor Final"
-            height={320}
-          />
+                return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
+              })()}
+              metrics={(data.trends || []).map((s, i) => ({
+                key: s.label,
+                label: s.label,
+                kind: "currency" as const,
+                color: ["#7a3eae", "#10b981", "#f59e0b"][i % 3],
+              }))}
+              defaultPrimary={data.trends?.[0]?.label}
+              defaultSecondary={data.trends?.[1]?.label}
+              height={320}
+            />
+          </div>
         )}
       </div>
 
