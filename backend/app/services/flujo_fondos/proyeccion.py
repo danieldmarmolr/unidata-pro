@@ -282,7 +282,99 @@ def construir_proyeccion(
                 "total_semanal_ponderado": round(p.total_semanal_ponderado, 2),
                 "total_semanal_simple": round(p.total_semanal_simple, 2),
                 "filas_usadas": p.filas_usadas,
+                "por_dow": {
+                    str(d): {"ponderado": round(p.por_dow[d].ponderado, 2),
+                              "simple": round(p.por_dow[d].simple, 2),
+                              "n": p.por_dow[d].n,
+                              "desvio_pct": round(p.por_dow[d].desvio_pct, 1)}
+                    for d in range(7)
+                },
             }
             for p in promedios_por_unidad.values()
         ],
     }
+
+
+# ============================================================
+# Motor de pagos atrasados - sugerencias de re-fecha
+# (port de src/lib/pagos-atrasados.ts)
+# ============================================================
+
+HORIZONTE_BUSQUEDA_DIAS = 60
+COLCHON_DEFAULT = 6_000_000
+
+
+def _calcular_saldos_diarios_pa(
+    *, saldo_inicial: float, hoy: date, horizonte: int,
+    promedios: list[PromediosUnidad], erogaciones: list[dict],
+    ingresos_puntuales: list[dict],
+) -> list[float]:
+    """Saldo al cierre de cada dia, para el motor de pagos atrasados."""
+    erog_por_fecha: dict[str, float] = {}
+    for er in erogaciones:
+        if er["estado"] in ("pagado", "cancelado", "rechazado"):
+            continue
+        erog_por_fecha[er["fecha_pago"]] = erog_por_fecha.get(er["fecha_pago"], 0) + er["monto"]
+    ing_por_fecha: dict[str, float] = {}
+    for ip in ingresos_puntuales:
+        ing_por_fecha[ip["fecha"]] = ing_por_fecha.get(ip["fecha"], 0) + ip["monto"]
+
+    saldos: list[float] = []
+    saldo = saldo_inicial
+    for i in range(horizonte):
+        fecha_dia = hoy + timedelta(days=i)
+        fecha_str = fecha_dia.isoformat()
+        egreso = erog_por_fecha.get(fecha_str, 0)
+        ing_punt = ing_por_fecha.get(fecha_str, 0)
+        # Dia 0: el saldo inicial ya incluye lo facturado hoy
+        ing_prom = 0 if i == 0 else sum(proyectar_monto_unidad(p, fecha_dia) for p in promedios)
+        saldo = saldo + ing_prom + ing_punt - egreso
+        saldos.append(saldo)
+    return saldos
+
+
+def sugerir_fechas_pagos_atrasados(
+    *, pagos_atrasados: list[dict], saldo_inicial: float, hoy: date,
+    promedios: list[PromediosUnidad], erogaciones_futuras: list[dict],
+    ingresos_puntuales: list[dict], colchon: float = COLCHON_DEFAULT,
+    horizonte: int = HORIZONTE_BUSQUEDA_DIAS,
+) -> list[dict]:
+    """
+    Para cada pago atrasado, sugiere primera fecha futura donde colocarlo no
+    haga caer el saldo por debajo del colchon hasta el fin del horizonte.
+
+    `pagos_atrasados`: list of {id, monto, prioridad_atraso, dias_atraso, ...}
+    `erogaciones_futuras`: ya con fecha efectiva (tentativa o real)
+    """
+    # Ordenar: normal primero, dentro de cada grupo mas atrasados primero
+    def _key(p):
+        prio = 0 if p["prioridad_atraso"] == "normal" else 1
+        return (prio, -p["dias_atraso"])
+
+    ordenados = sorted(pagos_atrasados, key=_key)
+    erogs_acum = list(erogaciones_futuras)
+    resultados: list[dict] = []
+
+    for pago in ordenados:
+        fecha_sugerida: str | None = None
+        for d in range(1, horizonte):
+            fecha_dia = hoy + timedelta(days=d)
+            fecha_str = fecha_dia.isoformat()
+            erogs_candidato = erogs_acum + [{
+                "fecha_pago": fecha_str, "monto": pago["monto"], "estado": "pendiente",
+            }]
+            saldos = _calcular_saldos_diarios_pa(
+                saldo_inicial=saldo_inicial, hoy=hoy, horizonte=horizonte,
+                promedios=promedios, erogaciones=erogs_candidato,
+                ingresos_puntuales=ingresos_puntuales,
+            )
+            viable = all(s >= colchon for s in saldos[d:])
+            if viable:
+                fecha_sugerida = fecha_str
+                break
+
+        if fecha_sugerida:
+            erogs_acum.append({"fecha_pago": fecha_sugerida, "monto": pago["monto"], "estado": "pendiente"})
+        resultados.append({"id": pago["id"], "fecha_sugerida": fecha_sugerida})
+
+    return resultados
