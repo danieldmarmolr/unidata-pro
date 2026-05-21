@@ -48,6 +48,8 @@ import {
   BookOpen,
   Cog,
   Cpu,
+  PiggyBank,
+  ExternalLink,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -69,6 +71,8 @@ type NavItem = {
   /** Si presente, colaboradores con esas areas (o gerentes/admin) lo ven. */
   areas?: AreaSlug[];
   children?: NavItem[];
+  /** Sub-app sincronizada que vive en otro subdominio (ej. flujo-fondos). Abre en nueva tab. */
+  external?: boolean;
 };
 
 const ALL: Role[] = ["admin", "user", "gerencia", "analista", "lector"];
@@ -130,9 +134,10 @@ const ITEMS: NavItem[] = [
     roles: ONLY_GERENCIA,
     areas: ["finanzas", "administracion"],
     children: [
-      { label: "Vista general",          href: "/dashboard/finanzas",                                icon: Wallet    },
-      { label: "Facturas Suscripciones", href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText  },
-      { label: "Dev. Suscripciones",     href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw },
+      { label: "Vista general",            href: "/dashboard/finanzas",                                icon: Wallet     },
+      { label: "Facturas Suscripciones",   href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText   },
+      { label: "Dev. Suscripciones",       href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw  },
+      { label: "Caja (Flujo de Fondos)",   href: "https://caja.unidatacenter.com.ar",                  icon: PiggyBank, external: true },
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ONLY_GERENCIA, areas: ["logistica", "ventas"] },
@@ -441,16 +446,32 @@ export function Sidebar({
                             {it.children!.map((c) => {
                               const CI = c.icon;
                               const cActive = isActive(c.href);
+                              const childClass = cn(
+                                "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
+                                cActive
+                                  ? "bg-white/15 text-white shadow-inner"
+                                  : "text-white/65 hover:text-white hover:bg-white/8",
+                              );
+                              if (c.external) {
+                                return (
+                                  <a
+                                    key={c.href}
+                                    href={c.href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className={childClass}
+                                  >
+                                    <CI size={12} className="shrink-0 opacity-75" />
+                                    <span className="flex-1 truncate">{c.label}</span>
+                                    <ExternalLink size={11} className="shrink-0 opacity-60" />
+                                  </a>
+                                );
+                              }
                               return (
                                 <Link
                                   key={c.href}
                                   href={c.href}
-                                  className={cn(
-                                    "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
-                                    cActive
-                                      ? "bg-white/15 text-white shadow-inner"
-                                      : "text-white/65 hover:text-white hover:bg-white/8",
-                                  )}
+                                  className={childClass}
                                 >
                                   <CI size={12} className="shrink-0 opacity-75" />
                                   <span className="flex-1 truncate">{c.label}</span>

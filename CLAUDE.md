@@ -33,6 +33,7 @@ App productiva en `https://app.unidatacenter.com.ar`
 | `frontend` | `app.unidatacenter.com.ar` | `frontend/` | Sí (push a main) |
 | `backend` | `api.unidatacenter.com.ar` | `backend/` | Sí (push a main) |
 | `mcp` | `mcp-production-b8c5.up.railway.app` | `mcp/` | Sí (push a main) |
+| `flujo-fondos` | `caja.unidatacenter.com.ar` | `services/flujo-fondos/` | Sí (push a main) — sub-app sincronizada vía git subtree desde `pedroabba123/flujo-fondos` |
 
 Deploy manual cuando hace falta:
 ```bash
@@ -431,6 +432,26 @@ railway deployment list --service backend
 
 ---
 
+## Sub-apps sincronizadas (Modo B del skill `port-to-unidata`)
+
+UNIDATA absorbe apps externas full-stack vivas en otros repos GitHub vendorizándolas con `git subtree --squash`. NO se reescriben al stack UNIDATA — viven con su propio stack en un service Railway separado y subdominio propio. UNIDATA aporta el sidebar entry + sync workflow + control de DB/auth (eventualmente).
+
+| Sub-app | Repo upstream | Dueño | Subdominio | Path | Sync script |
+|---------|---------------|-------|------------|------|-------------|
+| Flujo de Fondos (tesorería) | [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos) | Pedro Abbiati (`pedro.abbiati@unistore.ar`) | `caja.unidatacenter.com.ar` | `services/flujo-fondos/` | `pwsh scripts/sync-flujo-fondos.ps1` |
+
+### Reglas críticas
+
+1. **NUNCA editar archivos dentro de `services/<slug>/` localmente** — rompe el sync con upstream. Si necesitás un cambio, abrí PR al repo del dueño.
+2. **El sync se hace en branch dedicada**, no en `main`. El script tiene una guarda pero se puede bypassear con `y`.
+3. **Auth fase 1**: cada sub-app mantiene su auth original (Supabase Auth de Pedro, etc.). El usuario hace doble login. Fase 2 (futuro) puede bridgear JWT UNIDATA.
+4. **DB**: idealmente migrar al Supabase de UNIDATA (schema dedicado por sub-app, ej. `flujo_fondos`) para que IT controle backups + access.
+5. **Sidebar**: usar `external: true` en el child del nav item — el renderer usa `<a target="_blank">` con icono `ExternalLink`.
+
+Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.md) y el skill `~/.claude/skills/port-to-unidata/SKILL.md` (sección "Paso 4b — Modo B").
+
+---
+
 ## Roadmap (estado al 2026-05-16)
 
 100% del scope original cerrado. Sprint adicional (2026-05-13 → 2026-05-16) agregó:
@@ -446,3 +467,4 @@ railway deployment list --service backend
 - **Meta Ads integration** — esperando token + ad account IDs de Tomi para sync
 - **US-XXX** Contabilium drilldown desde modal (link existe, integración profunda pendiente)
 - **US-XXX** Forecast con segmentación combo vs individual
+- **Flujo de Fondos sub-app** (2026-05-21): subtree vendorizado en `services/flujo-fondos`, sidebar wired. Pendiente: dump DB de Supabase de Pedro → schema `flujo_fondos` en Supabase UNIDATA · crear service Railway `flujo-fondos` · DNS `caja.unidatacenter.com.ar` · coordinar con Pedro
