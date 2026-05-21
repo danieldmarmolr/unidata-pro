@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.auth.security import current_user, require_area
 from app.db import refund_requests_db
 from app.services.refund_requests.unidrop_api_client import unassign_meli_subscription
+from app.services.finanzas_invoices_meli import get_latest_subscription_invoice_for_dni
 
 log = logging.getLogger("unidata.api.refund_requests")
 
@@ -130,6 +131,19 @@ def cancel_integration(
         )
     log.info("request %s: integracion MELI cancelada por %s", request_id, user["email"])
     return result
+
+
+@router.get("/{request_id}/invoice-url")
+def invoice_url(
+    request_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    require_area(user, _AREAS)
+    row = refund_requests_db.get_request(request_id)
+    if not row:
+        raise HTTPException(404, "Solicitud no encontrada")
+    result = get_latest_subscription_invoice_for_dni(row["dropshipper_dni"])
+    return result or {"url": None, "numero": "", "total": 0.0, "fecha": ""}
 
 
 @router.post("/{request_id}/reject")

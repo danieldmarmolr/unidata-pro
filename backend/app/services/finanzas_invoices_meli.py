@@ -279,3 +279,34 @@ def finanzas_invoices_meli(
         "filters": {"plan": plan, "tipo": tipo, "search": search or ""},
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
+
+
+def get_latest_subscription_invoice_for_dni(dni: str) -> dict | None:
+    """Devuelve la ultima factura Contabilium de suscripcion MELI para un DNI dado."""
+    eng = get_engine("unidrop")
+    rows = q(eng, """
+        SELECT ci."linkPublico",
+               ci."numeroComprobante",
+               ci.total::float,
+               ci."fechaEmision"::date::text
+        FROM contabillium_dev."ContabilliumInvoice" ci
+        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml
+          ON oml.id = ci."idVentaIntegracion"
+        LEFT JOIN public.tienda_nube_orders tn
+          ON tn.tienda_nube_id::text = ci."idVentaIntegracion"::text
+        LEFT JOIN contabillium_dev."ContabiliumClient" cc
+          ON cc.contabilium_id = ci."idCliente"
+        WHERE oml.id IS NULL AND tn.tienda_nube_id IS NULL
+          AND cc.nro_doc = :dni
+        ORDER BY ci."fechaEmision" DESC NULLS LAST
+        LIMIT 1
+    """, {"dni": dni})
+    if not rows:
+        return None
+    r = rows[0]
+    return {
+        "url": r[0] or None,
+        "numero": r[1] or "",
+        "total": float(r[2] or 0),
+        "fecha": r[3] or "",
+    }

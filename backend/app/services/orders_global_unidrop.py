@@ -48,7 +48,8 @@ def _fetch_ml(eng, from_ts: dt.datetime, to_ts: dt.datetime) -> list[dict]:
             COALESCE(o."shipping_cost", 0)::float                                 AS shipping_cost,
             COALESCE(o."profit_for_subscription", 0)::float                       AS profit_unidrop,
             COALESCE(o."buyer_name", '')                                          AS buyer_name,
-            COALESCE(o."shipping_option_reference", '')                           AS shipping_type,
+            COALESCE(NULLIF(o."shipping_carrier", ''),
+                     o."shipping_option_reference", '')                           AS shipping_type,
             COALESCE(o."label_downloaded", FALSE)                                 AS label_downloaded,
             COALESCE(o."cancel_by_unidrop", FALSE)                                AS cancel_by_unidrop,
             COALESCE(o.tags, ARRAY[]::text[])                                     AS tags

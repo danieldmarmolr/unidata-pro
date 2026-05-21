@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X,
+  RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X, Receipt,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
@@ -46,6 +46,8 @@ type Request = {
 };
 
 type Resp = { items: Request[]; count: number };
+
+type InvoiceUrlResp = { url: string | null; numero: string; total: number; fecha: string };
 
 const ABANDONMENT_LABELS: Record<string, string> = {
   costo_muy_alto:               "Costo muy alto",
@@ -251,6 +253,13 @@ function RequestCard({ request: r }: { request: Request }) {
     },
   });
 
+  const { data: invoiceData } = useQuery<InvoiceUrlResp>({
+    queryKey: ["refund-invoice", r.id],
+    queryFn: () => api(`/api/refund-requests/${r.id}/invoice-url`),
+    enabled: open,
+    staleTime: 300_000,
+  });
+
   return (
     <div className={`border-2 rounded-xl ${meta.bg} ${meta.border}`}>
       <div className="p-4 flex items-start gap-3">
@@ -401,6 +410,18 @@ function RequestCard({ request: r }: { request: Request }) {
             >
               <ExternalLink size={12} /> Vista 360
             </Link>
+
+            {invoiceData?.url && (
+              <a
+                href={invoiceData.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={invoiceData.numero ? `Factura ${invoiceData.numero} · ${fmtMoney(invoiceData.total)}` : "Ver factura Contabilium"}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs font-semibold text-text hover:bg-bg transition"
+              >
+                <Receipt size={12} /> Ver factura
+              </a>
+            )}
 
             {r.status === "pending" && (
               <>
