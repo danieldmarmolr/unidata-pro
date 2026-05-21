@@ -7,6 +7,11 @@ backend/users.db*
 backend/costs.db*
 backend/keys/
 
+# Migration/one-shot scripts con creds en el codigo (prefijo _)
+scripts/_*.py
+scripts/_*.ps1
+scripts/_*.sh
+
 # llaves SSH — NUNCA subir
 *.pem
 *.key

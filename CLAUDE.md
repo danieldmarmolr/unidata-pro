@@ -431,6 +431,32 @@ railway deployment list --service backend
 
 ---
 
+## Flujo de Fondos — port nativo a UNIDATA (en progreso)
+
+ERP de tesorería del grupo desarrollado por **Pedro Abbiati** (`pedro.abbiati@unistore.ar`) originalmente en [`pedroabba123/flujo-fondos`](https://github.com/pedroabba123/flujo-fondos) (Next.js + Drizzle + Supabase Auth).
+
+**Decisión 2026-05-21**: NO mantenemos como sub-app sincronizada con sub-dominio propio. Lo portamos al stack UNIDATA (FastAPI + Next.js + JWT propio + RBAC nativo) para que viva como una pantalla más bajo `Cross > Finanzas > Flujo de Fondos`.
+
+| Componente | Estado |
+|------------|--------|
+| DB migrada al Supabase UNIDATA (11 tablas + 538 filas + 9 enums + user) | ✅ Hecho |
+| Subtree `services/flujo-fondos/` como **referencia de código** (NO se deploya) | ✅ Mantenido |
+| Backend FastAPI `/api/flujo-fondos/*` (modelos SQLAlchemy + endpoints) | 🟡 En progreso |
+| Frontend Next.js `dashboard/finanzas/flujo-fondos/*` | 🟡 En progreso |
+| Sidebar entry interno bajo `Cross > Finanzas > Flujo de Fondos` | ✅ Wired |
+
+### Reglas
+
+1. **El subtree `services/flujo-fondos/` es solo referencia.** No deployar. No editar. Las features se portan a `backend/app/services/flujo_fondos/` y `frontend/app/dashboard/finanzas/flujo-fondos/`.
+2. **DB compartida con UNIDATA**: las 11 tablas viven en `public` del Supabase UNIDATA. SQLAlchemy del backend las mapea directamente.
+3. **Auth**: usar el JWT propio de UNIDATA, no Supabase Auth. La tabla `perfiles` queda obsoleta para el port nativo (Pedro será un user normal de UNIDATA con area_slug=finanzas).
+4. **RBAC**: cada endpoint con `require_area(["finanzas", "administracion"])` (admin/gerencia bypass automático).
+5. **Lógica compleja a portar**: `proyeccion.ts` (motor central), `pagos-atrasados.ts` (sugerencias), `detectar-patrones.ts`, `DIFERIMIENTO_POR_UNIDAD` (Unistore Mayorista cobra día X+1).
+
+Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.md).
+
+---
+
 ## Roadmap (estado al 2026-05-16)
 
 100% del scope original cerrado. Sprint adicional (2026-05-13 → 2026-05-16) agregó:
@@ -446,3 +472,4 @@ railway deployment list --service backend
 - **Meta Ads integration** — esperando token + ad account IDs de Tomi para sync
 - **US-XXX** Contabilium drilldown desde modal (link existe, integración profunda pendiente)
 - **US-XXX** Forecast con segmentación combo vs individual
+- **Flujo de Fondos port nativo** (2026-05-21): pivote a port nativo (NO sub-app). DB ya migrada a Supabase UNIDATA. Subtree `services/flujo-fondos/` como referencia. Pendiente: backend FastAPI + frontend Next.js portados al stack UNIDATA. Fase 1 = home + erogaciones + proyección.

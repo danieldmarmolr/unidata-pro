@@ -1,0 +1,1 @@
+ALTER TABLE "erogaciones" ADD COLUMN "oculto" boolean DEFAULT false NOT NULL;
