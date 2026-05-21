@@ -832,6 +832,67 @@ def delete_facturacion(fid: int) -> bool:
 # KPIs
 # ============================================================
 
+def busqueda_global(query: str, limit_each: int = 6) -> dict:
+    """Busqueda global para Cmd+K: proveedores + erogaciones + acuerdos.
+
+    Match contains case-insensitive en nombres/descripciones/compromisos.
+    """
+    q = query.strip()
+    if not q:
+        return {"proveedores": [], "erogaciones": [], "acuerdos": []}
+    like = f"%{q}%"
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, nombre, cuit, prioridad::text AS prioridad, saldo_pendiente
+            FROM public."proveedores"
+            WHERE nombre ILIKE %s OR cuit ILIKE %s
+            ORDER BY nombre LIMIT %s
+            """,
+            (like, like, limit_each),
+        )
+        proveedores = [
+            {"id": int(r["id"]), "nombre": r["nombre"], "cuit": r["cuit"],
+             "prioridad": r["prioridad"], "saldo_pendiente": float(r["saldo_pendiente"]) if r["saldo_pendiente"] else 0}
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            """
+            SELECT e.id, e.fecha_pago::text AS fecha_pago, e.descripcion, e.monto, e.estado::text AS estado,
+                   p.nombre AS proveedor_nombre
+            FROM public."erogaciones" e
+            LEFT JOIN public."proveedores" p ON p.id = e.proveedor_id
+            WHERE e.oculto = FALSE AND (e.descripcion ILIKE %s OR e.notas ILIKE %s OR e.categoria ILIKE %s)
+            ORDER BY e.fecha_pago DESC LIMIT %s
+            """,
+            (like, like, like, limit_each),
+        )
+        erogaciones = [
+            {"id": int(r["id"]), "fecha_pago": r["fecha_pago"], "descripcion": r["descripcion"],
+             "monto": float(r["monto"]), "estado": r["estado"], "proveedor_nombre": r["proveedor_nombre"]}
+            for r in cur.fetchall()
+        ]
+        cur.execute(
+            """
+            SELECT a.id, a.compromiso, a.tipo::text AS tipo, a.estado::text AS estado,
+                   a.fecha_compromiso::text AS fecha_compromiso, a.proveedor_id,
+                   p.nombre AS proveedor_nombre
+            FROM public."acuerdos" a
+            LEFT JOIN public."proveedores" p ON p.id = a.proveedor_id
+            WHERE a.compromiso ILIKE %s OR a.contexto ILIKE %s OR p.nombre ILIKE %s
+            ORDER BY a.created_at DESC LIMIT %s
+            """,
+            (like, like, like, limit_each),
+        )
+        acuerdos = [
+            {"id": int(r["id"]), "compromiso": r["compromiso"], "tipo": r["tipo"],
+             "estado": r["estado"], "fecha_compromiso": r["fecha_compromiso"],
+             "proveedor_id": r["proveedor_id"], "proveedor_nombre": r["proveedor_nombre"]}
+            for r in cur.fetchall()
+        ]
+    return {"proveedores": proveedores, "erogaciones": erogaciones, "acuerdos": acuerdos, "query": q}
+
+
 def home_dashboard() -> dict:
     """Datos extra para home: tendencia facturacion 60d + distribucion gastos mes + acuerdos urgentes + setup."""
     with get_conn() as c, c.cursor() as cur:

@@ -67,6 +67,17 @@ def get_home_dashboard(user: Annotated[dict, Depends(current_user)]) -> dict:
     return ff.home_dashboard()
 
 
+@router.get("/search")
+def search_global(
+    user: Annotated[dict, Depends(current_user)],
+    q: Annotated[str, Query(min_length=1, max_length=100)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 6,
+) -> dict:
+    """Busqueda global para Cmd+K: proveedores + erogaciones + acuerdos."""
+    _guard(user)
+    return ff.busqueda_global(q, limit_each=limit)
+
+
 # ============================================================
 # Erogaciones
 # ============================================================

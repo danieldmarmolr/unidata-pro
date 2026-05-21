@@ -1,9 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Topbar } from "@/components/topbar";
 import { cn } from "@/lib/utils";
+import { CommandPalette } from "./_components/CommandPalette";
 import {
   PiggyBank,
   Receipt,
@@ -90,6 +92,19 @@ function findActive(pathname: string): { group: NavGroup; item: NavItem } {
 export default function FlujoFondosLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { group: activeGroup, item: activeItem } = findActive(pathname);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
+
+  // Hotkey Cmd+K / Ctrl+K
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCmdkOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <>
@@ -147,7 +162,16 @@ export default function FlujoFondosLayout({ children }: { children: React.ReactN
         </nav>
       )}
 
+      {/* Hint discreto del shortcut en una pequeña barra inferior del header de nav */}
+      <div className="px-4 sm:px-6 lg:px-8 -mt-px pb-1 pt-1 border-b border-border bg-surface text-[10px] text-text-muted flex justify-end">
+        <button onClick={() => setCmdkOpen(true)} className="flex items-center gap-1 hover:text-text">
+          Buscar · <kbd className="px-1 py-0.5 bg-soft border border-border rounded text-[9px]">Ctrl K</kbd>
+        </button>
+      </div>
+
       {children}
+
+      <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} />
     </>
   );
 }
