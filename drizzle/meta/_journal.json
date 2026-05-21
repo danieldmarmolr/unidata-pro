@@ -1,0 +1,83 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1778691514782,
+      "tag": "0000_dark_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1778691654609,
+      "tag": "0001_enable_rls_base_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1778692066221,
+      "tag": "0002_parched_azazel",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1778692096889,
+      "tag": "0003_enable_rls_transactional_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1778692514565,
+      "tag": "0004_gorgeous_blur",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1778692529513,
+      "tag": "0005_auth_setup",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1778696117117,
+      "tag": "0006_cool_ted_forrester",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1778696128084,
+      "tag": "0007_enable_rls_acuerdos",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1778782183367,
+      "tag": "0008_tense_mockingbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779124332873,
+      "tag": "0009_tense_leech",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779209431105,
+      "tag": "0010_material_sauron",
+      "breakpoints": true
+    }
+  ]
+}
