@@ -139,12 +139,19 @@ def _latest_talo_account(eng, user_id: int) -> dict | None:
 
 
 def _last_subscription_payment(eng, user_id: int) -> dict | None:
-    """Ultimo PaymentIntentSubscription PROCESSED del user — el cobro mas reciente."""
+    """Ultimo PaymentIntentSubscription PROCESSED del user — el cobro mas reciente.
+
+    Usamos expectedAmount (monto bruto del cobro = lo que el dropshipper
+    efectivamente debio pagar) y NO paidAmount (que ya tiene descontados los
+    intereses/fees de TaloPay). Para devoluciones se reembolsa el bruto.
+    """
     pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
     if not pis_cols or "userId" not in pis_cols:
         return None
-    amount_col = '"paidAmount"' if "paidAmount" in pis_cols else (
-        '"amount"' if "amount" in pis_cols else "0"
+    amount_col = '"expectedAmount"' if "expectedAmount" in pis_cols else (
+        '"paidAmount"' if "paidAmount" in pis_cols else (
+            '"amount"' if "amount" in pis_cols else "0"
+        )
     )
     sql = text(f"""
         SELECT COALESCE({amount_col}, 0)::float AS paid_amount,
@@ -170,12 +177,19 @@ def _last_subscription_payment(eng, user_id: int) -> dict | None:
 
 
 def _paid_subscription_snapshot(eng, user_id: int) -> dict:
-    """Suma de paidAmount de PaymentIntentSubscription PROCESSED para el user."""
+    """Suma de expectedAmount de PaymentIntentSubscription PROCESSED para el user.
+
+    Usamos expectedAmount (bruto, lo que el dropshipper debio pagar) en vez de
+    paidAmount (neto despues de intereses/fees de TaloPay). El reembolso se
+    calcula sobre el bruto.
+    """
     pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
     if not pis_cols or "userId" not in pis_cols:
         return {"total_arg": 0.0, "count": 0}
-    amount_col = '"paidAmount"' if "paidAmount" in pis_cols else (
-        '"amount"' if "amount" in pis_cols else "0"
+    amount_col = '"expectedAmount"' if "expectedAmount" in pis_cols else (
+        '"paidAmount"' if "paidAmount" in pis_cols else (
+            '"amount"' if "amount" in pis_cols else "0"
+        )
     )
 
     sql = text(f"""
