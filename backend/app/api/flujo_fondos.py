@@ -150,6 +150,36 @@ def delete_erogacion(eid: int, user: Annotated[dict, Depends(current_user)]):
         raise HTTPException(404, "Erogacion no encontrada")
 
 
+class BulkErogacionesUpdate(BaseModel):
+    ids: list[int]
+    changes: ErogacionUpdate
+
+
+class BulkErogacionesDelete(BaseModel):
+    ids: list[int]
+
+
+@router.post("/erogaciones/bulk-update")
+def bulk_update_erogaciones(body: BulkErogacionesUpdate, user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    data = body.changes.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(400, "Sin campos para actualizar")
+    if not body.ids:
+        raise HTTPException(400, "Sin ids")
+    count = ff.bulk_update_erogaciones(body.ids, data)
+    return {"updated": count}
+
+
+@router.post("/erogaciones/bulk-delete")
+def bulk_delete_erogaciones(body: BulkErogacionesDelete, user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    if not body.ids:
+        raise HTTPException(400, "Sin ids")
+    count = ff.bulk_delete_erogaciones(body.ids)
+    return {"deleted": count}
+
+
 # ============================================================
 # Proyeccion
 # ============================================================
@@ -379,6 +409,20 @@ def delete_recurrencia(rid: int, user: Annotated[dict, Depends(current_user)]):
     _guard(user)
     if not ff.delete_recurrencia(rid):
         raise HTTPException(404, "No encontrada")
+
+
+@router.post("/recurrencias/{rid}/generar")
+def generar_erogaciones(
+    rid: int,
+    user: Annotated[dict, Depends(current_user)],
+    dias: Annotated[int, Query(ge=1, le=365)] = 90,
+) -> dict:
+    """Genera erogaciones pendientes desde una recurrencia hacia adelante N dias."""
+    _guard(user)
+    try:
+        return ff.generar_erogaciones_desde_recurrencia(rid, dias=dias)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ============================================================
@@ -616,6 +660,12 @@ def get_calendario(
     return ff.calendario_mensual(y, m)
 
 
+@router.get("/calendario/dia/{fecha}")
+def get_calendario_dia(fecha: str, user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    return ff.calendario_detalle_dia(fecha)
+
+
 # ============================================================
 # Maestros: Empresas
 # ============================================================
@@ -790,6 +840,15 @@ def list_proveedores(user: Annotated[dict, Depends(current_user)]) -> dict:
     _guard(user)
     items = ff.list_proveedores()
     return {"items": items, "count": len(items)}
+
+
+@router.get("/proveedores/{pid}/ficha")
+def proveedor_ficha(pid: int, user: Annotated[dict, Depends(current_user)]) -> dict:
+    _guard(user)
+    f = ff.proveedor_ficha(pid)
+    if not f:
+        raise HTTPException(404, "Proveedor no encontrado")
+    return f
 
 
 @router.post("/proveedores", status_code=201)

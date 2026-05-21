@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Loader2, Zap } from "lucide-react";
 import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
 import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs, fmtDate } from "../_components/helpers";
@@ -15,7 +15,7 @@ type Recurrencia = {
   activa: boolean; proveedor_nombre?: string; empresa_nombre?: string; banco_nombre?: string;
 };
 type Maestro = { id: number; nombre: string };
-const FRECUENCIAS = ["mensual", "semanal", "quincenal", "trimestral", "anual", "custom"] as const;
+const FRECUENCIAS = ["semanal", "quincenal", "mensual", "trimestral", "anual", "custom"] as const;
 
 export default function RecurrenciasPage() {
   const qc = useQueryClient();
@@ -26,6 +26,15 @@ export default function RecurrenciasPage() {
   const empresas = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "empresas"], queryFn: () => api("/api/flujo-fondos/empresas"), staleTime: 5 * 60_000 });
   const bancos = useQuery<{ items: Maestro[] }>({ queryKey: ["ff", "bancos"], queryFn: () => api("/api/flujo-fondos/bancos"), staleTime: 5 * 60_000 });
   const del = useMutation({ mutationFn: (id: number) => api(`/api/flujo-fondos/recurrencias/${id}`, { method: "DELETE" }), onSuccess: () => qc.invalidateQueries({ queryKey: ["ff", "recurrencias"] }) });
+  const generar = useMutation({
+    mutationFn: (id: number) => api<{ creadas: number; salteadas: number; horizonte_dias: number }>(`/api/flujo-fondos/recurrencias/${id}/generar?dias=90`, { method: "POST" }),
+    onSuccess: (data) => {
+      alert(`✓ ${data.creadas} erogaciones creadas, ${data.salteadas} ya existian.`);
+      qc.invalidateQueries({ queryKey: ["ff", "erogaciones"] });
+      qc.invalidateQueries({ queryKey: ["ff", "kpis"] });
+    },
+    onError: (err) => alert(`Error: ${(err as Error).message}`),
+  });
 
   const columns: Column<Recurrencia>[] = [
     { key: "descripcion", label: "Descripcion", getValue: (r) => r.descripcion },
@@ -63,6 +72,7 @@ export default function RecurrenciasPage() {
           emptyLabel="Aun no hay recurrencias definidas"
           renderActions={(r) => (
             <>
+              <button onClick={() => { if (r.activa && confirm(`Generar erogaciones de "${r.descripcion}" para los proximos 90 dias?`)) generar.mutate(r.id); }} disabled={!r.activa || generar.isPending} className="text-text-muted hover:text-amber-600 p-1 disabled:opacity-40" title={r.activa ? "Generar 90 dias de erogaciones" : "Pausada - no se puede generar"}><Zap size={14} /></button>
               <button onClick={() => setEditing(r)} className="text-text-muted hover:text-primary p-1"><Pencil size={14} /></button>
               <button onClick={() => { if (confirm(`Eliminar recurrencia?`)) del.mutate(r.id); }} className="text-text-muted hover:text-rose-600 p-1"><Trash2 size={14} /></button>
             </>

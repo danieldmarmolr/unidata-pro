@@ -328,6 +328,34 @@ def delete_erogacion(eid: int) -> bool:
         return cur.rowcount > 0
 
 
+def bulk_update_erogaciones(ids: list[int], data: dict) -> int:
+    """Update masivo. Devuelve count de filas afectadas."""
+    if not ids:
+        return 0
+    sets, params = [], []
+    for k, v in data.items():
+        if k not in _EROG_UPD:
+            continue
+        sets.append(f'"{k}" = %s'); params.append(v)
+    if not sets:
+        return 0
+    sets.append('"updated_at" = NOW()')
+    if data.get("estado") == "pagado":
+        sets.append('"pagado_at" = COALESCE("pagado_at", NOW())')
+    params.append(ids)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f'UPDATE public."erogaciones" SET {", ".join(sets)} WHERE id = ANY(%s)', params)
+        return cur.rowcount
+
+
+def bulk_delete_erogaciones(ids: list[int]) -> int:
+    if not ids:
+        return 0
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute('DELETE FROM public."erogaciones" WHERE id = ANY(%s)', (ids,))
+        return cur.rowcount
+
+
 # ============================================================
 # Recurrencias
 # ============================================================
@@ -386,6 +414,182 @@ def delete_recurrencia(rid: int) -> bool:
     with get_conn() as c, c.cursor() as cur:
         cur.execute('DELETE FROM public."recurrencias" WHERE id = %s', (rid,))
         return cur.rowcount > 0
+
+
+def get_recurrencia(rid: int) -> dict | None:
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute('SELECT * FROM public."recurrencias" WHERE id = %s', (rid,))
+        return _to_dict(cur.fetchone())
+
+
+def generar_erogaciones_desde_recurrencia(rid: int, dias: int = 90) -> dict:
+    """
+    Genera erogaciones pendientes desde una recurrencia hacia el futuro (N dias).
+    No duplica: si ya existe una erogacion con `recurrencia_id=rid` y `fecha_pago`
+    en una fecha calculada, la skipea.
+
+    Devuelve: {creadas: int, salteadas: int, fechas: [iso]}
+    """
+    from datetime import date, timedelta
+    rec = get_recurrencia(rid)
+    if not rec:
+        raise ValueError("Recurrencia no encontrada")
+    if not rec.get("activa"):
+        raise ValueError("Recurrencia pausada")
+    if rec.get("monto_base") is None:
+        raise ValueError("monto_base requerido para generar")
+
+    today = date.today()
+    hasta = today + timedelta(days=dias)
+    fecha_inicio = date.fromisoformat(rec["fecha_inicio"][:10])
+    fecha_fin_str = rec.get("fecha_fin")
+    fecha_fin = date.fromisoformat(fecha_fin_str[:10]) if fecha_fin_str else None
+    freq = rec["frecuencia"]
+
+    delta = {
+        "diaria": timedelta(days=1),
+        "semanal": timedelta(days=7),
+        "quincenal": timedelta(days=15),
+        "mensual": timedelta(days=30),
+        "bimestral": timedelta(days=60),
+        "trimestral": timedelta(days=91),
+        "semestral": timedelta(days=182),
+        "anual": timedelta(days=365),
+    }.get(freq, timedelta(days=30))
+
+    fechas_objetivo: list[date] = []
+    cursor = fecha_inicio
+    while cursor <= hasta:
+        if cursor >= today:
+            if fecha_fin is None or cursor <= fecha_fin:
+                fechas_objetivo.append(cursor)
+        cursor = cursor + delta
+
+    # Verificar cuáles ya existen (por recurrencia_id + fecha_pago)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            'SELECT fecha_pago::text AS f FROM public."erogaciones" WHERE recurrencia_id = %s',
+            (rid,),
+        )
+        ya_existen = {r["f"] for r in cur.fetchall()}
+
+        creadas = 0
+        salteadas = 0
+        fechas_creadas: list[str] = []
+        descripcion = rec["descripcion"]
+        monto = rec["monto_base"]
+        empresa_id = rec.get("empresa_id")
+        banco_id = rec.get("banco_id")
+        proveedor_id = rec.get("proveedor_id")
+
+        if empresa_id is None or banco_id is None:
+            raise ValueError("La recurrencia necesita empresa_id y banco_id para poder generar erogaciones")
+
+        for f in fechas_objetivo:
+            fstr = f.isoformat()
+            if fstr in ya_existen:
+                salteadas += 1
+                continue
+            cur.execute(
+                '''
+                INSERT INTO public."erogaciones"
+                  (fecha_pago, descripcion, monto, empresa_id, banco_id, proveedor_id,
+                   estado, es_recurrente, recurrencia_id)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pendiente', TRUE, %s)
+                ''',
+                (fstr, descripcion, monto, empresa_id, banco_id, proveedor_id, rid),
+            )
+            creadas += 1
+            fechas_creadas.append(fstr)
+
+    return {"creadas": creadas, "salteadas": salteadas, "fechas": fechas_creadas, "horizonte_dias": dias}
+
+
+# ============================================================
+# Ficha de proveedor (drilldown)
+# ============================================================
+
+def proveedor_ficha(pid: int) -> dict | None:
+    """Ficha 360 de un proveedor: datos + stats + erogaciones + acuerdos."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute('SELECT * FROM public."proveedores" WHERE id = %s', (pid,))
+        prov = _to_dict(cur.fetchone())
+        if not prov:
+            return None
+
+        # Stats agregados
+        cur.execute(
+            """
+            SELECT estado::text AS estado, COUNT(*) AS count, COALESCE(SUM(monto), 0) AS total
+            FROM public."erogaciones" WHERE proveedor_id = %s AND oculto = FALSE
+            GROUP BY estado
+            """,
+            (pid,),
+        )
+        por_estado = {r["estado"]: {"count": int(r["count"]), "total": float(r["total"])} for r in cur.fetchall()}
+
+        cur.execute(
+            """
+            SELECT COUNT(*) AS count,
+                   AVG(monto)::numeric AS monto_promedio,
+                   AVG(EXTRACT(EPOCH FROM (pagado_at - fecha_carga)) / 86400)::numeric AS lead_time_dias
+            FROM public."erogaciones"
+            WHERE proveedor_id = %s AND estado::text = 'pagado' AND pagado_at IS NOT NULL
+            """,
+            (pid,),
+        )
+        r = cur.fetchone()
+        stats = {
+            "count_pagado": int(r["count"]),
+            "monto_promedio": float(r["monto_promedio"]) if r["monto_promedio"] else 0,
+            "lead_time_dias": float(r["lead_time_dias"]) if r["lead_time_dias"] else None,
+        }
+
+        # Acuerdos
+        cur.execute(
+            'SELECT estado::text AS estado, COUNT(*) AS count FROM public."acuerdos" WHERE proveedor_id = %s GROUP BY estado',
+            (pid,),
+        )
+        acuerdos_por_estado = {r["estado"]: int(r["count"]) for r in cur.fetchall()}
+        total_acuerdos = sum(acuerdos_por_estado.values())
+        tasa_cumplimiento = (acuerdos_por_estado.get("cumplido", 0) / total_acuerdos * 100) if total_acuerdos > 0 else None
+
+        # Lista erogaciones
+        cur.execute(
+            """
+            SELECT e.id, e.fecha_pago::text AS fecha_pago, e.monto, e.descripcion, e.estado::text AS estado,
+                   em.nombre AS empresa_nombre
+            FROM public."erogaciones" e
+            LEFT JOIN public."empresas" em ON em.id = e.empresa_id
+            WHERE e.proveedor_id = %s AND e.oculto = FALSE
+            ORDER BY e.fecha_pago DESC LIMIT 100
+            """,
+            (pid,),
+        )
+        erogaciones = [_to_dict(r) for r in cur.fetchall()]
+
+        # Lista acuerdos
+        cur.execute(
+            """
+            SELECT a.id, a.tipo::text AS tipo, a.compromiso, a.fecha_compromiso::text AS fecha_compromiso,
+                   a.monto_compromiso, a.estado::text AS estado, a.contexto
+            FROM public."acuerdos" a
+            WHERE a.proveedor_id = %s
+            ORDER BY a.created_at DESC
+            """,
+            (pid,),
+        )
+        acuerdos = [_to_dict(r) for r in cur.fetchall()]
+
+    return {
+        "proveedor": prov,
+        "stats": stats,
+        "por_estado": por_estado,
+        "acuerdos_por_estado": acuerdos_por_estado,
+        "tasa_cumplimiento": tasa_cumplimiento,
+        "erogaciones": erogaciones,
+        "acuerdos": acuerdos,
+    }
 
 
 # ============================================================
@@ -814,46 +1018,134 @@ def analisis_gastos(fecha_desde: str, fecha_hasta: str) -> dict:
 # ============================================================
 
 def detectar_candidatos_recurrencia() -> list[dict]:
+    """
+    Detector mejorado: agrupa por (proveedor, descripcion-normalizada) con metricas
+    de frecuencia (intervalo medio en dias) y varianza monto.
+    Devuelve solo candidatos con varianza monto < 30% y al menos 3 ocurrencias.
+    """
+    from datetime import datetime
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
             """
             SELECT
+              proveedor_id,
               LOWER(TRIM(descripcion)) AS desc_norm,
               MIN(descripcion) AS descripcion_sample,
-              proveedor_id,
+              ARRAY_AGG(fecha_pago ORDER BY fecha_pago) AS fechas,
+              ARRAY_AGG(monto ORDER BY fecha_pago) AS montos,
               COUNT(*) AS ocurrencias,
-              MIN(fecha_pago)::text AS primer_pago,
-              MAX(fecha_pago)::text AS ultimo_pago,
               ROUND(AVG(monto)::numeric, 2) AS monto_promedio,
               MIN(monto) AS monto_min,
-              MAX(monto) AS monto_max
+              MAX(monto) AS monto_max,
+              STDDEV_POP(monto) AS monto_stddev
             FROM public."erogaciones"
             WHERE oculto = FALSE
               AND es_recurrente = FALSE
               AND recurrencia_id IS NULL
               AND fecha_carga > NOW() - INTERVAL '12 months'
-            GROUP BY LOWER(TRIM(descripcion)), proveedor_id
+            GROUP BY proveedor_id, LOWER(TRIM(descripcion))
             HAVING COUNT(*) >= 3
-            ORDER BY ocurrencias DESC, monto_promedio DESC
-            LIMIT 50
             """
         )
-        return [
-            {"descripcion": r["descripcion_sample"],
-             "proveedor_id": r["proveedor_id"],
-             "ocurrencias": int(r["ocurrencias"]),
-             "primer_pago": r["primer_pago"],
-             "ultimo_pago": r["ultimo_pago"],
-             "monto_promedio": float(r["monto_promedio"]) if r["monto_promedio"] else 0,
-             "monto_min": float(r["monto_min"]) if r["monto_min"] else 0,
-             "monto_max": float(r["monto_max"]) if r["monto_max"] else 0}
-            for r in cur.fetchall()
-        ]
+        rows = cur.fetchall()
+        # Resolver nombres de proveedor
+        prov_ids = sorted({r["proveedor_id"] for r in rows if r["proveedor_id"] is not None})
+        prov_nombres: dict[int, str] = {}
+        if prov_ids:
+            cur.execute('SELECT id, nombre FROM public."proveedores" WHERE id = ANY(%s)', (prov_ids,))
+            prov_nombres = {int(r["id"]): r["nombre"] for r in cur.fetchall()}
+
+    results = []
+    for r in rows:
+        fechas = r["fechas"]
+        # Calcular intervalos entre fechas consecutivas
+        if len(fechas) < 2:
+            intervalo_medio = 0
+        else:
+            intervalos = [(fechas[i] - fechas[i - 1]).days for i in range(1, len(fechas))]
+            intervalo_medio = sum(intervalos) / len(intervalos)
+
+        # Sugerir frecuencia por intervalo medio
+        freq_sug = "custom"
+        if intervalo_medio > 0:
+            for f, dias in (("semanal", 7), ("quincenal", 14), ("mensual", 30), ("trimestral", 91), ("anual", 365)):
+                if abs(intervalo_medio - dias) / dias < 0.20:  # ±20%
+                    freq_sug = f
+                    break
+
+        monto_prom = float(r["monto_promedio"]) if r["monto_promedio"] else 0
+        monto_stddev = float(r["monto_stddev"]) if r["monto_stddev"] else 0
+        varianza_pct = (monto_stddev / monto_prom * 100) if monto_prom > 0 else 0
+
+        # Filtrar candidatos con varianza monto > 40% (poco predecibles)
+        if varianza_pct > 40:
+            continue
+
+        results.append({
+            "descripcion": r["descripcion_sample"],
+            "proveedor_id": r["proveedor_id"],
+            "proveedor_nombre": prov_nombres.get(int(r["proveedor_id"])) if r["proveedor_id"] else None,
+            "ocurrencias": int(r["ocurrencias"]),
+            "primer_pago": fechas[0].isoformat() if fechas else None,
+            "ultimo_pago": fechas[-1].isoformat() if fechas else None,
+            "monto_promedio": monto_prom,
+            "monto_min": float(r["monto_min"]) if r["monto_min"] else 0,
+            "monto_max": float(r["monto_max"]) if r["monto_max"] else 0,
+            "varianza_pct": round(varianza_pct, 1),
+            "intervalo_medio_dias": round(intervalo_medio, 1),
+            "frecuencia_sugerida": freq_sug,
+        })
+
+    results.sort(key=lambda x: (-x["ocurrencias"], -x["monto_promedio"]))
+    return results[:50]
 
 
 # ============================================================
 # Calendario mensual
 # ============================================================
+
+def calendario_detalle_dia(fecha: str) -> dict:
+    """Detalle de un dia para sheet lateral: erogaciones list + ingresos puntuales list."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT e.id, e.descripcion, e.monto, e.estado::text AS estado, e.es_critico,
+                   e.fecha_sugerida_tentativa::text AS fecha_sugerida_tentativa,
+                   em.nombre AS empresa_nombre, b.nombre AS banco_nombre, p.nombre AS proveedor_nombre
+            FROM public."erogaciones" e
+            LEFT JOIN public."empresas" em ON em.id = e.empresa_id
+            LEFT JOIN public."bancos_medios_pago" b ON b.id = e.banco_id
+            LEFT JOIN public."proveedores" p ON p.id = e.proveedor_id
+            WHERE e.oculto = FALSE AND e.estado::text NOT IN ('cancelado','rechazado')
+              AND e.fecha_pago = %s::date
+            ORDER BY e.monto DESC
+            """,
+            (fecha,),
+        )
+        erogaciones = _to_list(cur.fetchall())
+        cur.execute(
+            """
+            SELECT i.id, i.descripcion, i.monto, i.categoria,
+                   em.nombre AS empresa_nombre, b.nombre AS banco_nombre
+            FROM public."ingresos_puntuales" i
+            LEFT JOIN public."empresas" em ON em.id = i.empresa_id
+            LEFT JOIN public."bancos_medios_pago" b ON b.id = i.banco_id
+            WHERE i.fecha = %s::date
+            ORDER BY i.monto DESC
+            """,
+            (fecha,),
+        )
+        ingresos_puntuales = _to_list(cur.fetchall())
+    total_egresos = sum(float(e["monto"]) for e in erogaciones)
+    total_ingresos = sum(float(i["monto"]) for i in ingresos_puntuales)
+    return {
+        "fecha": fecha,
+        "erogaciones": erogaciones,
+        "ingresos_puntuales": ingresos_puntuales,
+        "total_egresos": total_egresos,
+        "total_ingresos_puntuales": total_ingresos,
+    }
+
 
 def calendario_mensual(year: int, month: int) -> dict:
     fecha_desde = f"{year:04d}-{month:02d}-01"

@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Plus, Pencil, Trash2, X, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Loader2, ExternalLink } from "lucide-react";
 import { PageWrapper, LoadingState, ErrorState } from "../_components/PageWrapper";
 import { DataTable, type Column } from "../_components/DataTable";
 import { fmtArs } from "../_components/helpers";
@@ -26,7 +27,14 @@ export default function ProveedoresPage() {
   });
 
   const columns: Column<Proveedor>[] = [
-    { key: "nombre", label: "Nombre", getValue: (r) => r.nombre, render: (r) => <span className="font-semibold">{r.nombre}</span> },
+    {
+      key: "nombre", label: "Nombre", getValue: (r) => r.nombre,
+      render: (r) => (
+        <Link href={`/dashboard/finanzas/flujo-fondos/proveedores/${r.id}`} className="font-semibold text-primary hover:underline flex items-center gap-1">
+          {r.nombre} <ExternalLink size={11} className="opacity-60" />
+        </Link>
+      ),
+    },
     { key: "cuit", label: "CUIT", getValue: (r) => r.cuit ?? "", className: "text-text-muted" },
     {
       key: "prioridad", label: "Prioridad", align: "center", getValue: (r) => r.prioridad,
