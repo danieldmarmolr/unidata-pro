@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Search, ZoomIn, ZoomOut, Maximize2, Users as UsersIcon,
-  ExternalLink, GitBranch,
+  ExternalLink, GitBranch, Crown, AlertCircle,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
@@ -28,7 +28,12 @@ function buildTree(items: OrgChartItem[]): Node[] {
     }
   }
   function sortRec(arr: Node[]) {
-    arr.sort((a, b) => b.children.length - a.children.length || a.name.localeCompare(b.name));
+    arr.sort((a, b) => {
+      // CEO siempre primero
+      if (a.role === "ceo" && b.role !== "ceo") return -1;
+      if (b.role === "ceo" && a.role !== "ceo") return 1;
+      return b.children.length - a.children.length || a.name.localeCompare(b.name);
+    });
     arr.forEach((n) => sortRec(n.children));
   }
   sortRec(roots);
@@ -63,6 +68,20 @@ export default function OrgChartPage() {
   });
 
   const tree = useMemo(() => (data ? buildTree(data.items) : []), [data]);
+
+  // Si hay CEO, separar su rama de los huerfanos sin manager.
+  // CEO va primero como raiz unica; el resto se muestra abajo como "Sin manager".
+  const { ceoTree, orphanRoots } = useMemo(() => {
+    const ceo: Node[] = [];
+    const orphans: Node[] = [];
+    const hasCEO = tree.some((r) => r.role === "ceo");
+    for (const r of tree) {
+      if (r.role === "ceo") ceo.push(r);
+      else if (hasCEO) orphans.push(r);
+      else ceo.push(r);
+    }
+    return { ceoTree: ceo, orphanRoots: orphans };
+  }, [tree]);
 
   const highlightSet = useMemo(() => {
     if (!search.trim() || !data) return null;
@@ -169,12 +188,36 @@ export default function OrgChartPage() {
                   transformOrigin: "top center",
                   transition: "transform 0.12s ease-out",
                 }}
+                className="flex flex-col items-center gap-12"
               >
                 <div className="org-roots">
-                  {tree.map((root) => (
+                  {ceoTree.map((root) => (
                     <OrgNode key={root.id} node={root} highlight={highlightSet} />
                   ))}
                 </div>
+
+                {orphanRoots.length > 0 && (
+                  <div className="max-w-5xl w-full bg-amber-50 border border-amber-200 rounded-2xl p-5">
+                    <div className="flex items-center gap-2 mb-3">
+                      <AlertCircle size={14} className="text-amber-700" />
+                      <div className="text-xs font-bold uppercase tracking-wider text-amber-800">
+                        Sin manager directo · {orphanRoots.length}
+                      </div>
+                      <span className="text-[11px] text-amber-700/80 ml-1">
+                        Asigná un gerente en{" "}
+                        <Link href="/dashboard/admin/users" className="underline font-semibold">
+                          Admin / Usuarios
+                        </Link>{" "}
+                        para que cuelguen del organigrama.
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-3 justify-center">
+                      {orphanRoots.map((root) => (
+                        <OrgNode key={root.id} node={root} highlight={highlightSet} />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -296,29 +339,38 @@ function OrgCard({
 }) {
   const isMatch = highlight ? highlight.has(node.id) : false;
   const dimmed = !!highlight && !isMatch;
-  const accent = node.area_color ?? "#7a3eae";
+  const isCEO = node.role === "ceo";
+  const accent = isCEO ? "#d97706" : node.area_color ?? "#7a3eae";
   const tenure = tenureShort(node.joined_at);
 
   return (
     <Link
       href={`/dashboard/people/${node.id}`}
       className={cn(
-        "group relative block bg-white border rounded-xl shadow-sm w-[210px] transition-all duration-150",
+        "group relative block border rounded-xl shadow-sm transition-all duration-150",
         "hover:shadow-lg hover:-translate-y-0.5",
+        isCEO ? "w-[240px] bg-gradient-to-b from-amber-50 to-white shadow-amber-200/40" : "w-[210px] bg-white",
         dimmed && "opacity-30 grayscale",
         isMatch && "ring-4 ring-primary/40 border-primary",
-        !isMatch && "border-border",
+        !isMatch && (isCEO ? "border-amber-300" : "border-border"),
       )}
       style={{
         borderTopColor: accent,
-        borderTopWidth: "3px",
+        borderTopWidth: isCEO ? "4px" : "3px",
       }}
     >
+      {/* Crown ribbon CEO */}
+      {isCEO && (
+        <div className="absolute -top-3 left-1/2 -translate-x-1/2 inline-flex items-center gap-1 bg-gradient-to-r from-amber-500 to-amber-600 text-white text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full shadow-md">
+          <Crown size={10} /> CEO
+        </div>
+      )}
+
       {/* Header: area + external icon */}
       <div className="flex items-start justify-between px-3 pt-2.5 pb-1 gap-2">
         <span
           className="text-[9px] font-bold uppercase tracking-wider leading-tight truncate"
-          style={{ color: accent }}
+          style={{ color: node.area_color ?? accent }}
           title={node.area_name ?? "Sin area"}
         >
           {node.area_name ?? "—"}
@@ -334,14 +386,17 @@ function OrgCard({
         <Avatar
           name={node.name}
           url={node.avatar_url}
-          size="md"
+          size={isCEO ? "lg" : "md"}
           ringColor={accent}
         />
       </div>
 
       {/* Body: name + job */}
       <div className="px-3 pt-3 pb-2 text-center">
-        <div className="text-sm font-bold text-text leading-tight truncate" title={node.name}>
+        <div className={cn(
+          "font-bold text-text leading-tight truncate",
+          isCEO ? "text-base" : "text-sm",
+        )} title={node.name}>
           {node.name}
         </div>
         {node.job_title && (
@@ -352,7 +407,7 @@ function OrgCard({
             {node.job_title}
           </div>
         )}
-        {node.is_admin && (
+        {node.is_admin && !isCEO && (
           <span className="inline-block mt-1 text-[8px] font-bold uppercase tracking-wider text-violet-700 bg-violet-100 px-1.5 py-0.5 rounded-full">
             Admin
           </span>
