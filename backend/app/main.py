@@ -147,11 +147,20 @@ def _startup() -> None:
     # Pre-inicializar costs_db al boot. Antes se inicializaba lazy en el primer
     # request a /dashboards/gerencia o /products/*, y eso disparaba ALTER TABLE
     # concurrentemente con otro request → deadlock entre procesos Postgres.
+    # Wrapped in a thread with timeout to prevent a hanging DB connection from
+    # blocking the entire startup (which causes healthcheck failure).
     from app.db import costs_db as _costs_db
-    try:
-        _costs_db.init()
-    except Exception as e:
-        logging.warning("costs_db init: %s", e)
+    import threading as _threading
+    def _init_costs():
+        try:
+            _costs_db.init()
+        except Exception as e:
+            logging.warning("costs_db init: %s", e)
+    _t = _threading.Thread(target=_init_costs, daemon=True)
+    _t.start()
+    _t.join(timeout=10)
+    if _t.is_alive():
+        logging.warning("costs_db init: timed out after 10s, will retry lazily on first request")
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)
