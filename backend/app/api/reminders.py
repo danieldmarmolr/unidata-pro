@@ -26,14 +26,14 @@ Unit = Literal["unistore", "unidrop"]
 
 class CreateBody(BaseModel):
     target_type: TargetType = "general"
-    target_id: str | None = None
+    target_id: str | None = Field(default=None, max_length=120)
     target_unit: Unit | None = None
-    due_at: str  # ISO 8601
-    note: str
+    due_at: str = Field(..., max_length=40)  # ISO 8601
+    note: str = Field(..., min_length=1, max_length=2000)
 
 
 class CompleteBody(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=2000)
 
 
 @router.get("")

@@ -1,6 +1,7 @@
 """UNIDATA backend - FastAPI entrypoint."""
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from cachetools import TTLCache
@@ -63,9 +64,12 @@ async def cache_dashboards_middleware(request: Request, call_next):
     )
     if not cacheable:
         return await call_next(request)
-    # Cache key incluye user para evitar leak entre usuarios con permisos distintos
+    # Cache key incluye user para evitar leak entre usuarios con permisos distintos.
+    # Usamos SHA256 del header completo en vez de los ultimos 32 chars (que es la
+    # firma del JWT) para evitar colisiones de fingerprint entre tokens.
     auth_hdr = request.headers.get("authorization", "")
-    cache_key = f"{path}?{request.url.query}|{auth_hdr[-32:]}"
+    auth_fp = hashlib.sha256(auth_hdr.encode("utf-8")).hexdigest()[:16] if auth_hdr else "anon"
+    cache_key = f"{path}?{request.url.query}|{auth_fp}"
     cached = _http_cache.get(cache_key)
     if cached is not None:
         return Response(
@@ -92,15 +96,36 @@ async def cache_dashboards_middleware(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
-    # Railway asigna URLs *.up.railway.app por deploy. Permitimos cualquier
-    # subdominio Railway + previews de Vercel + localhost para que un cambio
-    # de URL no rompa el front. ALLOWED_ORIGINS sigue siendo la lista
-    # whitelisted explicita; este regex es el fallback.
-    allow_origin_regex=r"^https?://(localhost(:\d+)?|.*\.up\.railway\.app|.*\.vercel\.app|(.+\.)?unidatacenter\.com\.ar)$",
+    # Restringido al dominio productivo + previews Railway PROPIOS del proyecto
+    # + localhost dev. Se quito el wildcard `.*\.vercel\.app` (cualquiera puede
+    # registrarse un proyecto Vercel y atacar via CORS con credentials=true) y
+    # se quito el wildcard `.*\.up\.railway\.app` (mismo problema con cuentas
+    # Railway ajenas). Solo aceptamos subdominios *propios* del proyecto.
+    allow_origin_regex=(
+        r"^https?://("
+        r"localhost(:\d+)?"
+        r"|127\.0\.0\.1(:\d+)?"
+        r"|(.+\.)?unidatacenter\.com\.ar"
+        r"|(frontend|backend|mcp)(-production)?-[a-z0-9]+\.up\.railway\.app"
+        r")$"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Security headers - aplicado a todas las respuestas. No incluye CSP porque la
+# app tiene inline-scripts de Next.js y eso requiere un CSP con nonce dinamico.
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+    return response
 
 
 @app.on_event("startup")

@@ -23,12 +23,12 @@ Category = Literal["general", "cs", "billing", "support", "retention", "flag", "
 class CreateBody(BaseModel):
     dropshipper_id: int
     unit: Unit
-    note: str
+    note: str = Field(..., min_length=1, max_length=4000)
     category: Category = "general"
 
 
 class UpdateBody(BaseModel):
-    note: str | None = None
+    note: str | None = Field(default=None, min_length=1, max_length=4000)
     category: Category | None = None
 
 

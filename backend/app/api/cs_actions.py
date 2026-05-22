@@ -24,16 +24,16 @@ router = APIRouter(prefix="/api/cs-actions", tags=["cs-actions"])
 
 class CreateActionBody(BaseModel):
     source_type: Literal["rfm_segment", "rfm_flow", "manual"]
-    source_key: str
+    source_key: str = Field(..., min_length=1, max_length=200)
     unit: Literal["unistore", "unidrop"]
-    title: str
-    suggested_action: str
-    target_ids: list[int] = Field(default_factory=list)
+    title: str = Field(..., min_length=1, max_length=200)
+    suggested_action: str = Field(..., min_length=1, max_length=2000)
+    target_ids: list[int] = Field(default_factory=list, max_length=5000)
     metadata: dict | None = None
 
 
 class NoteBody(BaseModel):
-    note: str = ""
+    note: str = Field(default="", max_length=2000)
 
 
 @router.get("")

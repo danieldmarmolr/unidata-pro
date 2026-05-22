@@ -46,6 +46,13 @@ export function clearToken(): void {
   window.localStorage.removeItem(USER_KEY);
 }
 
+/**
+ * Timeout default para requests al backend. Antes no habia timeout y un
+ * endpoint colgado mostraba "cargando..." infinito al usuario. 30s es
+ * generoso porque algunos dashboards tienen queries pesadas en RDS.
+ */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 export async function api<T = unknown>(
   path: string,
   init: RequestInit = {},
@@ -55,7 +62,35 @@ export async function api<T = unknown>(
   headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers });
+  // Compone un AbortController propio con timeout, respetando el signal que
+  // el caller pudo haber pasado (ej: TanStack Query cancela en cleanup).
+  const timeoutCtrl = new AbortController();
+  const timeoutId = setTimeout(() => timeoutCtrl.abort(), DEFAULT_TIMEOUT_MS);
+  const externalSignal = init.signal;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      timeoutCtrl.abort();
+    } else {
+      externalSignal.addEventListener("abort", () => timeoutCtrl.abort(), { once: true });
+    }
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers,
+      signal: timeoutCtrl.signal,
+    });
+  } catch (err) {
+    if ((err as Error)?.name === "AbortError") {
+      const reason = externalSignal?.aborted ? "Request cancelada" : `Timeout (${DEFAULT_TIMEOUT_MS / 1000}s) - el servidor no respondio`;
+      throw new Error(reason);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (res.status === 401) {
     clearToken();
     if (typeof window !== "undefined" && window.location.pathname !== "/login") {

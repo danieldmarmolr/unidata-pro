@@ -106,8 +106,12 @@ def _build_engine(cfg: UnitConfig) -> Engine:
         url,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=5,
-        max_overflow=5,
+        # Pool subido de 5+5 -> 15+10. Antes saturaba con ~10 reqs concurrentes
+        # (3 engines x dashboards corriendo en threadpool) y los siguientes
+        # esperaban en cola, lo que se sentia como "lento" en prod.
+        pool_size=15,
+        max_overflow=10,
+        pool_timeout=20,
         connect_args={
             # statement_timeout: 30s | timezone Argentina: NOW(), CURRENT_DATE,
             # CURRENT_TIMESTAMP, etc devuelven hora local AR (UTC-3) automaticamente
