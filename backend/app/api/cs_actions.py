@@ -17,6 +17,7 @@ POST   /api/cs-actions/{id}/targets/{tid}/status -> setear contact_status del ta
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
@@ -251,132 +252,132 @@ def list_targets(
 
     unit = action.get("unit")
     enriched: dict[int, dict] = {}
+
+    # Estrategia escalonada para evitar timeout con listas grandes (>500 targets):
+    # Stage 1 (siempre): basic info por PK lookup (rapido para cualquier N).
+    # Stage 2 (solo si N <= MAX_STATS): stats agregadas y top SKU.
+    MAX_STATS = 500
+    do_stats = len(target_ids) <= MAX_STATS
+
     if unit == "unidrop":
         eng = get_engine("unidrop")
         with eng.connect() as conn:
+            # Stage 1: basic
             rows = conn.execute(
                 text("""
-                    WITH user_stats AS (
-                        SELECT u.id AS user_id,
-                               COALESCE(SUM(pi."paidAmount") FILTER (WHERE pi."status" = 'PROCESSED'), 0)::float AS lifetime_total,
-                               MAX(pi."createdAt") FILTER (WHERE pi."status" = 'PROCESSED') AS ultima_venta,
-                               COUNT(*) FILTER (WHERE pi."status" = 'PROCESSED')::int AS pi_count,
-                               AVG(pi."paidAmount") FILTER (WHERE pi."status" = 'PROCESSED')::float AS ticket_avg
-                        FROM public."User" u
-                        LEFT JOIN public."CustomerPaymentAccount" cpa ON cpa."userId" = u.id
-                        LEFT JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
-                        WHERE u.id = ANY(:ids)
-                        GROUP BY u.id
-                    )
                     SELECT u.id,
                            COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
-                           COALESCE(u.email,'')                    AS email,
-                           COALESCE(u.phone,'')                    AS phone,
-                           COALESCE(u.dni::text,'')                AS dni,
-                           COALESCE(u.city,'')                     AS ciudad,
-                           COALESCE(us.lifetime_total, 0)::float   AS lifetime_total,
-                           us.ultima_venta::date                   AS ultima_compra,
-                           CASE WHEN us.ultima_venta IS NOT NULL
-                                THEN EXTRACT(DAY FROM (NOW() - us.ultima_venta))::int
-                                ELSE NULL END                      AS dias_desde_ultima,
-                           COALESCE(us.pi_count, 0)::int           AS ordenes_total,
-                           COALESCE(us.ticket_avg, 0)::float       AS ticket_promedio
+                           COALESCE(u.email,'') AS email,
+                           COALESCE(u.phone,'') AS phone,
+                           COALESCE(u.dni::text,'') AS dni,
+                           COALESCE(u.city,'') AS ciudad
                     FROM public."User" u
-                    LEFT JOIN user_stats us ON us.user_id = u.id
                     WHERE u.id = ANY(:ids)
                 """),
                 {"ids": target_ids},
             ).fetchall()
-        for r in rows:
-            enriched[int(r[0])] = {
-                "nombre": r[1], "email": r[2], "phone": r[3], "dni": r[4],
-                "ciudad": r[5],
-                "lifetime_total": float(r[6] or 0),
-                "ultima_compra": r[7].isoformat() if r[7] else None,
-                "dias_desde_ultima": r[8],
-                "ordenes_total": int(r[9] or 0),
-                "ticket_promedio": float(r[10] or 0),
-                "monto_ultima": 0.0,  # PaymentIntent es agregado, no se ata a una sola venta
-                "top_sku": "",
-                "top_producto": "",
-            }
+            for r in rows:
+                enriched[int(r[0])] = {
+                    "nombre": r[1], "email": r[2], "phone": r[3], "dni": r[4],
+                    "ciudad": r[5],
+                    "lifetime_total": 0.0, "ultima_compra": None,
+                    "dias_desde_ultima": None, "ordenes_total": 0,
+                    "ticket_promedio": 0.0, "monto_ultima": 0.0,
+                    "top_sku": "", "top_producto": "",
+                }
+            # Stage 2: stats
+            if do_stats:
+                stats_rows = conn.execute(
+                    text("""
+                        SELECT cpa."userId" AS user_id,
+                               COALESCE(SUM(pi."paidAmount"), 0)::float AS lifetime_total,
+                               MAX(pi."createdAt") AS ultima_venta,
+                               COUNT(*)::int AS pi_count,
+                               AVG(pi."paidAmount")::float AS ticket_avg
+                        FROM public."PaymentIntent" pi
+                        JOIN public."CustomerPaymentAccount" cpa ON cpa.id = pi."customerAccountId"
+                        WHERE cpa."userId" = ANY(:ids) AND pi."status" = 'PROCESSED'
+                        GROUP BY cpa."userId"
+                    """),
+                    {"ids": target_ids},
+                ).fetchall()
+                for r in stats_rows:
+                    uid = int(r[0])
+                    if uid not in enriched:
+                        continue
+                    enriched[uid].update({
+                        "lifetime_total": float(r[1] or 0),
+                        "ultima_compra": r[2].date().isoformat() if r[2] else None,
+                        "dias_desde_ultima": (datetime.utcnow().date() - r[2].date()).days if r[2] else None,
+                        "ordenes_total": int(r[3] or 0),
+                        "ticket_promedio": float(r[4] or 0),
+                    })
     else:
         eng = get_engine("unistore")
         with eng.connect() as conn:
+            # Stage 1: basic
             rows = conn.execute(
                 text("""
-                    WITH cust_stats AS (
-                        SELECT c.id AS customer_id,
-                               COALESCE(SUM(o.total) FILTER (WHERE o."paymentStatus" = 'paid'), 0)::float AS lifetime_total,
-                               COUNT(*) FILTER (WHERE o."paymentStatus" = 'paid')::int  AS ordenes_total,
-                               AVG(o.total) FILTER (WHERE o."paymentStatus" = 'paid')::float AS ticket_avg,
-                               MAX(o."createdAt") FILTER (WHERE o."paymentStatus" = 'paid') AS ultima_compra_ts
-                        FROM tienda_nube."Customer" c
-                        LEFT JOIN tienda_nube."Order" o ON o."customerId" = c.id
-                        WHERE c.id = ANY(:ids)
-                        GROUP BY c.id
-                    ),
-                    last_order AS (
-                        SELECT DISTINCT ON (o."customerId")
-                               o."customerId" AS customer_id,
-                               o.total       AS monto_ultima,
-                               o.id          AS last_order_id
-                        FROM tienda_nube."Order" o
-                        WHERE o."customerId" = ANY(:ids) AND o."paymentStatus" = 'paid'
-                        ORDER BY o."customerId", o."createdAt" DESC
-                    ),
-                    top_sku_per_cust AS (
-                        SELECT customer_id, sku, name, total_qty
-                        FROM (
-                            SELECT o."customerId" AS customer_id,
-                                   oi.sku, oi.name,
-                                   SUM(oi.quantity)::int AS total_qty,
-                                   ROW_NUMBER() OVER (PARTITION BY o."customerId" ORDER BY SUM(oi.quantity) DESC) AS rn
-                            FROM tienda_nube."Order" o
-                            JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
-                            WHERE o."customerId" = ANY(:ids)
-                              AND o."paymentStatus" = 'paid'
-                              AND oi.sku IS NOT NULL AND oi.sku <> ''
-                            GROUP BY o."customerId", oi.sku, oi.name
-                        ) ranked
-                        WHERE rn = 1
-                    )
                     SELECT c.id,
                            COALESCE(c.name, c.email, 'Customer '||c.id::text) AS nombre,
-                           COALESCE(c.email,'')               AS email,
-                           COALESCE(c.phone,'')               AS phone,
-                           COALESCE(c.city, c.province, '')   AS ciudad,
-                           COALESCE(cs.lifetime_total, 0)::float AS lifetime_total,
-                           cs.ultima_compra_ts::date          AS ultima_compra,
-                           CASE WHEN cs.ultima_compra_ts IS NOT NULL
-                                THEN EXTRACT(DAY FROM (NOW() - cs.ultima_compra_ts))::int
-                                ELSE NULL END                 AS dias_desde_ultima,
-                           COALESCE(cs.ordenes_total, 0)::int AS ordenes_total,
-                           COALESCE(cs.ticket_avg, 0)::float  AS ticket_promedio,
-                           COALESCE(lo.monto_ultima, 0)::float AS monto_ultima,
-                           COALESCE(t.sku, '')                AS top_sku,
-                           COALESCE(t.name, '')               AS top_producto
+                           COALESCE(c.email,'') AS email,
+                           COALESCE(c.phone,'') AS phone,
+                           COALESCE(c.city, c.province, '') AS ciudad
                     FROM tienda_nube."Customer" c
-                    LEFT JOIN cust_stats cs   ON cs.customer_id = c.id
-                    LEFT JOIN last_order lo   ON lo.customer_id = c.id
-                    LEFT JOIN top_sku_per_cust t ON t.customer_id = c.id
                     WHERE c.id = ANY(:ids)
                 """),
                 {"ids": target_ids},
             ).fetchall()
-        for r in rows:
-            enriched[int(r[0])] = {
-                "nombre": r[1], "email": r[2], "phone": r[3], "dni": "",
-                "ciudad": r[4],
-                "lifetime_total": float(r[5] or 0),
-                "ultima_compra": r[6].isoformat() if r[6] else None,
-                "dias_desde_ultima": r[7],
-                "ordenes_total": int(r[8] or 0),
-                "ticket_promedio": float(r[9] or 0),
-                "monto_ultima": float(r[10] or 0),
-                "top_sku": r[11] or "",
-                "top_producto": r[12] or "",
-            }
+            for r in rows:
+                enriched[int(r[0])] = {
+                    "nombre": r[1], "email": r[2], "phone": r[3], "dni": "",
+                    "ciudad": r[4],
+                    "lifetime_total": 0.0, "ultima_compra": None,
+                    "dias_desde_ultima": None, "ordenes_total": 0,
+                    "ticket_promedio": 0.0, "monto_ultima": 0.0,
+                    "top_sku": "", "top_producto": "",
+                }
+            # Stage 2: stats agregadas
+            if do_stats:
+                stats_rows = conn.execute(
+                    text("""
+                        SELECT o."customerId" AS cid,
+                               COALESCE(SUM(o.total), 0)::float AS lifetime_total,
+                               COUNT(*)::int AS ordenes_total,
+                               AVG(o.total)::float AS ticket_avg,
+                               MAX(o."createdAt") AS ultima_ts
+                        FROM tienda_nube."Order" o
+                        WHERE o."customerId" = ANY(:ids) AND o."paymentStatus" = 'paid'
+                        GROUP BY o."customerId"
+                    """),
+                    {"ids": target_ids},
+                ).fetchall()
+                for r in stats_rows:
+                    cid = int(r[0])
+                    if cid not in enriched:
+                        continue
+                    enriched[cid].update({
+                        "lifetime_total": float(r[1] or 0),
+                        "ordenes_total": int(r[2] or 0),
+                        "ticket_promedio": float(r[3] or 0),
+                        "ultima_compra": r[4].date().isoformat() if r[4] else None,
+                        "dias_desde_ultima": (datetime.utcnow().date() - r[4].date()).days if r[4] else None,
+                    })
+                # Stage 3: monto ultima orden
+                last_rows = conn.execute(
+                    text("""
+                        SELECT DISTINCT ON (o."customerId")
+                               o."customerId" AS cid, o.total::float AS monto
+                        FROM tienda_nube."Order" o
+                        WHERE o."customerId" = ANY(:ids) AND o."paymentStatus" = 'paid'
+                        ORDER BY o."customerId", o."createdAt" DESC
+                    """),
+                    {"ids": target_ids},
+                ).fetchall()
+                for r in last_rows:
+                    cid = int(r[0])
+                    if cid in enriched:
+                        enriched[cid]["monto_ultima"] = float(r[1] or 0)
 
     targets_status = {t["target_id"]: t for t in cs_actions_db.list_targets(action_id)}
 
