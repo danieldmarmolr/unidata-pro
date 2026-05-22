@@ -45,6 +45,7 @@ type LogResp = {
   items_pendientes?: CategoryValue[];
   prep_throughput?: Array<{ date: string; creadas: number; finalizadas: number }>;
   stuck_orders: CategoryValue[];
+  stories?: { tone: "ok" | "warn" | "alert"; text: string }[];
   generated_at: string;
 };
 
@@ -64,6 +65,7 @@ export default function LogisticaPage() {
   const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
   const [estadoFilter, setEstadoFilter] = useState<string | null>(null);
+  const [provFilter, setProvFilter] = useState<string | null>(null);
 
   const { data, isLoading, isFetching, error } = useQuery<LogResp>({
     queryKey: ["dashboards", "logistica", unit, period, customFrom, customTo],
@@ -137,6 +139,27 @@ export default function LogisticaPage() {
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">
             Error: {(error as Error).message}
+          </div>
+        )}
+
+        {data?.stories && data.stories.length > 0 && (
+          <div className="mb-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {data.stories.map((s, i) => (
+              <div
+                key={i}
+                className={
+                  "rounded-lg border px-3 py-2 text-[12px] " +
+                  (s.tone === "alert"
+                    ? "bg-red-50 border-red-200 text-error"
+                    : s.tone === "warn"
+                    ? "bg-amber-50 border-amber-200 text-amber-900"
+                    : "bg-emerald-50 border-emerald-200 text-emerald-900")
+                }
+              >
+                {s.tone === "alert" ? "⚠ " : s.tone === "warn" ? "⚠ " : "✓ "}
+                {s.text}
+              </div>
+            ))}
           </div>
         )}
 
@@ -328,8 +351,12 @@ export default function LogisticaPage() {
                     value: s.value,
                     extra: s.extra,
                   }))}
-                  caption="Top localidades de despacho"
+                  caption="Top localidades de despacho · click para filtrar"
                   formatter="number"
+                  onBarClick={(d) =>
+                    setProvFilter((cur) => (cur === d.name ? null : d.name))
+                  }
+                  highlightName={provFilter}
                 />
               )}
               {isLoading || !data ? (
@@ -370,8 +397,12 @@ export default function LogisticaPage() {
             ) : (
               <HBarChart
                 data={(data.top_provinces ?? []).map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
-                caption="Top provincias (clientes_ubicaciones)"
+                caption="Top provincias (clientes_ubicaciones) · click para filtrar"
                 formatter="number"
+                onBarClick={(d) =>
+                  setProvFilter((cur) => (cur === d.name ? null : d.name))
+                }
+                highlightName={provFilter}
               />
             )}
           </div>
@@ -394,20 +425,37 @@ export default function LogisticaPage() {
           </div>
         )}
 
-        {/* Chip clearable cuando hay filtro de estado activo */}
-        {estadoFilter && (
+        {/* Chips clearables cuando hay filtros activos */}
+        {(estadoFilter || provFilter) && (
           <div className="mb-3 flex items-center gap-2 flex-wrap text-[11px]">
-            <span className="text-text-muted">Filtrando por estado:</span>
+            <span className="text-text-muted">Filtros:</span>
+            {estadoFilter && (
+              <button
+                onClick={() => setEstadoFilter(null)}
+                className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-primary text-white"
+                title="Click para limpiar filtro de estado"
+              >
+                estado: {estadoFilter} ×
+              </button>
+            )}
+            {provFilter && (
+              <button
+                onClick={() => setProvFilter(null)}
+                className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-primary text-white"
+                title="Click para limpiar filtro de provincia/localidad"
+              >
+                lugar: {provFilter} ×
+              </button>
+            )}
             <button
-              onClick={() => setEstadoFilter(null)}
-              className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-primary text-white"
-              title="Click para limpiar"
+              onClick={() => {
+                setEstadoFilter(null);
+                setProvFilter(null);
+              }}
+              className="text-text-muted underline hover:text-text"
             >
-              {estadoFilter} ×
+              limpiar todo
             </button>
-            <span className="text-text-muted">
-              · click otra vez en el slice del donut para limpiar
-            </span>
           </div>
         )}
 
@@ -426,17 +474,25 @@ export default function LogisticaPage() {
                   ? "Pagados aun en estado abierto - click en una fila para ver items"
                   : "DigiP: pendiente/preparacion > 5 dias - enriquecido con MELI"
               }
-              data={
-                estadoFilter
-                  ? data.stuck_orders.filter((r) => {
-                      const e =
-                        unit === "unistore"
-                          ? (r.extra as any)?.digip_estado
-                          : (r.extra as any)?.estado;
-                      return e === estadoFilter;
-                    })
-                  : data.stuck_orders
-              }
+              data={(() => {
+                let arr = data.stuck_orders;
+                if (estadoFilter) {
+                  arr = arr.filter((r) => {
+                    const e =
+                      unit === "unistore"
+                        ? (r.extra as any)?.digip_estado
+                        : (r.extra as any)?.estado;
+                    return e === estadoFilter;
+                  });
+                }
+                if (provFilter) {
+                  arr = arr.filter((r) => {
+                    const p = (r.extra as any)?.provincia ?? (r.extra as any)?.localidad;
+                    return p === provFilter;
+                  });
+                }
+                return arr;
+              })()}
               formatter="currency"
               extraColumns={
                 unit === "unistore"

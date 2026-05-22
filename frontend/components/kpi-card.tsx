@@ -30,9 +30,18 @@ export function KpiCard({
   href?: string;
   drill?: KpiDrill;
 }) {
-  const { label, value, delta, delta_yoy, delta_yoy_label, prefix, suffix, hint } = data;
+  const { label, value, delta, delta_yoy, delta_yoy_label, target, target_direction, delta_target, prefix, suffix, hint } = data;
   const positive = (delta ?? 0) >= 0;
   const yoyPositive = (delta_yoy ?? 0) >= 0;
+  // Target: signo del delta_target indica si excedimos el target. Para
+  // lower_is_better, delta_target>0 = mal (estamos arriba del target).
+  // Para higher_is_better, delta_target>0 = bien (superamos el target).
+  const targetGood =
+    delta_target == null
+      ? null
+      : target_direction === "higher_is_better"
+      ? delta_target >= 0
+      : delta_target <= 0;
   const [open, setOpen] = useState(false);
 
   const interactive = !!href || !!drill;
@@ -75,6 +84,18 @@ export function KpiCard({
           title={delta_yoy_label ?? "vs mismo periodo hace 1 ano"}
         >
           {yoyPositive ? "▲" : "▼"} {Math.abs(delta_yoy).toFixed(1)}% {delta_yoy_label ?? "YoY"}
+        </div>
+      )}
+      {target !== null && target !== undefined && delta_target !== null && delta_target !== undefined && (
+        <div
+          className={cn(
+            "mt-0.5 text-[10px] font-semibold",
+            targetGood ? "text-success" : "text-warning",
+          )}
+          title={`Target: ${target}${suffix ?? ""}`}
+        >
+          {targetGood ? "✓" : "!"} {delta_target > 0 ? "+" : ""}
+          {delta_target.toFixed(1)}% vs target {target}{suffix ?? ""}
         </div>
       )}
       {hint && (

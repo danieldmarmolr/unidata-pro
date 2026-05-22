@@ -85,18 +85,43 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
         ) x
     """, {"th": STOCK_CRITICO_TH}) or 0)
 
-    cards.append({"label": "Pedidos pendientes (Digip)", "value": pedidos_pendientes,
-                  "hint": "Estado pendiente o aprobado"})
-    cards.append({"label": "En preparacion", "value": en_preparacion,
-                  "hint": "Preparaciones no finalizadas"})
-    cards.append({"label": f"Despachados ({period})", "value": despachados_periodo,
+    # Targets configurables (3ra baseline). Map vacio si no hay seteados.
+    from app.db import logistics_targets_db as _lt
+    targets = _lt.get_map("unistore")
+
+    def _enrich(card: dict, kpi_key: str) -> dict:
+        t = targets.get(kpi_key)
+        if not t:
+            return card
+        try:
+            v = float(card.get("value") or 0)
+            target_v = float(t["target_value"])
+            direction = t.get("direction") or "lower_is_better"
+            if direction == "lower_is_better":
+                # Cuanto MENOS, mejor (ej. lead time, atascados)
+                delta_target = ((v - target_v) / target_v * 100) if target_v else None
+            else:
+                # Cuanto MAS, mejor (ej. despachados)
+                delta_target = ((v - target_v) / target_v * 100) if target_v else None
+            card["target"] = target_v
+            card["target_direction"] = direction
+            card["delta_target"] = round(delta_target, 1) if delta_target is not None else None
+        except Exception:
+            pass
+        return card
+
+    cards.append(_enrich({"label": "Pedidos pendientes (Digip)", "value": pedidos_pendientes,
+                  "hint": "Estado pendiente o aprobado"}, "pending_orders_max"))
+    cards.append(_enrich({"label": "En preparacion", "value": en_preparacion,
+                  "hint": "Preparaciones no finalizadas"}, "in_prep_max"))
+    cards.append(_enrich({"label": f"Despachados ({period})", "value": despachados_periodo,
                   "delta": round(delta_disp, 1) if delta_disp is not None else None,
                   "delta_yoy": round(delta_yoy, 1) if delta_yoy is not None else None,
-                  "delta_yoy_label": "vs hace 1 ano"})
-    cards.append({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
-                  "suffix": " dias", "hint": "Order TN -> Despacho Digip"})
-    cards.append({"label": "Pedidos atascados", "value": stuck,
-                  "hint": "Pagados sin fulfillment >5 dias"})
+                  "delta_yoy_label": "vs hace 1 ano"}, "dispatched_target"))
+    cards.append(_enrich({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
+                  "suffix": " dias", "hint": "Order TN -> Despacho Digip"}, "lead_time_days"))
+    cards.append(_enrich({"label": "Pedidos atascados", "value": stuck,
+                  "hint": "Pagados sin fulfillment >5 dias"}, "stuck_orders_max"))
     cards.append({"label": "SKUs con stock critico", "value": sku_critico,
                   "hint": f"<= {STOCK_CRITICO_TH} unidades totales"})
 
@@ -415,5 +440,66 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
         "prep_throughput": prep_throughput,
         "items_pendientes": items_pendientes,
         "stock_por_contenedor": stock_por_contenedor,
+        "stories": _build_stories_unistore(
+            despachados_periodo=despachados_periodo,
+            delta_disp=delta_disp,
+            delta_yoy=delta_yoy,
+            lead_avg=lead_avg,
+            stuck=stuck,
+            sku_critico=sku_critico,
+            period=period,
+        ),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
+
+
+def _build_stories_unistore(
+    *,
+    despachados_periodo: int,
+    delta_disp: float | None,
+    delta_yoy: float | None,
+    lead_avg: float | None,
+    stuck: int,
+    sku_critico: int,
+    period: str,
+) -> list[dict]:
+    """Genera mini-narrativas operativas (deterministicas, sin LLM en runtime).
+    Cada story: {tone: ok|warn|alert, text: str}. Frontend renderiza como banner."""
+    stories: list[dict] = []
+
+    if delta_disp is not None:
+        if delta_disp >= 10:
+            stories.append({"tone": "ok",
+                            "text": f"Despachos +{delta_disp:.1f}% vs periodo previo ({despachados_periodo} en {period})"})
+        elif delta_disp <= -10:
+            stories.append({"tone": "alert",
+                            "text": f"Despachos {delta_disp:.1f}% vs periodo previo. Operacion mas lenta o menos demanda."})
+
+    if delta_yoy is not None:
+        if delta_yoy >= 15:
+            stories.append({"tone": "ok",
+                            "text": f"Crecimiento sostenido: +{delta_yoy:.0f}% vs mismo periodo del ano pasado"})
+        elif delta_yoy <= -15:
+            stories.append({"tone": "warn",
+                            "text": f"Volumen {delta_yoy:.0f}% vs mismo periodo del ano pasado. Revisar tendencia."})
+
+    if lead_avg is not None and lead_avg > 0:
+        if lead_avg < 2:
+            stories.append({"tone": "ok",
+                            "text": f"Lead time avg {float(lead_avg):.1f} d - operacion fluida"})
+        elif lead_avg > 5:
+            stories.append({"tone": "alert",
+                            "text": f"Lead time avg {float(lead_avg):.1f} d - bottleneck en preparacion o despacho"})
+
+    if stuck > 50:
+        stories.append({"tone": "alert",
+                        "text": f"{stuck} pedidos atascados > 5 dias - revisar bandeja de logistica"})
+    elif stuck > 20:
+        stories.append({"tone": "warn",
+                        "text": f"{stuck} pedidos atascados - encima del umbral aceptable"})
+
+    if sku_critico > 30:
+        stories.append({"tone": "alert",
+                        "text": f"{sku_critico} SKUs con stock critico - riesgo de quiebre"})
+
+    return stories

@@ -202,6 +202,9 @@ app.include_router(flujo_fondos_api.router)
 from app.api import catalog_metadata as catalog_metadata_api
 app.include_router(catalog_metadata_api.router)
 
+from app.api import logistics_targets as logistics_targets_api
+app.include_router(logistics_targets_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

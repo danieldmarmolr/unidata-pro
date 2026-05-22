@@ -95,21 +95,39 @@ def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: 
           AND "FechaEstimadaEntrega" >= "Fecha"
     """, p)
 
-    cards.append({"label": "Pedidos pendientes", "value": pendientes,
-                  "hint": "DigiP: estado=pendiente"})
-    cards.append({"label": "En preparacion", "value": en_prep,
-                  "hint": "DigiP: estado=preparacion"})
-    cards.append({"label": f"Completados ({period})", "value": completados,
+    from app.db import logistics_targets_db as _lt
+    targets = _lt.get_map("unidrop")
+
+    def _enrich(card: dict, kpi_key: str) -> dict:
+        t = targets.get(kpi_key)
+        if not t:
+            return card
+        try:
+            v = float(card.get("value") or 0)
+            target_v = float(t["target_value"])
+            delta_t = ((v - target_v) / target_v * 100) if target_v else None
+            card["target"] = target_v
+            card["target_direction"] = t.get("direction") or "lower_is_better"
+            card["delta_target"] = round(delta_t, 1) if delta_t is not None else None
+        except Exception:
+            pass
+        return card
+
+    cards.append(_enrich({"label": "Pedidos pendientes", "value": pendientes,
+                  "hint": "DigiP: estado=pendiente"}, "pending_orders_max"))
+    cards.append(_enrich({"label": "En preparacion", "value": en_prep,
+                  "hint": "DigiP: estado=preparacion"}, "in_prep_max"))
+    cards.append(_enrich({"label": f"Completados ({period})", "value": completados,
                   "delta": round(delta_comp, 1) if delta_comp is not None else None,
                   "delta_yoy": round(delta_yoy, 1) if delta_yoy is not None else None,
                   "delta_yoy_label": "vs hace 1 ano",
-                  "hint": "DigiP: estado=completo en periodo"})
-    cards.append({"label": f"Eliminados ({period})", "value": eliminados,
-                  "hint": f"Tasa cancelacion: {round(tasa_cancel,1)}%" if tasa_cancel is not None else "Sin terminales"})
-    cards.append({"label": "Atascados", "value": atascados,
-                  "hint": f">{ATASCO_DIAS}d en pendiente/preparacion"})
-    cards.append({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
-                  "suffix": " dias", "hint": "Pedido -> entrega estimada (completos)"})
+                  "hint": "DigiP: estado=completo en periodo"}, "completed_target"))
+    cards.append(_enrich({"label": f"Eliminados ({period})", "value": eliminados,
+                  "hint": f"Tasa cancelacion: {round(tasa_cancel,1)}%" if tasa_cancel is not None else "Sin terminales"}, "cancelled_max"))
+    cards.append(_enrich({"label": "Atascados", "value": atascados,
+                  "hint": f">{ATASCO_DIAS}d en pendiente/preparacion"}, "stuck_orders_max"))
+    cards.append(_enrich({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
+                  "suffix": " dias", "hint": "Pedido -> entrega estimada (completos)"}, "lead_time_days"))
 
     # ---------- Funnel: happy path 3 pasos ----------
     # Total iniciados en periodo = todos los pedidos creados en el periodo
@@ -250,5 +268,57 @@ def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: 
         "stuck_orders": stuck_orders,
         "by_estado": by_estado,
         "top_skus": top_skus,
+        "stories": _build_stories_unidrop(
+            completados=completados,
+            delta_comp=delta_comp,
+            eliminados=eliminados,
+            tasa_cancel=tasa_cancel,
+            atascados=atascados,
+            pendientes=pendientes,
+            period=period,
+        ),
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
+
+
+def _build_stories_unidrop(
+    *,
+    completados: int,
+    delta_comp: float | None,
+    eliminados: int,
+    tasa_cancel: float | None,
+    atascados: int,
+    pendientes: int,
+    period: str,
+) -> list[dict]:
+    """Stories operativas DigiP Unidrop. {tone: ok|warn|alert, text: str}."""
+    stories: list[dict] = []
+
+    if delta_comp is not None:
+        if delta_comp >= 15:
+            stories.append({"tone": "ok",
+                            "text": f"Volumen completado +{delta_comp:.0f}% vs periodo previo ({completados} en {period})"})
+        elif delta_comp <= -15:
+            stories.append({"tone": "alert",
+                            "text": f"Completados {delta_comp:.0f}% vs periodo previo. Posible bottleneck operativo."})
+
+    if tasa_cancel is not None:
+        if tasa_cancel >= 40:
+            stories.append({"tone": "alert",
+                            "text": f"Tasa de cancelacion {tasa_cancel:.0f}% ({eliminados} eliminados). Hay un problema sistemico."})
+        elif tasa_cancel >= 25:
+            stories.append({"tone": "warn",
+                            "text": f"Tasa de cancelacion {tasa_cancel:.0f}% - encima del umbral saludable (~20%)"})
+
+    if atascados > 30:
+        stories.append({"tone": "alert",
+                        "text": f"{atascados} pedidos atascados > {ATASCO_DIAS}d. Revisar bandeja DigiP."})
+    elif atascados > 10:
+        stories.append({"tone": "warn",
+                        "text": f"{atascados} pedidos atascados > {ATASCO_DIAS}d - revisar prioridades"})
+
+    if pendientes > 100:
+        stories.append({"tone": "warn",
+                        "text": f"{pendientes} pedidos en estado pendiente - capacidad de preparacion al limite"})
+
+    return stories

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from app.db.local_persistence import get_conn
 
@@ -162,6 +163,10 @@ def delete_metadata(unit: str, schema_name: str, table_name: str) -> bool:
         return cur.rowcount > 0
 
 
+_USAGE_CACHE: dict[str, tuple[float, dict]] = {}
+_USAGE_TTL = 30.0  # 30s - barato para evitar query expensive en cada GET
+
+
 def usage_stats(unit: str) -> dict[str, dict]:
     """
     Stats de uso por tabla, derivadas de query_runs (SQL libre).
@@ -169,9 +174,17 @@ def usage_stats(unit: str) -> dict[str, dict]:
 
     Devuelve: { "schema.table": {"queries": N, "last_used_at": iso, "last_user": email} }
 
+    Cache TTL 30s - la query agrega query_runs con regex y es la mas pesada del
+    endpoint. Aunque catalog_metadata cambie, las stats se refrescan en <=30s.
+
     NOTA: solo trackea queries del SQL libre. Las queries de dashboards
     no estan registradas en query_runs (estarian en logs del backend).
     """
+    now = time.time()
+    cached = _USAGE_CACHE.get(unit)
+    if cached and (now - cached[0]) < _USAGE_TTL:
+        return cached[1]
+
     init()
     with get_conn() as c, c.cursor() as cur:
         # query_runs schema: ts, user (email), unit, sql, rows, duration_ms
@@ -201,6 +214,7 @@ def usage_stats(unit: str) -> dict[str, dict]:
                 "last_used_at": r["last_used_at"].isoformat() if r["last_used_at"] else None,
                 "last_user": r["last_user"],
             }
+        _USAGE_CACHE[unit] = (now, out)
         return out
 
 

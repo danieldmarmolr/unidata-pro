@@ -22,12 +22,16 @@ export function HBarChart({
   formatter = "currency",
   color = "#7a3eae",
   caption,
+  onBarClick,
+  highlightName,
 }: {
   data: Datum[];
   height?: number;
   formatter?: "currency" | "number";
   color?: string;
   caption?: string;
+  onBarClick?: (d: Datum) => void;
+  highlightName?: string | null;
 }) {
   const fmt = (v: number) => (formatter === "currency" ? formatCurrency(v) : formatNumber(v));
   const tickFmt = (v: number) => {
@@ -62,10 +66,22 @@ export function HBarChart({
             cursor={{ fill: "#f5f0fb" }}
             formatter={(v: unknown) => [fmt(Number(v) || 0), ""] as [string, string]}
           />
-          <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={18}>
-            {data.map((_, i) => (
-              <Cell key={i} fill={i === 0 ? color : `${color}${Math.max(40, 100 - i * 8).toString(16)}`.slice(0, 7)} />
-            ))}
+          <Bar
+            dataKey="value"
+            radius={[0, 6, 6, 0]}
+            barSize={18}
+            onClick={(d: any) => {
+              if (onBarClick && d?.payload) onBarClick(d.payload as Datum);
+            }}
+            style={{ cursor: onBarClick ? "pointer" : "default" }}
+          >
+            {data.map((d, i) => {
+              const baseFill = i === 0 ? color : `${color}${Math.max(40, 100 - i * 8).toString(16)}`.slice(0, 7);
+              const dimmed = !!highlightName && highlightName !== d.name;
+              return (
+                <Cell key={i} fill={baseFill} fillOpacity={dimmed ? 0.3 : 1} />
+              );
+            })}
           </Bar>
         </RBarChart>
       </ResponsiveContainer>

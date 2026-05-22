@@ -10,10 +10,15 @@ export type KpiCard = {
   delta?: number | null;
   delta_yoy?: number | null;
   delta_yoy_label?: string | null;
+  target?: number | null;
+  target_direction?: "lower_is_better" | "higher_is_better" | null;
+  delta_target?: number | null;
   prefix?: string;
   suffix?: string;
   hint?: string | null;
 };
+
+export type Story = { tone: "ok" | "warn" | "alert"; text: string };
 
 export type TimeSeriesPoint = { date: string; value: number };
 export type TimeSeries = { label: string; points: TimeSeriesPoint[] };

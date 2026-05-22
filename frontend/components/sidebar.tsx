@@ -123,6 +123,7 @@ const ITEMS: NavItem[] = [
     children: [
       { label: "Vista general", href: "/dashboard/logistica",             icon: Truck   },
       { label: "Carga DigiP",  href: "/dashboard/logistica/carga-digip", icon: Upload  },
+      { label: "Targets",      href: "/dashboard/logistica/targets",     icon: Truck   },
     ],
   },
   {
