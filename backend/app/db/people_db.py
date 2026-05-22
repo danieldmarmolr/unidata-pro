@@ -275,6 +275,24 @@ def init() -> None:
                 "ON people_messages (conversation_id, created_at DESC) WHERE deleted_at IS NULL"
             )
 
+            # --- uploads (archivos de imagen para posts/DMs)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_uploads (
+                    id           BIGSERIAL PRIMARY KEY,
+                    mime         TEXT NOT NULL,
+                    content      BYTEA NOT NULL,
+                    size_bytes   INT NOT NULL,
+                    width        INT,
+                    height       INT,
+                    uploaded_by  BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_uploads_user "
+                "ON people_uploads (uploaded_by, created_at DESC)"
+            )
+
             # --- polls (encuestas dentro de posts)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS people_polls (
@@ -1951,6 +1969,54 @@ def is_bookmarked(post_id: int, user_id: int) -> bool:
 # Search global (posts, users, spaces)
 # ============================================================
 
+# ============================================================
+# Uploads (imagenes embebidas en posts/DMs)
+# ============================================================
+
+ALLOWED_MIMES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+MAX_UPLOAD_SIZE = 5 * 1024 * 1024  # 5MB
+
+
+def save_upload(*, content: bytes, mime: str, uploaded_by: int) -> dict:
+    init()
+    if mime not in ALLOWED_MIMES:
+        raise ValueError(f"mime no permitido. Validos: {sorted(ALLOWED_MIMES)}")
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise ValueError(f"archivo muy grande: {len(content)} bytes (max {MAX_UPLOAD_SIZE})")
+    if len(content) == 0:
+        raise ValueError("archivo vacio")
+    import psycopg2
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """INSERT INTO people_uploads (mime, content, size_bytes, uploaded_by)
+               VALUES (%s, %s, %s, %s) RETURNING id, created_at""",
+            (mime, psycopg2.Binary(content), len(content), uploaded_by),
+        )
+        row = dict(cur.fetchone())
+    return {
+        "id": row["id"],
+        "url": f"/api/people/uploads/{row['id']}",
+        "mime": mime,
+        "size_bytes": len(content),
+        "created_at": _iso(row.get("created_at")),
+    }
+
+
+def get_upload(upload_id: int) -> dict | None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT id, mime, content, size_bytes FROM people_uploads WHERE id = %s",
+            (upload_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["content"] = bytes(d["content"]) if d.get("content") else b""
+    return d
+
+
 def insights_dashboard(*, since_days: int = 30) -> dict:
     """Engagement analytics agregado para admin/People/gerencia.
 
@@ -2117,6 +2183,102 @@ def insights_dashboard(*, since_days: int = 30) -> dict:
         "silent_users": silent,
         "posts_by_day": posts_by_day,
         "enps_summary": enps_summary,
+    }
+
+
+def digest_data_for_user(*, user_id: int) -> dict:
+    """Recoge contenido del digest para un user: unread notifs/DMs + posts top + eventos."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT name, email FROM users WHERE id = %s", (user_id,))
+        u = cur.fetchone()
+        if not u:
+            return {}
+
+        # Unread notifications (top 10)
+        cur.execute("""
+            SELECT n.kind, n.preview, n.link, n.created_at,
+                   a.name AS actor_name
+              FROM people_notifications n
+              LEFT JOIN users a ON a.id = n.actor_user_id
+             WHERE n.user_id = %s AND n.read_at IS NULL
+             ORDER BY n.created_at DESC LIMIT 10
+        """, (user_id,))
+        unread_notifs = [dict(r) for r in cur.fetchall()]
+        for n in unread_notifs:
+            n["created_at"] = _iso(n.get("created_at"))
+
+        # DMs unread (lista de conv con count)
+        cur.execute("""
+            SELECT c.id, c.kind, c.name,
+                   (SELECT COUNT(*) FROM people_messages m
+                     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                       AND m.created_at > cm.last_read_at AND m.author_id <> %s) AS n,
+                   (SELECT m.content FROM people_messages m
+                     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                     ORDER BY m.created_at DESC LIMIT 1) AS last_preview
+              FROM people_conversation_members cm
+              JOIN people_conversations c ON c.id = cm.conversation_id
+             WHERE cm.user_id = %s
+               AND c.last_message_at > cm.last_read_at
+             ORDER BY c.last_message_at DESC LIMIT 10
+        """, (user_id, user_id))
+        unread_dms = [dict(r) for r in cur.fetchall() if r["n"] > 0]
+
+        # Top posts ultimas 24h (3-5)
+        cur.execute("""
+            SELECT p.id, p.content, p.created_at,
+                   au.name AS author_name,
+                   (SELECT COUNT(*) FROM people_post_reactions r WHERE r.post_id = p.id) AS reactions,
+                   (SELECT COUNT(*) FROM people_post_comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comments,
+                   sp.name AS space_name, sp.emoji AS space_emoji
+              FROM people_posts p
+              JOIN users au ON au.id = p.author_id
+              LEFT JOIN people_spaces sp ON sp.id = p.space_id
+             WHERE p.deleted_at IS NULL
+               AND p.created_at >= NOW() - INTERVAL '24 hours'
+             ORDER BY (
+                (SELECT COUNT(*) FROM people_post_reactions r WHERE r.post_id = p.id) +
+                (SELECT COUNT(*) FROM people_post_comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) * 2
+             ) DESC, p.created_at DESC
+             LIMIT 5
+        """)
+        top_posts = [dict(r) for r in cur.fetchall()]
+        for p in top_posts:
+            p["created_at"] = _iso(p.get("created_at"))
+
+        # Eventos proximos (7 dias)
+        cur.execute("""
+            SELECT e.id, e.title, e.starts_at, e.location,
+                   (SELECT status FROM people_event_rsvp r WHERE r.event_id = e.id AND r.user_id = %s) AS my_rsvp
+              FROM people_events e
+             WHERE e.starts_at >= NOW()
+               AND e.starts_at <= NOW() + INTERVAL '7 days'
+             ORDER BY e.starts_at ASC LIMIT 5
+        """, (user_id,))
+        events = [dict(r) for r in cur.fetchall()]
+        for e in events:
+            e["starts_at"] = _iso(e.get("starts_at"))
+
+        # Cumples del dia
+        from app.utils.tz import today_ar
+        today = today_ar()
+        cur.execute("""
+            SELECT id, name FROM users
+             WHERE is_active = TRUE
+               AND birthday_month = %s AND birthday_day = %s
+               AND id <> %s
+        """, (today.month, today.day, user_id))
+        birthdays_today = [dict(r) for r in cur.fetchall()]
+
+    return {
+        "user": {"id": user_id, "name": u["name"], "email": u["email"]},
+        "unread_notifs": unread_notifs,
+        "unread_dms": unread_dms,
+        "top_posts": top_posts,
+        "upcoming_events": events,
+        "birthdays_today": birthdays_today,
+        "has_content": bool(unread_notifs or unread_dms or birthdays_today or top_posts or events),
     }
 
 

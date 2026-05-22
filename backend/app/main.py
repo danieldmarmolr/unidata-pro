@@ -154,6 +154,12 @@ def _startup() -> None:
         _people_hr_db.init()
     except Exception as e:
         logging.warning("people_hr_db init: %s", e)
+    # Background scheduler (auto-cumples diario)
+    try:
+        from app.jobs.scheduler import start_scheduler
+        start_scheduler()
+    except Exception as e:
+        logging.warning("scheduler init: %s", e)
     # NOTE: costs_db.init() se mantiene lazy (se inicializa en el primer request).
     # El deadlock que daba en local con --reload esta arreglado en costs_db.py
     # via information_schema check antes de ALTER TABLE. Meterlo en startup

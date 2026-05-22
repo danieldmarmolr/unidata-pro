@@ -8,6 +8,7 @@ import { Avatar } from "./avatar";
 import { KudoModal } from "./kudo-modal";
 import { MentionTextarea } from "./mention-textarea";
 import { PollCreator } from "./poll";
+import { ImageUploader } from "./image-uploader";
 import { cn } from "@/lib/utils";
 import type { Space } from "./types";
 
@@ -118,37 +119,8 @@ export function PostComposer({
               rows={2}
             />
 
-            {showImageInput && (
-              <div className="mt-2 flex gap-2">
-                <input
-                  type="url"
-                  value={imageUrl ?? ""}
-                  onChange={(e) => setImageUrl(e.target.value || null)}
-                  placeholder="URL de imagen..."
-                  className="flex-1 text-xs bg-bg-muted border border-border rounded-lg px-3 py-1.5 focus:outline-none focus:border-primary"
-                />
-                <button
-                  onClick={() => {
-                    setShowImageInput(false);
-                    setImageUrl(null);
-                  }}
-                  className="text-text-muted hover:text-text p-1"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            )}
-
-            {imageUrl && !showImageInput && (
-              <div className="mt-2 relative inline-block">
-                <img src={imageUrl} alt="" className="max-h-40 rounded-lg border border-border" />
-                <button
-                  onClick={() => setImageUrl(null)}
-                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 hover:bg-black"
-                >
-                  <X size={12} />
-                </button>
-              </div>
+            {(showImageInput || imageUrl) && (
+              <ImageUploader value={imageUrl} onChange={setImageUrl} />
             )}
 
             {pollOpen && (

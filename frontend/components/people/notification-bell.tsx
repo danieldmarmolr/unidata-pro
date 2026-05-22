@@ -3,10 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, BellRing, MessageSquare, AtSign, Award, Megaphone, MessageCircle, ChevronRight } from "lucide-react";
+import { Bell, BellRing, MessageSquare, AtSign, Award, Megaphone, MessageCircle, ChevronRight, BellOff } from "lucide-react";
 import { api } from "@/lib/api";
 import { Avatar } from "./avatar";
 import { cn } from "@/lib/utils";
+import { useBrowserNotifications } from "./use-browser-notifications";
 import type { NotificationItem, NotificationBadge } from "./types";
 
 const ICON_BY_KIND: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
@@ -59,6 +60,19 @@ export function NotificationBell() {
     enabled: open,
     staleTime: 5_000,
   });
+
+  // Polling de notifs unread para browser push (corre siempre, no solo dropdown abierto)
+  const pollQ = useQuery<{ items: NotificationItem[] }>({
+    queryKey: ["people-notifications-poll"],
+    queryFn: () => api("/api/people/notifications?unread_only=true&limit=8"),
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  });
+
+  const { permission, askPermission } = useBrowserNotifications(
+    pollQ.data?.items,
+    true,
+  );
 
   const readMut = useMutation({
     mutationFn: (id: number) =>
@@ -122,6 +136,20 @@ export function NotificationBell() {
                 </button>
               )}
             </div>
+
+            {permission !== "granted" && permission !== "denied" && (
+              <button
+                onClick={() => askPermission()}
+                className="w-full px-4 py-2 bg-amber-50 hover:bg-amber-100 border-b border-amber-200 text-[11px] text-amber-800 inline-flex items-center justify-center gap-1.5 transition"
+              >
+                <Bell size={11} /> Activar notificaciones del navegador
+              </button>
+            )}
+            {permission === "denied" && (
+              <div className="px-4 py-2 bg-bg-muted/50 border-b border-border text-[10px] text-text-muted inline-flex items-center gap-1.5">
+                <BellOff size={10} /> Push bloqueado por el navegador
+              </div>
+            )}
 
             {(badge?.dms_unread ?? 0) > 0 && (
               <Link

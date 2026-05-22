@@ -34,7 +34,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -746,3 +747,182 @@ def insights(
     if not _can_manage_people(user):
         raise HTTPException(403, "Solo admin/gerencia/People puede ver insights")
     return people_db.insights_dashboard(since_days=since_days)
+
+
+# ============================================================
+# Email digest (HTML para que n8n / SMTP / Resend envie)
+# ============================================================
+
+@router.get("/digest/preview", response_model=None)
+def digest_preview(
+    user: Annotated[dict, Depends(current_user)],
+    target_user_id: int | None = None,
+    as_html: bool = False,
+):
+    """Preview del digest del user (default: self).
+    Si as_html=true devuelve text/html para inspeccion en browser.
+    Admin/People pueden ver el digest de otros (target_user_id)."""
+    uid = target_user_id or user["id"]
+    if uid != user["id"] and not _can_manage_people(user):
+        raise HTTPException(403, "sin permisos")
+    data = people_db.digest_data_for_user(user_id=uid)
+    if as_html:
+        import os
+        frontend = os.environ.get("FRONTEND_URL", "https://app.unidatacenter.com.ar")
+        html = _render_digest_html(data, frontend)
+        return Response(content=html or "<p>Sin contenido nuevo</p>", media_type="text/html")
+    return data
+
+
+@router.get("/digest/recipients")
+def digest_recipients(
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Lista de users con contenido en su digest. Para n8n: itera esto,
+    pega el HTML via /digest/preview?target_user_id=X&as_html=true,
+    y envia el email."""
+    if not _can_manage_people(user):
+        raise HTTPException(403, "Solo admin/People puede ejecutar el digest masivo")
+    # Recorrer users activos
+    with people_db.get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT id, name, email FROM users WHERE is_active = TRUE ORDER BY id")
+        all_users = [dict(r) for r in cur.fetchall()]
+    recipients = []
+    for u in all_users:
+        d = people_db.digest_data_for_user(user_id=u["id"])
+        if d.get("has_content"):
+            recipients.append({
+                "user_id": u["id"],
+                "email": u["email"],
+                "name": u["name"],
+                "unread_notifs": len(d.get("unread_notifs", [])),
+                "unread_dms": sum(x["n"] for x in d.get("unread_dms", [])),
+            })
+    return {"recipients": recipients, "count": len(recipients)}
+
+
+# ============================================================
+# Uploads (imagenes embebidas)
+# ============================================================
+
+@router.post("/uploads", status_code=201)
+@limiter.limit("30/minute")
+async def upload_image(
+    request: Request,
+    user: Annotated[dict, Depends(current_user)],
+    file: Annotated[UploadFile, File(...)],
+) -> dict:
+    if not file.content_type or file.content_type not in people_db.ALLOWED_MIMES:
+        raise HTTPException(415, f"Tipo no permitido. Validos: jpeg, png, webp, gif")
+    content = await file.read()
+    if len(content) > people_db.MAX_UPLOAD_SIZE:
+        raise HTTPException(413, f"Archivo muy grande (max {people_db.MAX_UPLOAD_SIZE // 1024 // 1024}MB)")
+    try:
+        return people_db.save_upload(
+            content=content, mime=file.content_type, uploaded_by=user["id"],
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+def _render_digest_html(data: dict, frontend_url: str) -> str:
+    """Render HTML email-safe del digest."""
+    if not data.get("has_content"):
+        return ""
+    u = data.get("user", {})
+    rows = []
+    rows.append(f"""<div style="background:#7a3eae;color:#fff;padding:20px;border-radius:12px 12px 0 0;">
+        <h1 style="margin:0;font-size:20px;">Hola {u.get('name', 'che')} 👋</h1>
+        <div style="opacity:.9;font-size:13px;margin-top:4px;">Tu resumen diario de UNIDATA · People</div>
+    </div>""")
+
+    if data["birthdays_today"]:
+        items = ", ".join(b["name"] for b in data["birthdays_today"])
+        rows.append(f"""<div style="padding:16px 20px;border-bottom:1px solid #eee;background:#fef3c7;">
+            <div style="font-size:13px;font-weight:bold;color:#92400e;">🎂 Hoy cumple</div>
+            <div style="font-size:13px;margin-top:4px;">{items}</div>
+        </div>""")
+
+    if data["unread_dms"]:
+        dms_html = "".join(
+            f'<div style="margin-top:4px;font-size:12px;color:#475569;">'
+            f'  <b>{d.get("name") or "DM"}</b>: {(d.get("last_preview") or "")[:80]}'
+            f'  <span style="color:#7a3eae;font-weight:bold;"> · {d["n"]} sin leer</span>'
+            f'</div>'
+            for d in data["unread_dms"]
+        )
+        rows.append(f"""<div style="padding:16px 20px;border-bottom:1px solid #eee;">
+            <div style="font-size:13px;font-weight:bold;color:#0f172a;">💬 Mensajes sin leer ({len(data["unread_dms"])})</div>
+            {dms_html}
+            <a href="{frontend_url}/dashboard/people/dms" style="display:inline-block;margin-top:8px;font-size:12px;color:#7a3eae;font-weight:bold;text-decoration:none;">Abrir DMs →</a>
+        </div>""")
+
+    if data["unread_notifs"]:
+        notif_html = "".join(
+            f'<div style="margin-top:4px;font-size:12px;color:#475569;">'
+            f'  <b>{n.get("actor_name") or "Alguien"}</b> · {n["kind"]}: {(n.get("preview") or "")[:80]}'
+            f'</div>'
+            for n in data["unread_notifs"]
+        )
+        rows.append(f"""<div style="padding:16px 20px;border-bottom:1px solid #eee;">
+            <div style="font-size:13px;font-weight:bold;color:#0f172a;">🔔 Notificaciones ({len(data["unread_notifs"])})</div>
+            {notif_html}
+            <a href="{frontend_url}/dashboard/people/inbox" style="display:inline-block;margin-top:8px;font-size:12px;color:#7a3eae;font-weight:bold;text-decoration:none;">Abrir Inbox →</a>
+        </div>""")
+
+    if data["top_posts"]:
+        posts_html = "".join(
+            f'<div style="margin-top:8px;padding:8px;background:#f8fafc;border-radius:6px;">'
+            f'  <div style="font-size:11px;color:#94a3b8;">'
+            f'    {p.get("space_emoji") or "💬"} {p.get("space_name") or "Feed"} · {p["author_name"]}'
+            f'  </div>'
+            f'  <div style="font-size:12px;margin-top:2px;">{(p.get("content") or "")[:140]}</div>'
+            f'  <div style="font-size:10px;color:#94a3b8;margin-top:4px;">{p["reactions"]} reacciones · {p["comments"]} comentarios</div>'
+            f'</div>'
+            for p in data["top_posts"][:3]
+        )
+        rows.append(f"""<div style="padding:16px 20px;border-bottom:1px solid #eee;">
+            <div style="font-size:13px;font-weight:bold;color:#0f172a;">📣 Posts destacados del dia</div>
+            {posts_html}
+        </div>""")
+
+    if data["upcoming_events"]:
+        ev_html = "".join(
+            f'<div style="margin-top:4px;font-size:12px;color:#475569;">'
+            f'  <b>{e["title"]}</b> · {(e.get("starts_at") or "")[:16].replace("T", " ")}'
+            f'  {" · " + (e.get("location") or "") if e.get("location") else ""}'
+            f'  {" · <span style=color:#10b981;>vas</span>" if e.get("my_rsvp") == "yes" else ""}'
+            f'</div>'
+            for e in data["upcoming_events"]
+        )
+        rows.append(f"""<div style="padding:16px 20px;border-bottom:1px solid #eee;">
+            <div style="font-size:13px;font-weight:bold;color:#0f172a;">📅 Proximos eventos</div>
+            {ev_html}
+        </div>""")
+
+    rows.append(f"""<div style="padding:16px 20px;font-size:11px;color:#94a3b8;text-align:center;background:#f8fafc;border-radius:0 0 12px 12px;">
+        Enviado por UNIDATA People · <a href="{frontend_url}/dashboard/people" style="color:#7a3eae;">Abrir panel</a>
+    </div>""")
+
+    return f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;font-family:-apple-system,sans-serif;background:#f1f5f9;">
+        <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.05);">
+            {"".join(rows)}
+        </div>
+    </body></html>"""
+
+
+@router.get("/uploads/{upload_id}")
+def serve_upload(upload_id: int) -> Response:
+    """Sirve el contenido binario de un upload. Publico (no requiere auth)
+    porque las URLs son dificiles de adivinar y se usan para <img src=>."""
+    row = people_db.get_upload(upload_id)
+    if not row:
+        raise HTTPException(404, "Upload no encontrado")
+    return Response(
+        content=row["content"],
+        media_type=row["mime"],
+        headers={
+            "Cache-Control": "public, max-age=2592000, immutable",
+            "Content-Length": str(row["size_bytes"]),
+        },
+    )

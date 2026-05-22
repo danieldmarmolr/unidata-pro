@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
-  MessageSquare, Send, Plus, Search, X, Users as UsersIcon, ArrowLeft,
+  MessageSquare, Send, Plus, Search, X, Users as UsersIcon, ArrowLeft, Image as ImageIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { Avatar } from "@/components/people/avatar";
+import { ImageUploader } from "@/components/people/image-uploader";
 import { cn } from "@/lib/utils";
 import type {
   Conversation, DMMessage, DirectoryItem,
@@ -224,6 +225,8 @@ function MessagesPane({
 }) {
   const qc = useQueryClient();
   const [text, setText] = useState("");
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [showImage, setShowImage] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const msgsQ = useQuery<{ items: DMMessage[] }>({
@@ -249,10 +252,12 @@ function MessagesPane({
     mutationFn: () =>
       api<DMMessage>(`/api/people/conversations/${conv.id}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({ content: text || "📎 (imagen)", image_url: imageUrl }),
       }),
     onSuccess: () => {
       setText("");
+      setImageUrl(null);
+      setShowImage(false);
       qc.invalidateQueries({ queryKey: ["people-messages", conv.id] });
       qc.invalidateQueries({ queryKey: ["people-convs"] });
     },
@@ -352,27 +357,45 @@ function MessagesPane({
         })}
       </div>
 
-      <div className="border-t border-border p-3 bg-surface flex items-end gap-2">
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              if (text.trim()) sendMut.mutate();
-            }
-          }}
-          placeholder="Escribi un mensaje..."
-          rows={1}
-          className="flex-1 bg-bg-muted border border-border rounded-2xl px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none max-h-32"
-        />
-        <button
-          onClick={() => text.trim() && sendMut.mutate()}
-          disabled={!text.trim() || sendMut.isPending}
-          className="bg-primary text-white p-2 rounded-full hover:opacity-90 disabled:opacity-40 transition"
-        >
-          <Send size={16} />
-        </button>
+      <div className="border-t border-border p-3 bg-surface">
+        {(showImage || imageUrl) && (
+          <div className="mb-2">
+            <ImageUploader value={imageUrl} onChange={setImageUrl} compact />
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowImage((v) => !v)}
+            className={cn(
+              "p-2 rounded-full hover:bg-bg-muted transition",
+              showImage && "text-primary",
+            )}
+            title="Adjuntar imagen"
+          >
+            <ImageIcon size={16} />
+          </button>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (text.trim() || imageUrl) sendMut.mutate();
+              }
+            }}
+            placeholder="Escribi un mensaje..."
+            rows={1}
+            className="flex-1 bg-bg-muted border border-border rounded-2xl px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none max-h-32"
+          />
+          <button
+            onClick={() => (text.trim() || imageUrl) && sendMut.mutate()}
+            disabled={(!text.trim() && !imageUrl) || sendMut.isPending}
+            className="bg-primary text-white p-2 rounded-full hover:opacity-90 disabled:opacity-40 transition"
+          >
+            <Send size={16} />
+          </button>
+        </div>
       </div>
     </>
   );
