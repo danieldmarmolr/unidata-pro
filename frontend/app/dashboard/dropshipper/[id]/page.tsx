@@ -160,6 +160,15 @@ type DropshipperDetail = {
   referidos_list?: { user_id: number | null; nombre: string; email: string; creado_en: string | null; plan: string; sub_status: string; dias_al_vencimiento: number | null }[];
   subscription_intents?: { id: number | null; status: string; fecha: string | null; pagado: number; esperado: number; plan: string }[];
   sub_ltv?: { total_pagado: number; cant_procesadas: number; ultimo_pago: string | null; cant_pendientes: number; monto_pendiente: number };
+  // FASE B: angulo "cliente Unidrop"
+  lifetime_unidrop?: {
+    profit_unidrop: number;
+    subs_cobradas: number;
+    ganancia_unidrop: number;
+    gmv: number;
+  };
+  churn_signals?: { key: string; severity: "info" | "warning" | "critical"; msg: string }[];
+  churn_risk_level?: "ok" | "warning" | "critical";
   generated_at: string;
 };
 
@@ -178,6 +187,12 @@ type ComboAnalytics = {
     image_url: string;
     in_combos: number;
     in_individual: number;
+    // FASE B: cross con cost_index (margen Unidrop estimado por SKU)
+    costo_importacion_unit?: number | null;
+    costo_importacion_total?: number | null;
+    margen_unidrop_estimado?: number | null;
+    margen_unidrop_pct?: number | null;
+    has_cost?: boolean;
   }[];
 };
 
@@ -475,6 +490,87 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
           </div>
         </div>
 
+        {/* Cliente Unidrop · angulo de rentabilidad PARA Unidrop (lifetime + churn) */}
+        {(data.lifetime_unidrop || (data.churn_signals && data.churn_signals.length > 0)) && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-5">
+            <div className="lg:col-span-2 rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-emerald-50/60 to-white p-4 sm:p-5">
+              <div className="flex items-baseline justify-between flex-wrap gap-2 mb-2">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                    <DollarSign size={11} /> Cliente Unidrop · ganancia lifetime
+                  </div>
+                  <div className="text-[11px] text-emerald-700/70 mt-0.5">
+                    Cuanto generaste con este dropshipper como cliente · margen ML + suscripciones cobradas (all-time)
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-3xl font-extrabold text-emerald-800 tabular-nums">
+                    {formatCurrency(data.lifetime_unidrop?.ganancia_unidrop ?? 0)}
+                  </div>
+                  <div className="text-[10px] text-emerald-700/80">lifetime</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
+                <div className="bg-white/60 rounded-lg px-3 py-2 border border-emerald-100">
+                  <div className="text-[9px] uppercase text-emerald-700/70 font-semibold">Margen ML lifetime</div>
+                  <div className="font-bold tabular-nums text-emerald-900">{formatCurrency(data.lifetime_unidrop?.profit_unidrop ?? 0)}</div>
+                  <div className="text-[9px] text-emerald-700/60">profit_for_subscription all-time</div>
+                </div>
+                <div className="bg-white/60 rounded-lg px-3 py-2 border border-emerald-100">
+                  <div className="text-[9px] uppercase text-emerald-700/70 font-semibold">Subs cobradas lifetime</div>
+                  <div className="font-bold tabular-nums text-violet-700">{formatCurrency(data.lifetime_unidrop?.subs_cobradas ?? 0)}</div>
+                  <div className="text-[9px] text-emerald-700/60">PaymentIntentSubscription PROCESSED</div>
+                </div>
+                <div className="bg-white/60 rounded-lg px-3 py-2 border border-emerald-100">
+                  <div className="text-[9px] uppercase text-emerald-700/70 font-semibold">GMV ML lifetime</div>
+                  <div className="font-bold tabular-nums text-zinc-700">{formatCurrency(data.lifetime_unidrop?.gmv ?? 0)}</div>
+                  <div className="text-[9px] text-emerald-700/60">totalAmount OML</div>
+                </div>
+              </div>
+            </div>
+            <div className={
+              "rounded-2xl border p-4 sm:p-5 " +
+              (data.churn_risk_level === "critical" ? "border-rose-300 bg-gradient-to-br from-rose-50 to-white"
+                : data.churn_risk_level === "warning" ? "border-amber-300 bg-gradient-to-br from-amber-50 to-white"
+                : "border-emerald-200 bg-gradient-to-br from-emerald-50/40 to-white")
+            }>
+              <div className="text-[10px] font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <AlertTriangle size={11} className={
+                  data.churn_risk_level === "critical" ? "text-rose-700"
+                    : data.churn_risk_level === "warning" ? "text-amber-700"
+                    : "text-emerald-700"
+                } />
+                <span className={
+                  data.churn_risk_level === "critical" ? "text-rose-900"
+                    : data.churn_risk_level === "warning" ? "text-amber-900"
+                    : "text-emerald-900"
+                }>
+                  Churn risk: {data.churn_risk_level === "critical" ? "CRITICO" : data.churn_risk_level === "warning" ? "ATENCION" : "OK"}
+                </span>
+              </div>
+              {(data.churn_signals?.length ?? 0) === 0 ? (
+                <div className="text-xs text-emerald-700/80">Sin senales de riesgo detectadas.</div>
+              ) : (
+                <ul className="space-y-1.5 text-xs">
+                  {data.churn_signals!.map((s, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className={
+                        "inline-block w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 " +
+                        (s.severity === "critical" ? "bg-rose-600" : s.severity === "warning" ? "bg-amber-500" : "bg-zinc-400")
+                      } />
+                      <span className={
+                        s.severity === "critical" ? "text-rose-800 font-medium"
+                          : s.severity === "warning" ? "text-amber-800"
+                          : "text-zinc-700"
+                      }>{s.msg}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Segmentación omnicanal — ML vs TN, visible siempre aunque uno sea 0 */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
           <div className="bg-yellow-50/40 border border-yellow-200 rounded-xl p-4">
@@ -580,10 +676,13 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   </div>
                 </div>
               </div>
-              {/* Top SKUs */}
+              {/* Top SKUs + cross con costo importacion (margen Unidrop estimado) */}
               <div className="bg-soft/40 border border-border rounded-lg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Top SKUs vendidos</div>
-                <div className="space-y-1.5 max-h-[240px] overflow-y-auto">
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2 flex items-center justify-between">
+                  <span>Top SKUs vendidos</span>
+                  <span className="text-[9px] normal-case font-normal italic">qty · revenue · margen Unidrop est.</span>
+                </div>
+                <div className="space-y-1.5 max-h-[280px] overflow-y-auto">
                   {data.combo_analytics.top_skus.slice(0, 10).map((s) => (
                     <Link key={s.sku} href={`/dashboard/productos/${encodeURIComponent(s.sku)}`}
                           className="flex items-center gap-2 py-1 px-1.5 rounded hover:bg-soft transition group">
@@ -601,9 +700,28 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                       <div className="text-right flex-shrink-0">
                         <div className="text-xs font-bold tabular-nums">{s.qty}</div>
                         <div className="text-[9px] text-text-muted tabular-nums">{formatCurrency(s.revenue)}</div>
+                        {s.has_cost && s.margen_unidrop_estimado !== null && s.margen_unidrop_estimado !== undefined ? (
+                          <div
+                            className={"text-[9px] tabular-nums font-bold " + (
+                              (s.margen_unidrop_estimado ?? 0) > 0 ? "text-emerald-700" : "text-rose-700"
+                            )}
+                            title={`Costo importacion ${formatCurrency(s.costo_importacion_unit ?? 0)} x ${s.qty} = ${formatCurrency(s.costo_importacion_total ?? 0)} · revenue ${formatCurrency(s.revenue)}`}
+                          >
+                            {formatCurrency(s.margen_unidrop_estimado ?? 0)}
+                            {s.margen_unidrop_pct !== null && s.margen_unidrop_pct !== undefined && (
+                              <span className="opacity-70"> ({(s.margen_unidrop_pct ?? 0).toFixed(0)}%)</span>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-[9px] text-text-muted italic" title="Sin costo de importacion cargado para este SKU">sin costo</div>
+                        )}
                       </div>
                     </Link>
                   ))}
+                </div>
+                <div className="mt-2 pt-2 border-t border-border/50 text-[9px] text-text-muted italic leading-snug">
+                  Margen Unidrop estimado = revenue del SKU - (qty x costo importacion). Aproximacion: no incluye gastos
+                  operativos ni comisiones absorbidas. Para precision use profit_for_subscription a nivel orden.
                 </div>
               </div>
             </div>

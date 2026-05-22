@@ -1279,6 +1279,105 @@ def dropshipper_detail(
         log.warning("combo analytics fail uid=%s: %s", user_id, e)
         combo_analytics = None
 
+    # ============================================================
+    # FASE B: bloques del angulo "cliente Unidrop"
+    # ============================================================
+
+    # 1) Cross top_skus con cost_index para mostrar margen Unidrop estimado por
+    # producto. cost_index_unistore() devuelve el costo de importacion (es el
+    # mismo cost_idx para ambas unidades - Fox importa una sola vez).
+    try:
+        if combo_analytics and combo_analytics.get("top_skus"):
+            from app.services.profit_engine import cost_index_unistore
+            cost_idx = cost_index_unistore()
+            for s in combo_analytics["top_skus"]:
+                sku_key = (s.get("sku") or "").strip().lower()
+                ci = cost_idx.get(sku_key) or {}
+                costo_con_iva = ci.get("costo_con_iva")
+                qty = int(s.get("qty") or 0)
+                revenue = float(s.get("revenue") or 0)
+                if costo_con_iva is not None and qty > 0:
+                    costo_total = float(costo_con_iva) * qty
+                    s["costo_importacion_unit"] = round(float(costo_con_iva), 2)
+                    s["costo_importacion_total"] = round(costo_total, 2)
+                    s["margen_unidrop_estimado"] = round(revenue - costo_total, 2)
+                    s["margen_unidrop_pct"] = round((revenue - costo_total) / revenue * 100, 1) if revenue > 0 else 0
+                    s["has_cost"] = True
+                else:
+                    s["costo_importacion_unit"] = None
+                    s["margen_unidrop_estimado"] = None
+                    s["has_cost"] = False
+    except Exception as e:
+        log.warning("top_skus cost cross fail uid=%s: %s", user_id, e)
+
+    # 2) Lifetime ganancia Unidrop (all-time, no filtrado por periodo).
+    # 2 fuentes: margen por orden ML + suscripciones cobradas all-time.
+    lifetime_kpis = {"profit_unidrop": 0.0, "subs_cobradas": 0.0, "ganancia_unidrop": 0.0, "gmv": 0.0}
+    try:
+        if drop_dni:
+            lt_ml = q(eng, """
+                SELECT COALESCE(SUM(o."profit_for_subscription"),0)::float AS profit,
+                       COALESCE(SUM(o."totalAmount"),0)::float AS gmv
+                FROM mercado_libre_dev."OrderMercadoLibre" o
+                WHERE o."number" LIKE :prefix AND o."status" = 'paid'
+            """, {"prefix": drop_number_prefix}) or [(0.0, 0.0)]
+            lifetime_kpis["profit_unidrop"] = round(float(lt_ml[0][0] or 0), 2)
+            lifetime_kpis["gmv"] = round(float(lt_ml[0][1] or 0), 2)
+        lt_subs = q(eng, """
+            SELECT COALESCE(SUM(pis."paidAmount"),0)::float
+            FROM public."PaymentIntentSubscription" pis
+            WHERE pis."userId" = :uid AND pis.status::text = 'PROCESSED'
+        """, {"uid": int(user_id)}) or [(0.0,)]
+        lifetime_kpis["subs_cobradas"] = round(float(lt_subs[0][0] or 0), 2)
+        lifetime_kpis["ganancia_unidrop"] = round(
+            lifetime_kpis["profit_unidrop"] + lifetime_kpis["subs_cobradas"], 2,
+        )
+    except Exception as e:
+        log.warning("lifetime kpis fail uid=%s: %s", user_id, e)
+
+    # 3) Churn signals: lista de razones por las que este dropshipper esta "en riesgo".
+    churn_signals: list[dict] = []
+    try:
+        dias_venc = user.get("dias_al_vencimiento")
+        if dias_venc is not None:
+            if int(dias_venc) < 0:
+                churn_signals.append({"key": "sub_vencida", "severity": "critical",
+                                      "msg": f"Suscripcion vencida hace {abs(int(dias_venc))}d"})
+            elif int(dias_venc) < 7:
+                churn_signals.append({"key": "sub_por_vencer", "severity": "warning",
+                                      "msg": f"Suscripcion vence en {int(dias_venc)}d"})
+        if user.get("requiere_reauth"):
+            churn_signals.append({"key": "token_reauth", "severity": "warning",
+                                  "msg": "Token MELI vencido (requiere re-autenticar)"})
+        if float(pagos_kpi.get("deuda_pendiente") or 0) > 0:
+            churn_signals.append({"key": "con_deuda", "severity": "critical",
+                                  "msg": f"Deuda pendiente {pagos_kpi.get('deuda_pendiente'):,.0f}"})
+        ult_v = user.get("ultima_venta") or tn_kpi.get("ultima_venta") if isinstance(tn_kpi, dict) else None
+        try:
+            if ult_v:
+                d = dt.datetime.fromisoformat(ult_v.replace(" ", "T"))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=dt.timezone.utc)
+                dias_sin_vender = (dt.datetime.now(dt.timezone.utc) - d).days
+                if dias_sin_vender > 60:
+                    churn_signals.append({"key": "sin_venta_60d", "severity": "critical",
+                                          "msg": f"Sin vender hace {dias_sin_vender}d"})
+                elif dias_sin_vender > 30:
+                    churn_signals.append({"key": "sin_venta_30d", "severity": "warning",
+                                          "msg": f"Sin vender hace {dias_sin_vender}d"})
+            else:
+                churn_signals.append({"key": "nunca_vendio", "severity": "info",
+                                      "msg": "Nunca registro una venta"})
+        except Exception:
+            pass
+    except Exception as e:
+        log.warning("churn signals fail uid=%s: %s", user_id, e)
+    churn_risk_level = (
+        "critical" if any(s["severity"] == "critical" for s in churn_signals)
+        else "warning" if any(s["severity"] == "warning" for s in churn_signals)
+        else "ok"
+    )
+
     return {
         "user": user,
         "ventas": ventas_kpi,  # MELI
@@ -1303,6 +1402,10 @@ def dropshipper_detail(
         "referidos_list": referidos_list,             # usuarios referidos por este dropshipper
         "subscription_intents": subscription_intents, # PaymentIntentSubscription all-time (historial suscripcion)
         "sub_ltv": sub_ltv,                           # resumen LTV suscripcion
+        # FASE B: angulo "cliente Unidrop"
+        "lifetime_unidrop": lifetime_kpis,            # ganancia lifetime para Unidrop
+        "churn_signals": churn_signals,               # razones de riesgo
+        "churn_risk_level": churn_risk_level,         # ok | warning | critical
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
