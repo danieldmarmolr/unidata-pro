@@ -55,7 +55,7 @@ import {
   Award,
 } from "lucide-react";
 
-type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
+type Role = "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
 
 /** Slugs de areas operativas (sin Gerencia que es ROL). */
 type AreaSlug =
@@ -78,8 +78,8 @@ type NavItem = {
   external?: boolean;
 };
 
-const ALL: Role[] = ["admin", "user", "gerencia", "analista", "lector"];
-const ONLY_GERENCIA: Role[] = ["admin", "gerencia"];
+const ALL: Role[] = ["ceo", "admin", "user", "gerencia", "analista", "lector"];
+const ONLY_GERENCIA: Role[] = ["admin", "gerencia", "ceo"];
 
 const ITEMS: NavItem[] = [
   { label: "Inicio",           href: "/dashboard/home",           icon: LayoutDashboard, group: "Principal", roles: ALL },
@@ -212,7 +212,7 @@ const ITEMS: NavItem[] = [
   { label: "Envios MELI por modo", href: "/dashboard/envios-meli", icon: Package,        group: "Unidrop", roles: ALL },
   { label: "Devoluciones",     href: "/dashboard/devoluciones",   icon: RotateCcw,       group: "Unidev", roles: ALL },
   { label: "NLP causas (Unidev)", href: "/dashboard/dev-nlp",     icon: AlertTriangle,   group: "Unidev", roles: ALL },
-  { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "analista"], areas: ["it", "data"] },
+  { label: "Data Catalog",     href: "/dashboard/catalog",        icon: Network,         group: "Datos", roles: ["admin", "gerencia", "ceo", "analista"], areas: ["it", "data"] },
   { label: "Explorador",       href: "/dashboard/sources",        icon: Database,        group: "Datos", roles: ["admin", "analista"] },
   { label: "SQL libre",        href: "/dashboard/sql",            icon: Terminal,        group: "Datos", roles: ["admin", "analista"] },
   { label: "Audit log",        href: "/dashboard/audit",          icon: ScrollText,      group: "Datos",       adminOnly: true },
@@ -287,7 +287,7 @@ export function Sidebar({
   // solo se muestra si su area_slug esta incluida. Items sin `areas` se
   // consideran cross-area (todos los pueden ver, respetando roles).
   const userAreaSlug = (user?.area_slug as AreaSlug | undefined) ?? undefined;
-  const isPriviledged = isAdmin || role === "gerencia";
+  const isPriviledged = isAdmin || role === "gerencia" || role === "ceo";
   const visibleItems = ITEMS.filter((it) => {
     if (it.adminOnly && !isAdmin) return false;
     if (it.roles && !isAdmin && !it.roles.includes(role)) return false;

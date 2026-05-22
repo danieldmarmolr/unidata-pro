@@ -114,8 +114,8 @@ def require_area(user: dict, areas: list[str]) -> None:
     Cuando un user pasa por el onboarding y elige sus areas, el RBAC empieza
     a aplicarse para ese user. Esto permite migrar sin lockear a nadie.
     """
-    # Bypass total: admin (legacy o nuevo flag is_admin) + gerencia (cross-org)
-    if user.get("is_admin") or user.get("role") in ("admin", "gerencia"):
+    # Bypass total: admin (legacy o nuevo flag is_admin) + gerencia + ceo (cross-org)
+    if user.get("is_admin") or user.get("role") in ("admin", "gerencia", "ceo"):
         return
     user_areas = user.get("area_slugs") or []
     # Backwards-compat: legacy users sin area asignada siguen viendo todo

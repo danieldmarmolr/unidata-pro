@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { fmtArDate } from "@/lib/dates";
-import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers } from "lucide-react";
+import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers, Crown } from "lucide-react";
 
 type AreaChip = { id: number; slug: string; name: string; color: string };
 
@@ -13,7 +13,7 @@ type User = {
   id: number;
   email: string;
   name: string;
-  role: "admin" | "user" | "gerencia" | "analista" | "lector";
+  role: "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
   is_active: boolean;
   is_admin: boolean;
   created_at: string;
@@ -138,12 +138,17 @@ export default function AdminUsersPage() {
                 return (
                 <tr key={u.id} className="border-t border-border hover:bg-soft transition">
                   <td className="px-3 py-2 font-semibold">
-                    {u.email}
-                    {u.id === me.id && (
-                      <span className="ml-2 text-[9px] uppercase font-bold text-primary bg-soft border border-primary/20 px-1.5 py-0.5 rounded">
-                        vos
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {u.role === "ceo" && (
+                        <Crown size={12} className="text-amber-500" aria-label="CEO" />
+                      )}
+                      <span>{u.email}</span>
+                      {u.id === me.id && (
+                        <span className="text-[9px] uppercase font-bold text-primary bg-soft border border-primary/20 px-1.5 py-0.5 rounded">
+                          vos
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-text-muted">{u.name || "—"}</td>
                   <td className="px-3 py-2 text-center">
@@ -155,6 +160,7 @@ export default function AdminUsersPage() {
                       }
                       className="px-2 py-1 text-xs rounded border border-border bg-bg outline-none focus:border-primary disabled:opacity-50"
                     >
+                      <option value="ceo">CEO (único)</option>
                       <option value="gerencia">gerencia</option>
                       <option value="analista">analista</option>
                       <option value="lector">lector</option>
@@ -238,6 +244,7 @@ export default function AdminUsersPage() {
                       <option value="">— sin asignar —</option>
                       {managerOptions.map((m) => (
                         <option key={m.id} value={m.id}>
+                          {m.role === "ceo" ? "👑 " : ""}
                           {m.name || m.email}
                           {m.role === "gerencia" || m.is_admin ? " ★" : ""}
                         </option>
@@ -430,6 +437,7 @@ function NewUserModal({
             onChange={(e) => setRole(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
           >
+            <option value="ceo">CEO · cabeza del organigrama (solo 1 activo)</option>
             <option value="gerencia">gerencia · KPIs cross-unidad estrategicos</option>
             <option value="analista">analista · drill profundo + SQL libre</option>
             <option value="lector">lector · vistas read-only basicas</option>
@@ -508,12 +516,13 @@ function NewUserModal({
             <option value="">— sin asignar —</option>
             {users.filter((u) => u.is_active).map((u) => (
               <option key={u.id} value={u.id}>
+                {u.role === "ceo" ? "👑 " : ""}
                 {u.name || u.email}
                 {u.role === "gerencia" || u.is_admin ? " ★" : ""}
               </option>
             ))}
           </select>
-          <div className="text-[11px] text-text-muted mt-1">★ marca gerentes o admins. Podes elegir cualquier user; despues optimizamos.</div>
+          <div className="text-[11px] text-text-muted mt-1">👑 CEO · ★ gerencia/admin. Podés elegir cualquier user.</div>
         </div>
         <label className="flex items-start gap-2 cursor-pointer p-3 border border-border rounded-lg hover:border-primary/40 transition">
           <input

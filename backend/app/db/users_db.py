@@ -1,7 +1,13 @@
 """
 Tabla de usuarios + roles (PostgreSQL via Supabase).
 Auto-migra al boot. Seedea al admin desde .env si no existe ningun user.
-Roles: 'admin' | 'user' | 'gerencia' | 'analista' | 'lector'.
+Roles: 'ceo' | 'admin' | 'user' | 'gerencia' | 'analista' | 'lector'.
+
+- ceo: cabeza del organigrama, gerente de los gerentes. Ve todo (igual que gerencia).
+  Solo puede existir 1 'ceo' activo a la vez.
+- admin: legacy, equivalente a is_admin=TRUE (gestion de plataforma).
+- gerencia: ve TODAS las areas + dashboard de Gerencia.
+- user/analista/lector: colaboradores, ven dashboards (sin admin/SQL libre).
 """
 from __future__ import annotations
 
@@ -45,8 +51,7 @@ def init() -> None:
                     email         TEXT NOT NULL,
                     name          TEXT NOT NULL DEFAULT '',
                     password_hash TEXT,
-                    role          TEXT NOT NULL DEFAULT 'user'
-                                  CHECK (role IN ('admin','user','gerencia','analista','lector')),
+                    role          TEXT NOT NULL DEFAULT 'user',
                     is_active     BOOLEAN NOT NULL DEFAULT TRUE,
                     is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -59,6 +64,21 @@ def init() -> None:
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT")
             cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE")
+            # CHECK constraint del rol — drop + add para incluir 'ceo' (idempotente)
+            cur.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check")
+            cur.execute("""
+                ALTER TABLE users
+                ADD CONSTRAINT users_role_check
+                CHECK (role IN ('ceo','admin','user','gerencia','analista','lector'))
+            """)
+            # Unico CEO activo: indice parcial unico sobre role
+            # (todos los rows del indice tienen role='ceo' por el WHERE,
+            # por lo tanto cualquier segundo CEO activo colisiona)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_ceo
+                ON users (role)
+                WHERE role = 'ceo' AND is_active = TRUE
+            """)
             # Backfill: usuarios con role='admin' obtienen is_admin=TRUE automaticamente.
             # Esto es idempotente (si ya estaba TRUE no cambia nada).
             cur.execute("UPDATE users SET is_admin = TRUE WHERE role = 'admin' AND is_admin = FALSE")
@@ -165,8 +185,8 @@ def list_all() -> list[dict]:
 
 def create(email: str, name: str, password: str, role: str, created_by: str, is_admin: bool = False) -> dict:
     init()
-    if role not in ("admin", "user", "gerencia", "analista", "lector"):
-        raise ValueError("role debe ser admin/user/gerencia/analista/lector")
+    if role not in ("ceo", "admin", "user", "gerencia", "analista", "lector"):
+        raise ValueError("role debe ser ceo/admin/user/gerencia/analista/lector")
     if not email or "@" not in email:
         raise ValueError("email invalido")
     if not password or len(password) < 6:
@@ -212,8 +232,21 @@ def update(
     if name is not None:
         sets.append("name = %s"); params.append(name.strip())
     if role is not None:
-        if role not in ("admin", "user", "gerencia", "analista", "lector"):
+        if role not in ("ceo", "admin", "user", "gerencia", "analista", "lector"):
             raise ValueError("role invalido")
+        # Validar unicidad de CEO antes de aplicar (el indice tambien lo enforce,
+        # pero asi devolvemos un error claro en vez de IntegrityError)
+        if role == "ceo":
+            with get_conn() as c, c.cursor() as cur:
+                cur.execute(
+                    "SELECT id, email FROM users WHERE role = 'ceo' AND is_active = TRUE AND id <> %s",
+                    (user_id,),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    raise ValueError(
+                        f"ya hay un CEO activo ({existing['email']}). Cambiale el rol antes."
+                    )
         sets.append("role = %s"); params.append(role)
         # Si el role pasa a 'admin', forzar is_admin=TRUE por consistencia
         if role == "admin":
