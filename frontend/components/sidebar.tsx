@@ -50,6 +50,7 @@ import {
   Cpu,
   PiggyBank,
   ExternalLink,
+  Coins,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -85,6 +86,7 @@ const ITEMS: NavItem[] = [
   { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
+  { label: "Gerencia 360",     href: "/dashboard/gerencia",       icon: Coins,           group: "Cross", roles: ONLY_GERENCIA, areas: ["finanzas", "administracion"] },
   {
     label: "Marketing",
     href: "/dashboard/marketing",

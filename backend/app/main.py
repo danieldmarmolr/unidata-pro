@@ -22,6 +22,7 @@ from app.api import reports as reports_api
 from app.api import sources as sources_api
 from app.db import areas_db, users_db
 from app.api.dashboards import executive as executive_api
+from app.api.dashboards import gerencia as gerencia_api
 from app.api.dashboards import sales as sales_api
 from app.api.dashboards import routers as dashboards_routers
 from app.config import get_settings
@@ -122,6 +123,7 @@ app.include_router(queries_api.router)
 app.include_router(drilldowns_api.router)
 app.include_router(catalog_api.router)
 app.include_router(executive_api.router)
+app.include_router(gerencia_api.router)
 app.include_router(sales_api.router)
 app.include_router(dashboards_routers.router)
 app.include_router(reports_api.router)
