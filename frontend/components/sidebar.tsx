@@ -54,6 +54,7 @@ import {
   UsersRound,
   Award,
   Search,
+  CalendarClock,
 } from "lucide-react";
 
 type Role = "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -150,14 +151,18 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ALL,
     children: [
-      { label: "Feed",       href: "/dashboard/people",            icon: Megaphone },
-      { label: "Mensajes",   href: "/dashboard/people/dms",        icon: HeartHandshake },
-      { label: "Inbox",      href: "/dashboard/people/inbox",      icon: Bell      },
-      { label: "Buscar",     href: "/dashboard/people/search",     icon: Search    },
-      { label: "Bookmarks",  href: "/dashboard/people/bookmarks",  icon: BookOpen  },
-      { label: "Directorio", href: "/dashboard/people/directory",  icon: Users     },
-      { label: "Org Chart",  href: "/dashboard/people/org-chart",  icon: Network   },
-      { label: "Kudos",      href: "/dashboard/people/kudos",      icon: Award     },
+      { label: "Feed",         href: "/dashboard/people",              icon: Megaphone },
+      { label: "Mensajes",     href: "/dashboard/people/dms",          icon: HeartHandshake },
+      { label: "Inbox",        href: "/dashboard/people/inbox",        icon: Bell      },
+      { label: "Buscar",       href: "/dashboard/people/search",       icon: Search    },
+      { label: "Bookmarks",    href: "/dashboard/people/bookmarks",    icon: BookOpen  },
+      { label: "Vacaciones",   href: "/dashboard/people/time-off",     icon: CalendarClock },
+      { label: "1:1s",         href: "/dashboard/people/one-on-ones",  icon: UserCircle },
+      { label: "Onboarding",   href: "/dashboard/people/onboarding",   icon: Wand2     },
+      { label: "Encuestas",    href: "/dashboard/people/surveys",      icon: Sparkles  },
+      { label: "Directorio",   href: "/dashboard/people/directory",    icon: Users     },
+      { label: "Org Chart",    href: "/dashboard/people/org-chart",    icon: Network   },
+      { label: "Kudos",        href: "/dashboard/people/kudos",        icon: Award     },
     ],
   },
   {
