@@ -7,7 +7,9 @@ from cachetools import TTLCache, cached
 from fastapi import APIRouter, Depends, Query
 
 from app.auth.security import current_user, require_area
-from app.services.executive_profit import gerencia_profit_overview, profit_daily_series
+from app.services.executive_profit import (
+    gerencia_profit_overview, profit_daily_series, profit_daily_consolidated,
+)
 from app.services.executive_360 import gerencia_360_blocks
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
@@ -16,6 +18,7 @@ router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 _cache: TTLCache = TTLCache(maxsize=64, ttl=300)
 _cache_360: TTLCache = TTLCache(maxsize=64, ttl=300)
 _cache_series: TTLCache = TTLCache(maxsize=8, ttl=600)  # serie 90d: TTL largo, es muy cara
+_cache_consolidated: TTLCache = TTLCache(maxsize=8, ttl=600)
 
 
 @router.get("/gerencia")
@@ -67,5 +70,24 @@ def get_gerencia_profit_series(
     @cached(_cache_series, key=lambda: key)
     def _build() -> dict:
         return profit_daily_series(days=days)
+
+    return _build()
+
+
+@router.get("/gerencia/profit-consolidated")
+def get_gerencia_profit_consolidated(
+    user: Annotated[dict, Depends(current_user)],
+    days: Annotated[int, Query(ge=14, le=180)] = 90,
+    horizon: Annotated[int, Query(ge=7, le=60)] = 28,
+) -> dict:
+    """Serie diaria consolidada (Unistore TN+ML + Unidrop retencion neta + total)
+    + forecasts multi-metodo (8) con MAPE comparativo para elegir el mejor."""
+    require_area(user, ["finanzas", "administracion"])
+
+    key = f"gerencia-consolidated:{days}:{horizon}"
+
+    @cached(_cache_consolidated, key=lambda: key)
+    def _build() -> dict:
+        return profit_daily_consolidated(days=days, forecast_horizon=horizon)
 
     return _build()

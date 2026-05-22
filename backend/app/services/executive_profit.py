@@ -391,6 +391,132 @@ def profit_daily_series(days: int = 90) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Serie diaria consolidada (Unistore + Unidrop) + forecast comparativo
+# ---------------------------------------------------------------------------
+
+def profit_daily_consolidated(days: int = 90, forecast_horizon: int = 28) -> dict:
+    """Serie diaria de ganancia por canal + forecast multi-metodo.
+
+    Canales:
+      - unistore_tn:  ganancia neta Unistore TN (SKU-by-SKU calc_profit)
+      - unistore_ml:  ganancia neta Unistore ML
+      - unidrop:      retencion neta diaria Unidrop = (comisiones + subs) - meta_ads
+                       (sin egresos operativos porque son mensuales/no granulares)
+      - total:        suma de los 3
+
+    Devuelve la serie historica + forecasts de 7 metodos + MAPE comparativo para
+    elegir el mejor para extrapolar.
+    """
+    from app.services.forecast_methods import compare_forecasts
+
+    # ---- Series Unistore TN + ML (reuso logica de profit_daily_series) ----
+    try:
+        uni_series = profit_daily_series(days=days)
+    except Exception as exc:
+        log.warning("profit_daily_consolidated unistore: %s", exc)
+        uni_series = {"days": days, "points": [], "error": str(exc)}
+
+    # Indice por fecha → {tn, ml}
+    uni_by_date: dict[str, dict] = {p["date"]: p for p in uni_series.get("points", [])}
+
+    # ---- Serie Unidrop diaria ----
+    drop_by_date: dict[str, float] = {}
+    try:
+        eng = get_engine("unidrop")
+        p = {"days": days}
+
+        # Comisiones diarias (PaymentTransaction + subs)
+        comm_rows = q(eng, """
+            SELECT DATE("createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS d,
+                   COALESCE(SUM(commission), 0)::float AS comm
+            FROM public."PaymentTransaction"
+            WHERE "createdAt" >= NOW() - make_interval(days => :days)
+            GROUP BY 1
+        """, p) or []
+        comm_subs_rows = q(eng, """
+            SELECT DATE("createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS d,
+                   COALESCE(SUM(commission), 0)::float AS comm
+            FROM public."PaymentTransactionSubscription"
+            WHERE "createdAt" >= NOW() - make_interval(days => :days)
+            GROUP BY 1
+        """, p) or []
+        # Suscripciones cobradas diarias
+        subs_rows = q(eng, """
+            SELECT DATE("createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS d,
+                   COALESCE(SUM("paidAmount"), 0)::float AS amt
+            FROM public."PaymentIntentSubscription"
+            WHERE status::text = 'PROCESSED'
+              AND "createdAt" >= NOW() - make_interval(days => :days)
+            GROUP BY 1
+        """, p) or []
+
+        for d, val in (comm_rows + comm_subs_rows + subs_rows):
+            if d is None:
+                continue
+            key = d.isoformat()
+            drop_by_date[key] = drop_by_date.get(key, 0.0) + float(val or 0)
+    except Exception as exc:
+        log.warning("profit_daily_consolidated unidrop ingresos: %s", exc)
+
+    # Meta Ads spend diario (resta de la retencion)
+    meta_by_date: dict[str, float] = {}
+    try:
+        from app.services.meta_ads import overview as meta_overview
+        # Period semantica: el endpoint usa "Xd" como string
+        meta_period = f"{days}d" if days in (7, 14, 30, 60, 90, 180, 365) else "90d"
+        meta_out = meta_overview(period=meta_period, unit="unidrop") or {}
+        for row in (meta_out.get("daily") or []):
+            d = row.get("d") or row.get("date")
+            if not d:
+                continue
+            meta_by_date[d] = float(row.get("spend") or 0)
+    except Exception as exc:
+        log.warning("profit_daily_consolidated meta_ads: %s", exc)
+
+    # ---- Merge en serie diaria ordenada ----
+    all_dates = set(uni_by_date.keys()) | set(drop_by_date.keys()) | set(meta_by_date.keys())
+    points: list[dict] = []
+    for d in sorted(all_dates):
+        tn = float(uni_by_date.get(d, {}).get("ganancia_tn", 0) or 0)
+        ml = float(uni_by_date.get(d, {}).get("ganancia_ml", 0) or 0)
+        drop_ingresos = drop_by_date.get(d, 0.0)
+        meta_spend = meta_by_date.get(d, 0.0)
+        unidrop_net = drop_ingresos - meta_spend
+        total = tn + ml + unidrop_net
+        points.append({
+            "date": d,
+            "unistore_tn": round(tn, 0),
+            "unistore_ml": round(ml, 0),
+            "unidrop": round(unidrop_net, 0),
+            "unidrop_ingresos": round(drop_ingresos, 0),
+            "meta_ads": round(meta_spend, 0),
+            "total": round(total, 0),
+        })
+
+    # ---- Forecast comparativo sobre la serie TOTAL ----
+    total_values = [p["total"] for p in points]
+    forecasts = compare_forecasts(total_values, horizon=forecast_horizon, backtest_size=14)
+
+    # Agregar fechas a los forecasts para que el front pueda graficar
+    if points:
+        last_date = points[-1]["date"]
+        from datetime import date as _date, timedelta as _td
+        last = _date.fromisoformat(last_date)
+        forecast_dates = [(last + _td(days=i + 1)).isoformat() for i in range(forecast_horizon)]
+    else:
+        forecast_dates = []
+
+    return {
+        "days": days,
+        "horizon": forecast_horizon,
+        "points": points,
+        "forecast_dates": forecast_dates,
+        "forecasts": forecasts,
+        "error": None,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Overview consolidado para Gerencia 360
 # ---------------------------------------------------------------------------
 

@@ -88,7 +88,6 @@ const ITEMS: NavItem[] = [
   { label: "Buscar clientes",  href: "/dashboard/clientes",       icon: Users,           group: "Principal", roles: ALL },
   { label: "Exportaciones",    href: "/dashboard/exports",        icon: Database,        group: "Principal", roles: ALL },
   { label: "Gerencia",         href: "/dashboard",                icon: Crown,           group: "Cross", roles: ONLY_GERENCIA },
-  { label: "Gerencia 360",     href: "/dashboard/gerencia",       icon: Coins,           group: "Cross", roles: ONLY_GERENCIA },
   {
     label: "Marketing",
     href: "/dashboard/marketing",
@@ -151,6 +150,8 @@ const ITEMS: NavItem[] = [
     roles: ALL,
     children: [
       { label: "Feed",       href: "/dashboard/people",            icon: Megaphone },
+      { label: "Mensajes",   href: "/dashboard/people/dms",        icon: HeartHandshake },
+      { label: "Inbox",      href: "/dashboard/people/inbox",      icon: Bell      },
       { label: "Directorio", href: "/dashboard/people/directory",  icon: Users     },
       { label: "Org Chart",  href: "/dashboard/people/org-chart",  icon: Network   },
       { label: "Kudos",      href: "/dashboard/people/kudos",      icon: Award     },
