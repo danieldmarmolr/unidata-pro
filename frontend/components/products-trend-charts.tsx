@@ -123,7 +123,7 @@ function ProfitDailyChart() {
           <YAxis tickFormatter={fmtTickK} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
           <Tooltip
             contentStyle={{ borderRadius: 8, fontSize: 11 }}
-            formatter={(value: number, name: string) => [formatCurrency(value), name === "ganancia" ? "Ganancia" : "Media movil 7d"]}
+            formatter={(value, name) => [formatCurrency(Number(value ?? 0)), name === "ganancia" ? "Ganancia" : "Media movil 7d"]}
             labelFormatter={(label) => fmtDateShort(label as string)}
           />
           <Bar dataKey="ganancia" fill="#10b981" radius={[2, 2, 0, 0]} />
@@ -176,7 +176,7 @@ function RevenueCostProfitChart() {
           <YAxis tickFormatter={fmtTickK} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
           <Tooltip
             contentStyle={{ borderRadius: 8, fontSize: 11 }}
-            formatter={(value: number, name: string) => [formatCurrency(value), name]}
+            formatter={(value, name) => [formatCurrency(Number(value ?? 0)), String(name ?? "")]}
             labelFormatter={(label) => fmtDateShort(label as string)}
           />
           <Legend wrapperStyle={{ fontSize: 10 }} iconType="rect" />
@@ -222,9 +222,10 @@ function CatalogActiveChart() {
           <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} tickFormatter={(v) => `${v}%`} />
           <Tooltip
             contentStyle={{ borderRadius: 8, fontSize: 11 }}
-            formatter={(value: number, name: string, props: any) => {
-              if (name === "pct_activo") return [`${value}%`, "% activo"];
-              return [formatNumber(value), name];
+            formatter={(value, name) => {
+              const n = Number(value ?? 0);
+              if (name === "pct_activo") return [`${n}%`, "% activo"];
+              return [formatNumber(n), String(name ?? "")];
             }}
             labelFormatter={(label) => fmtDateShort(label as string)}
           />
