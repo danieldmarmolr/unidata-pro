@@ -18,11 +18,16 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.db.engines import get_engine
 from app.services._utils import q
 
 log = logging.getLogger("unidata.sku_omnichannel")
+
+# Pool dedicado para queries paralelas multi-engine. 4 workers = 4 canales
+# concurrentes. Cada worker abre su propia conexion del pool DB del engine.
+_PARALLEL_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="sku-omni")
 
 
 def _empty_channel() -> dict:
@@ -273,10 +278,17 @@ def sku_omnichannel(sku: str) -> dict:
     eng_uni = get_engine("unistore")
     eng_drop = get_engine("unidrop")
 
-    unistore_tn = _unistore_tn(eng_uni, sku)
-    unistore_meli = _unistore_meli(eng_uni, sku)
-    unidrop_tn = _unidrop_tn(eng_drop, sku)
-    unidrop_meli = _unidrop_meli(eng_drop, sku)
+    # Antes: 4 queries seriales (2 contra unistore, 2 contra unidrop) -> ~2s.
+    # Ahora: las 4 corren en paralelo en threads. Cada thread abre su propia
+    # conexion del pool del engine correspondiente. ~500-800ms total.
+    f_uni_tn = _PARALLEL_POOL.submit(_unistore_tn, eng_uni, sku)
+    f_uni_meli = _PARALLEL_POOL.submit(_unistore_meli, eng_uni, sku)
+    f_drop_tn = _PARALLEL_POOL.submit(_unidrop_tn, eng_drop, sku)
+    f_drop_meli = _PARALLEL_POOL.submit(_unidrop_meli, eng_drop, sku)
+    unistore_tn = f_uni_tn.result()
+    unistore_meli = f_uni_meli.result()
+    unidrop_tn = f_drop_tn.result()
+    unidrop_meli = f_drop_meli.result()
 
     channels = {
         "unistore_tn": unistore_tn,
