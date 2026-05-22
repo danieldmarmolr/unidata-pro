@@ -144,14 +144,10 @@ def _startup() -> None:
         _mcp_tokens_db.init()
     except Exception as e:
         logging.warning("mcp_tokens_db init: %s", e)
-    # Pre-inicializar costs_db al boot. Antes se inicializaba lazy en el primer
-    # request a /dashboards/gerencia o /products/*, y eso disparaba ALTER TABLE
-    # concurrentemente con otro request → deadlock entre procesos Postgres.
-    from app.db import costs_db as _costs_db
-    try:
-        _costs_db.init()
-    except Exception as e:
-        logging.warning("costs_db init: %s", e)
+    # NOTE: costs_db.init() se mantiene lazy (se inicializa en el primer request).
+    # El deadlock que daba en local con --reload esta arreglado en costs_db.py
+    # via information_schema check antes de ALTER TABLE. Meterlo en startup
+    # bloqueaba el boot de Railway > 60s healthcheck timeout = 502 en prod.
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)
