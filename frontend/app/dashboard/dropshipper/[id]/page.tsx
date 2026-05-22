@@ -46,6 +46,7 @@ import {
   type UnifiedOrder,
 } from "@/components/unified-order-modal";
 import { WhatsAppPhone } from "@/components/whatsapp-phone";
+import { CsTouchpointsCard } from "@/components/cs-touchpoints-card";
 
 type DropshipperDetail = {
   user: {
@@ -1271,6 +1272,11 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
 
         {/* Notas del equipo sobre este dropshipper (source of truth) */}
         <DropshipperNotes dropshipperId={u.user_id} />
+
+        {/* Timeline CS: todas las cs_actions que tocaron a este dropshipper */}
+        <div className="mb-5">
+          <CsTouchpointsCard targetId={u.user_id} unit="unidrop" />
+        </div>
 
         {/* Cuentas Talo Pay — CBU + resumen de ambos tipos de transacción */}
         <div className="bg-violet-50/40 border border-violet-200 rounded-xl p-4 mb-5">

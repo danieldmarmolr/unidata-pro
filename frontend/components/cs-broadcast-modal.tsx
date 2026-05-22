@@ -94,6 +94,15 @@ function fmtMoney(n: number | null | undefined): string {
   return n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
 }
 
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderTemplate(tpl: string, t: Target): string {
   const primer = (t.nombre || "").split(/\s+/)[0] || "";
   const sub = (re: RegExp, val: string | number | null | undefined) =>
@@ -171,17 +180,45 @@ export function CsBroadcastModal({
   const targetsWithPhone = (data?.items ?? []).filter((t) => waLink(t.phone));
   const targetsWithoutPhone = (data?.items ?? []).length - targetsWithPhone.length;
 
-  const setStatus = async (target_id: number, status: Target["contact_status"]) => {
+  const setStatus = async (
+    target_id: number,
+    status: Target["contact_status"],
+    note?: string,
+    converted_amount?: number,
+  ) => {
     try {
       await api(`/api/cs-actions/${actionId}/targets/${target_id}/status`, {
         method: "POST",
-        body: JSON.stringify({ contact_status: status, note: "" }),
+        body: JSON.stringify({
+          contact_status: status,
+          note: note ?? "",
+          converted_amount: converted_amount ?? null,
+        }),
       });
       await load();
       onAfterMark?.();
     } catch (e) {
       // Silencioso: si falla, dejamos que el usuario vea la card sin cambios
     }
+  };
+
+  // Cuando el usuario cambia el status a 'responded' o 'converted' desde la
+  // tabla, abrimos un prompt para capturar la respuesta del cliente (texto
+  // libre). Se guarda en cs_action_targets.notes y queda en el timeline 360.
+  const onStatusChange = async (t: Target, status: Target["contact_status"]) => {
+    if (status === "responded") {
+      const reply = window.prompt(`Que dijo ${t.nombre || "el cliente"}? (opcional, queda guardado)`);
+      await setStatus(t.target_id, status, reply || "");
+      return;
+    }
+    if (status === "converted") {
+      const amountRaw = window.prompt(`Monto convertido en ARS para ${t.nombre || "el cliente"}? (opcional, solo numeros)`);
+      const amt = amountRaw ? Number(String(amountRaw).replace(/[^\d.]/g, "")) : null;
+      const reply = window.prompt("Nota / como cerro la venta? (opcional)");
+      await setStatus(t.target_id, status, reply || "", amt && amt > 0 ? amt : undefined);
+      return;
+    }
+    await setStatus(t.target_id, status);
   };
 
   const openWa = (t: Target) => {
@@ -195,6 +232,63 @@ export function CsBroadcastModal({
     if (t.contact_status === "pending") {
       setStatus(t.target_id, "contacted");
     }
+  };
+
+  // Batch open: abre N targets pending uno a uno con stagger (anti-bloqueo de
+  // popups de Chrome). Marca cada uno como 'contactado' a medida que se abre.
+  const [batchSize, setBatchSize] = useState<number>(5);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const openBatch = async () => {
+    if (!data || batchRunning) return;
+    const pendings = data.items.filter((t) => t.contact_status === "pending" && waLink(t.phone)).slice(0, batchSize);
+    if (pendings.length === 0) {
+      alert("No hay targets pendientes con telefono valido");
+      return;
+    }
+    if (!confirm(`Abrir ${pendings.length} chats de WhatsApp en pestanas nuevas? Cada uno queda marcado como 'contactado'.`)) return;
+    setBatchRunning(true);
+    for (const t of pendings) {
+      openWa(t);
+      // Stagger 700ms entre cada apertura - evita que Chrome bloquee el batch
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    setBatchRunning(false);
+  };
+
+  // Descargar HTML clickeable con la lista completa - util para blasts offline
+  // o para compartir con otro agente sin acceso a UNIDATA.
+  const downloadHtml = () => {
+    if (!data) return;
+    const rows = data.items
+      .filter((t) => waLink(t.phone))
+      .map((t) => {
+        const wa = waLink(t.phone)!;
+        const msg = renderTemplate(template, t);
+        const url = `${wa}?text=${encodeURIComponent(msg)}`;
+        return `<tr><td>${escapeHtml(t.nombre || "")}</td><td>${escapeHtml(t.phone || "")}</td><td><a href="${url}" target="_blank" rel="noopener">Abrir WhatsApp</a></td><td><pre style="white-space:pre-wrap;font-family:inherit;font-size:11px;color:#555">${escapeHtml(msg)}</pre></td></tr>`;
+      })
+      .join("");
+    const html = `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Difusion CS · Accion #${actionId}</title>
+<style>
+body{font-family:system-ui,sans-serif;padding:20px;max-width:1100px;margin:0 auto}
+h1{font-size:18px;margin-bottom:6px}h2{font-size:13px;color:#666;font-weight:400;margin-top:0}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:#f5f5f5;text-align:left;padding:8px;border-bottom:2px solid #ddd}
+td{padding:8px;border-bottom:1px solid #eee;vertical-align:top}
+a{display:inline-block;background:#25D366;color:#fff;padding:6px 10px;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px}
+a:hover{background:#1da851}
+</style></head><body>
+<h1>Difusion CS · Accion #${actionId}</h1>
+<h2>${escapeHtml(actionTitle)} · ${data.items.length} targets · ${data.items.filter((t) => waLink(t.phone)).length} con WhatsApp</h2>
+<table><thead><tr><th>Cliente</th><th>Telefono</th><th>Accion</th><th>Mensaje</th></tr></thead>
+<tbody>${rows}</tbody></table>
+</body></html>`;
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `cs_blast_accion_${actionId}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const downloadCsv = () => {
@@ -368,20 +462,50 @@ export function CsBroadcastModal({
               {targetsWithPhone.length} con telefono valido
               {targetsWithoutPhone > 0 && <span className="text-amber-700"> · {targetsWithoutPhone} sin telefono</span>}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2 items-center">
+              {/* Batch open: abre N pestanas WA con stagger */}
+              <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border border-emerald-300 bg-emerald-50">
+                <span className="text-[10px] font-bold text-emerald-800">Abrir batch</span>
+                <select
+                  value={batchSize}
+                  onChange={(e) => setBatchSize(Number(e.target.value))}
+                  className="text-[11px] bg-transparent font-bold text-emerald-800 outline-none cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <button
+                  onClick={openBatch}
+                  disabled={batchRunning}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-40 transition"
+                >
+                  {batchRunning ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+                  {batchRunning ? "Abriendo..." : "Go"}
+                </button>
+              </div>
               <button
                 onClick={markAllContacted}
                 disabled={!stats || stats.pending === 0}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-surface hover:bg-soft disabled:opacity-40 transition"
               >
-                <CheckCircle2 size={12} /> Marcar pendientes como contactados
+                <CheckCircle2 size={12} /> Marcar todos contactados
+              </button>
+              <button
+                onClick={downloadHtml}
+                disabled={!data || data.items.length === 0}
+                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-surface hover:bg-soft disabled:opacity-40 transition"
+                title="Descarga un HTML con todos los wa.me clickeables - util para blast offline"
+              >
+                <Download size={12} /> HTML (blast)
               </button>
               <button
                 onClick={downloadCsv}
                 disabled={!data || data.items.length === 0}
                 className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-border bg-surface hover:bg-soft disabled:opacity-40 transition"
               >
-                <Download size={12} /> CSV (telefonos + mensajes)
+                <Download size={12} /> CSV
               </button>
             </div>
           </div>
@@ -430,15 +554,27 @@ export function CsBroadcastModal({
                         )}
                       </td>
                       <td className="px-2 py-2">
-                        <select
-                          value={t.contact_status}
-                          onChange={(e) => setStatus(t.target_id, e.target.value as Target["contact_status"])}
-                          className={`text-[10px] px-2 py-1 rounded-full border font-bold cursor-pointer ${STATUS_COLORS[t.contact_status]}`}
-                        >
-                          {(Object.keys(STATUS_LABEL) as Target["contact_status"][]).map((k) => (
-                            <option key={k} value={k}>{STATUS_LABEL[k]}</option>
-                          ))}
-                        </select>
+                        <div className="flex flex-col gap-1">
+                          <select
+                            value={t.contact_status}
+                            onChange={(e) => onStatusChange(t, e.target.value as Target["contact_status"])}
+                            className={`text-[10px] px-2 py-1 rounded-full border font-bold cursor-pointer ${STATUS_COLORS[t.contact_status]}`}
+                          >
+                            {(Object.keys(STATUS_LABEL) as Target["contact_status"][]).map((k) => (
+                              <option key={k} value={k}>{STATUS_LABEL[k]}</option>
+                            ))}
+                          </select>
+                          {t.notes && (
+                            <div className="text-[9px] text-text-muted italic max-w-[180px] truncate" title={t.notes}>
+                              "{t.notes}"
+                            </div>
+                          )}
+                          {t.converted_amount ? (
+                            <div className="text-[10px] text-emerald-700 font-bold">
+                              + {t.converted_amount.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 })}
+                            </div>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-2 py-2">
                         {wa ? (

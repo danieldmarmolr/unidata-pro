@@ -418,6 +418,36 @@ def stats(
     return cs_actions_db.action_stats(action_id)
 
 
+@router.get("/touchpoints/{target_id}")
+def touchpoints(
+    target_id: int,
+    user: Annotated[dict, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+) -> dict:
+    """Historial completo de touchpoints CS que tocaron a un cliente o dropshipper.
+    Usado por las vistas customer/[id] y dropshipper/[id] para mostrar Timeline."""
+    require_area(user, ["cs", "marketing"])
+    items = cs_actions_db.touchpoints_for_target(target_id, unit)
+    # Summary rapido
+    total = len(items)
+    contacted = sum(1 for i in items if i["contact_status"] in ("contacted", "responded", "converted"))
+    responded = sum(1 for i in items if i["contact_status"] in ("responded", "converted"))
+    converted = sum(1 for i in items if i["contact_status"] == "converted")
+    revenue = sum(float(i.get("converted_amount") or 0) for i in items if i["contact_status"] == "converted")
+    return {
+        "target_id": target_id,
+        "unit": unit,
+        "items": items,
+        "summary": {
+            "total": total,
+            "contacted": contacted,
+            "responded": responded,
+            "converted": converted,
+            "revenue": round(revenue, 2),
+        },
+    }
+
+
 @router.get("/performance/summary")
 def performance(
     user: Annotated[dict, Depends(current_user)],

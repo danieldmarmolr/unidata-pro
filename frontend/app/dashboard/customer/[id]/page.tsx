@@ -13,6 +13,7 @@ import { useTableSort, SortHeader } from "@/lib/use-table-sort";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { ArrowLeft, Mail, MapPin, Smartphone, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { OrderStatusPipeline } from "@/components/order-status-pipeline";
+import { CsTouchpointsCard } from "@/components/cs-touchpoints-card";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
 
 type Detail = {
@@ -218,6 +219,11 @@ export default function CustomerDetailPage({ params }: { params: Promise<{ id: s
 
  {/* Card VIP destacada cuando aplica */}
  <VipStatusCard customerId={Number(id)} />
+
+ {/* Timeline CS: todas las cs_actions que tocaron a este cliente */}
+ <div className="mb-6">
+ <CsTouchpointsCard targetId={Number(id)} unit="unistore" />
+ </div>
 
  {data?.customer_info && (
  <div className="bg-surface border border-border rounded-xl p-5 mb-6">

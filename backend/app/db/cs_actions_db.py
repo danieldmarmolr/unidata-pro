@@ -582,6 +582,49 @@ def performance_summary(days: int = 60) -> dict:
     return out
 
 
+def touchpoints_for_target(target_id: int, unit: str) -> list[dict]:
+    """Devuelve TODAS las cs_actions que touchearon a un customer/dropshipper,
+    con outcome de cada touchpoint. Sirve para el timeline 360.
+
+    Ordenado por created_at DESC (mas reciente arriba)."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT a.id              AS action_id,
+                   a.title           AS title,
+                   a.source_type     AS source_type,
+                   a.source_key      AS source_key,
+                   a.unit            AS unit,
+                   a.priority        AS priority,
+                   a.status          AS status,
+                   a.created_at      AS action_created_at,
+                   t.contact_status  AS contact_status,
+                   t.contact_at      AS contact_at,
+                   t.response_at     AS response_at,
+                   t.converted_at    AS converted_at,
+                   t.converted_amount AS converted_amount,
+                   t.notes           AS reply_notes
+            FROM cs_action_targets t
+            JOIN cs_actions a ON a.id = t.action_id
+            WHERE t.target_id = %s AND a.unit = %s
+            ORDER BY a.created_at DESC
+            """,
+            (int(target_id), unit),
+        )
+        rows = cur.fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            for k in ("action_created_at", "contact_at", "response_at", "converted_at"):
+                if d.get(k) is not None and not isinstance(d[k], str):
+                    d[k] = d[k].isoformat()
+            if d.get("converted_amount") is not None:
+                d["converted_amount"] = float(d["converted_amount"])
+            out.append(d)
+        return out
+
+
 def action_stats(action_id: int) -> dict:
     init()
     seed_targets_if_needed(action_id)
