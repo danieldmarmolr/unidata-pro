@@ -275,6 +275,57 @@ def init() -> None:
                 "ON people_messages (conversation_id, created_at DESC) WHERE deleted_at IS NULL"
             )
 
+            # --- polls (encuestas dentro de posts)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_polls (
+                    id            BIGSERIAL PRIMARY KEY,
+                    post_id       BIGINT NOT NULL UNIQUE REFERENCES people_posts(id) ON DELETE CASCADE,
+                    question      TEXT NOT NULL,
+                    multi_choice  BOOLEAN NOT NULL DEFAULT FALSE,
+                    closes_at     TIMESTAMPTZ,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_poll_options (
+                    id          BIGSERIAL PRIMARY KEY,
+                    poll_id     BIGINT NOT NULL REFERENCES people_polls(id) ON DELETE CASCADE,
+                    label       TEXT NOT NULL,
+                    sort_order  INT NOT NULL DEFAULT 0
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_poll_votes (
+                    poll_id    BIGINT NOT NULL REFERENCES people_polls(id) ON DELETE CASCADE,
+                    option_id  BIGINT NOT NULL REFERENCES people_poll_options(id) ON DELETE CASCADE,
+                    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (poll_id, option_id, user_id)
+                )
+            """)
+
+            # --- bookmarks (posts guardados por user)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_post_bookmarks (
+                    post_id    BIGINT NOT NULL REFERENCES people_posts(id) ON DELETE CASCADE,
+                    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (post_id, user_id)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_bookmarks_user "
+                "ON people_post_bookmarks (user_id, created_at DESC)"
+            )
+
+            # ALTER idempotentes para edited_at
+            cur.execute(
+                "ALTER TABLE people_posts ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ"
+            )
+            cur.execute(
+                "ALTER TABLE people_post_comments ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ"
+            )
+
             # --- people_notifications (inbox unificado)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS people_notifications (
@@ -637,11 +688,60 @@ def list_feed(
             )
             kudo_info = {r["id"]: dict(r) for r in cur.fetchall()}
 
+    # Bookmarks del viewer
+    bookmarks_set: set[int] = set()
+    polls_by_post: dict[int, dict] = {}
+    with get_conn() as c, c.cursor() as cur:
+        if post_ids:
+            cur.execute(
+                "SELECT post_id FROM people_post_bookmarks WHERE user_id = %s AND post_id = ANY(%s)",
+                (viewer_id, post_ids),
+            )
+            bookmarks_set = {r["post_id"] for r in cur.fetchall()}
+            # Polls
+            cur.execute("""
+                SELECT p.id, p.post_id, p.question, p.multi_choice, p.closes_at
+                  FROM people_polls p WHERE p.post_id = ANY(%s)
+            """, (post_ids,))
+            polls_meta = {r["post_id"]: dict(r) for r in cur.fetchall()}
+            if polls_meta:
+                poll_ids = [pm["id"] for pm in polls_meta.values()]
+                cur.execute("""
+                    SELECT o.id, o.poll_id, o.label, o.sort_order,
+                           (SELECT COUNT(*) FROM people_poll_votes v WHERE v.option_id = o.id) AS votes,
+                           EXISTS(SELECT 1 FROM people_poll_votes v WHERE v.option_id = o.id AND v.user_id = %s) AS my_vote
+                      FROM people_poll_options o WHERE o.poll_id = ANY(%s) ORDER BY o.sort_order
+                """, (viewer_id, poll_ids))
+                opts_by_poll: dict[int, list[dict]] = {}
+                for r in cur.fetchall():
+                    opts_by_poll.setdefault(r["poll_id"], []).append({
+                        "id": r["id"], "label": r["label"], "sort_order": r["sort_order"],
+                        "votes": int(r["votes"]), "my_vote": bool(r["my_vote"]),
+                    })
+                cur.execute(
+                    "SELECT poll_id, COUNT(DISTINCT user_id) AS n FROM people_poll_votes "
+                    "WHERE poll_id = ANY(%s) GROUP BY poll_id",
+                    (poll_ids,),
+                )
+                voters_by_poll = {r["poll_id"]: int(r["n"]) for r in cur.fetchall()}
+                for post_id_, pm in polls_meta.items():
+                    polls_by_post[post_id_] = {
+                        "id": pm["id"],
+                        "question": pm["question"],
+                        "multi_choice": bool(pm["multi_choice"]),
+                        "closes_at": _iso(pm.get("closes_at")),
+                        "options": opts_by_poll.get(pm["id"], []),
+                        "total_voters": voters_by_poll.get(pm["id"], 0),
+                    }
+
     out: list[dict] = []
     for r in all_rows:
         d = _post_to_dict(r)
         d["reactions"] = reactions_by_post.get(r["id"], [])
         d["has_read"] = bool(d.get("has_read"))
+        d["bookmarked"] = r["id"] in bookmarks_set
+        if r["id"] in polls_by_post:
+            d["poll"] = polls_by_post[r["id"]]
         if d.get("kudo_id"):
             ki = kudo_info.get(d["kudo_id"])
             if ki:
@@ -751,6 +851,7 @@ def update_post(post_id: int, *, content: str | None = None, image_url: str | No
     if not sets:
         return None
     sets.append("updated_at = NOW()")
+    sets.append("edited_at = NOW()")
     params.append(post_id)
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
@@ -760,6 +861,25 @@ def update_post(post_id: int, *, content: str | None = None, image_url: str | No
         )
         row = cur.fetchone()
     return _post_to_dict(row) if row else None
+
+
+def update_comment(comment_id: int, *, content: str) -> dict | None:
+    init()
+    if not content or not content.strip():
+        raise ValueError("content vacio")
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE people_post_comments SET content = %s, edited_at = NOW() "
+            "WHERE id = %s AND deleted_at IS NULL RETURNING *",
+            (content.strip(), comment_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["created_at"] = _iso(d.get("created_at"))
+    d["edited_at"] = _iso(d.get("edited_at"))
+    return d
 
 
 def delete_post(post_id: int) -> bool:
@@ -1653,3 +1773,232 @@ def mark_all_notifications_read(*, user_id: int) -> int:
             (user_id,),
         )
         return cur.rowcount or 0
+
+
+# ============================================================
+# Polls (encuestas dentro de posts)
+# ============================================================
+
+def create_poll(*, post_id: int, question: str, options: list[str], multi_choice: bool = False, closes_at: str | None = None) -> dict:
+    init()
+    options = [o.strip() for o in options if o and o.strip()]
+    if len(options) < 2:
+        raise ValueError("una encuesta necesita al menos 2 opciones")
+    if not question or not question.strip():
+        raise ValueError("question vacia")
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO people_polls (post_id, question, multi_choice, closes_at) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (post_id, question.strip(), multi_choice, closes_at),
+        )
+        poll_id = cur.fetchone()["id"]
+        for i, label in enumerate(options):
+            cur.execute(
+                "INSERT INTO people_poll_options (poll_id, label, sort_order) VALUES (%s, %s, %s)",
+                (poll_id, label, i),
+            )
+    return {"poll_id": poll_id}
+
+
+def get_poll_for_post(post_id: int, *, viewer_id: int) -> dict | None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM people_polls WHERE post_id = %s", (post_id,))
+        poll = cur.fetchone()
+        if not poll:
+            return None
+        cur.execute("""
+            SELECT o.id, o.label, o.sort_order,
+                   (SELECT COUNT(*) FROM people_poll_votes v WHERE v.option_id = o.id) AS votes,
+                   EXISTS(SELECT 1 FROM people_poll_votes v WHERE v.option_id = o.id AND v.user_id = %s) AS my_vote
+              FROM people_poll_options o
+             WHERE o.poll_id = %s
+             ORDER BY o.sort_order
+        """, (viewer_id, poll["id"]))
+        options = [dict(r) for r in cur.fetchall()]
+        for o in options:
+            o["my_vote"] = bool(o["my_vote"])
+        cur.execute(
+            "SELECT COUNT(DISTINCT user_id) AS n FROM people_poll_votes WHERE poll_id = %s",
+            (poll["id"],),
+        )
+        total_voters = cur.fetchone()["n"]
+    return {
+        "id": poll["id"],
+        "question": poll["question"],
+        "multi_choice": bool(poll["multi_choice"]),
+        "closes_at": _iso(poll.get("closes_at")),
+        "options": options,
+        "total_voters": int(total_voters),
+        "closed": bool(poll.get("closes_at") and poll["closes_at"] < dt.datetime.now(dt.timezone.utc)),
+    }
+
+
+def vote_poll(*, post_id: int, option_id: int, user_id: int) -> dict:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        # Validar que la opcion pertenece a un poll de ese post
+        cur.execute("""
+            SELECT p.id AS poll_id, p.multi_choice, p.closes_at
+              FROM people_polls p
+              JOIN people_poll_options o ON o.poll_id = p.id
+             WHERE p.post_id = %s AND o.id = %s
+        """, (post_id, option_id))
+        poll = cur.fetchone()
+        if not poll:
+            raise ValueError("opcion invalida")
+        if poll.get("closes_at"):
+            cur.execute("SELECT NOW() > %s AS closed", (poll["closes_at"],))
+            if cur.fetchone()["closed"]:
+                raise ValueError("encuesta cerrada")
+        if not poll["multi_choice"]:
+            # Single choice: borrar votos previos del user en este poll
+            cur.execute(
+                "DELETE FROM people_poll_votes WHERE poll_id = %s AND user_id = %s",
+                (poll["poll_id"], user_id),
+            )
+        cur.execute(
+            "INSERT INTO people_poll_votes (poll_id, option_id, user_id) "
+            "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+            (poll["poll_id"], option_id, user_id),
+        )
+    return get_poll_for_post(post_id, viewer_id=user_id) or {}
+
+
+def unvote_poll(*, post_id: int, option_id: int, user_id: int) -> dict:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT p.id AS poll_id FROM people_polls p
+              JOIN people_poll_options o ON o.poll_id = p.id
+             WHERE p.post_id = %s AND o.id = %s
+        """, (post_id, option_id))
+        poll = cur.fetchone()
+        if not poll:
+            raise ValueError("opcion invalida")
+        cur.execute(
+            "DELETE FROM people_poll_votes WHERE poll_id = %s AND option_id = %s AND user_id = %s",
+            (poll["poll_id"], option_id, user_id),
+        )
+    return get_poll_for_post(post_id, viewer_id=user_id) or {}
+
+
+# ============================================================
+# Bookmarks
+# ============================================================
+
+def toggle_bookmark(*, post_id: int, user_id: int) -> dict:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "DELETE FROM people_post_bookmarks WHERE post_id = %s AND user_id = %s RETURNING 1",
+            (post_id, user_id),
+        )
+        was_bookmarked = cur.fetchone() is not None
+        if not was_bookmarked:
+            cur.execute(
+                "INSERT INTO people_post_bookmarks (post_id, user_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (post_id, user_id),
+            )
+    return {"bookmarked": not was_bookmarked}
+
+
+def list_my_bookmarks(*, user_id: int, limit: int = 50) -> list[dict]:
+    """Devuelve posts bookmarkeados por el user con el mismo shape de list_feed."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT p.*, u.name AS author_name, u.avatar_url AS author_avatar,
+                   u.job_title AS author_job, a.slug AS author_area_slug,
+                   a.name AS author_area_name, a.color AS author_area_color,
+                   sp.slug AS space_slug, sp.name AS space_name,
+                   sp.emoji AS space_emoji, sp.color AS space_color, sp.kind AS space_kind,
+                   b.created_at AS bookmarked_at
+              FROM people_post_bookmarks b
+              JOIN people_posts p ON p.id = b.post_id
+              JOIN users u ON u.id = p.author_id
+              LEFT JOIN areas a ON a.id = u.area_id
+              LEFT JOIN people_spaces sp ON sp.id = p.space_id
+             WHERE b.user_id = %s AND p.deleted_at IS NULL
+             ORDER BY b.created_at DESC
+             LIMIT %s
+        """, (user_id, limit))
+        rows = [dict(r) for r in cur.fetchall()]
+    out = []
+    for r in rows:
+        d = _post_to_dict(r)
+        d["bookmarked_at"] = _iso(r.get("bookmarked_at"))
+        d["bookmarked"] = True
+        d["reactions"] = []  # simplifico, el frontend recarga si quiere reacciones
+        d["comment_count"] = 0
+        d["has_read"] = True
+        out.append(d)
+    return out
+
+
+def is_bookmarked(post_id: int, user_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM people_post_bookmarks WHERE post_id = %s AND user_id = %s",
+            (post_id, user_id),
+        )
+        return cur.fetchone() is not None
+
+
+# ============================================================
+# Search global (posts, users, spaces)
+# ============================================================
+
+def search_all(*, query: str, viewer_id: int, limit: int = 20) -> dict:
+    init()
+    q = (query or "").strip()
+    if not q:
+        return {"posts": [], "users": [], "spaces": []}
+    pat = f"%{q.lower()}%"
+    with get_conn() as c, c.cursor() as cur:
+        # Posts
+        cur.execute("""
+            SELECT p.id, p.content, p.created_at,
+                   u.id AS author_id, u.name AS author_name, u.avatar_url AS author_avatar,
+                   a.color AS author_area_color,
+                   sp.name AS space_name, sp.emoji AS space_emoji, sp.color AS space_color
+              FROM people_posts p
+              JOIN users u ON u.id = p.author_id
+              LEFT JOIN areas a ON a.id = u.area_id
+              LEFT JOIN people_spaces sp ON sp.id = p.space_id
+             WHERE p.deleted_at IS NULL
+               AND LOWER(p.content) LIKE %s
+             ORDER BY p.created_at DESC
+             LIMIT %s
+        """, (pat, limit))
+        posts = [dict(r) for r in cur.fetchall()]
+        for p in posts:
+            p["created_at"] = _iso(p.get("created_at"))
+
+        # Users
+        cur.execute("""
+            SELECT u.id, u.name, u.email, u.avatar_url, u.job_title, u.bio,
+                   a.color AS area_color, a.name AS area_name
+              FROM users u
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE u.is_active = TRUE
+               AND (LOWER(u.name) LIKE %s OR LOWER(u.email) LIKE %s OR LOWER(u.job_title) LIKE %s OR LOWER(u.bio) LIKE %s)
+             ORDER BY u.name
+             LIMIT %s
+        """, (pat, pat, pat, pat, limit))
+        users = [dict(r) for r in cur.fetchall()]
+
+        # Spaces
+        cur.execute("""
+            SELECT id, slug, name, emoji, color, description, kind
+              FROM people_spaces
+             WHERE is_active = TRUE
+               AND (LOWER(name) LIKE %s OR LOWER(description) LIKE %s)
+             ORDER BY kind, sort_order
+             LIMIT %s
+        """, (pat, pat, limit))
+        spaces = [dict(r) for r in cur.fetchall()]
+
+    return {"posts": posts, "users": users, "spaces": spaces}

@@ -53,6 +53,7 @@ import {
   Coins,
   UsersRound,
   Award,
+  Search,
 } from "lucide-react";
 
 type Role = "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -152,6 +153,8 @@ const ITEMS: NavItem[] = [
       { label: "Feed",       href: "/dashboard/people",            icon: Megaphone },
       { label: "Mensajes",   href: "/dashboard/people/dms",        icon: HeartHandshake },
       { label: "Inbox",      href: "/dashboard/people/inbox",      icon: Bell      },
+      { label: "Buscar",     href: "/dashboard/people/search",     icon: Search    },
+      { label: "Bookmarks",  href: "/dashboard/people/bookmarks",  icon: BookOpen  },
       { label: "Directorio", href: "/dashboard/people/directory",  icon: Users     },
       { label: "Org Chart",  href: "/dashboard/people/org-chart",  icon: Network   },
       { label: "Kudos",      href: "/dashboard/people/kudos",      icon: Award     },

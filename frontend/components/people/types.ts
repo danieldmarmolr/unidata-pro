@@ -72,6 +72,23 @@ export type KudoMeta = {
   to_avatar: string | null;
 };
 
+export type PollOption = {
+  id: number;
+  label: string;
+  sort_order: number;
+  votes: number;
+  my_vote: boolean;
+};
+
+export type Poll = {
+  id: number;
+  question: string;
+  multi_choice: boolean;
+  closes_at: string | null;
+  options: PollOption[];
+  total_voters: number;
+};
+
 export type FeedPost = {
   id: number;
   author_id: number;
@@ -96,12 +113,15 @@ export type FeedPost = {
   requires_read_ack: boolean;
   kudo_id: number | null;
   kudo?: KudoMeta;
+  edited_at?: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
   reactions: FeedReaction[];
   comment_count: number;
   has_read: boolean;
+  bookmarked?: boolean;
+  poll?: Poll;
 };
 
 export type FeedResponse = {

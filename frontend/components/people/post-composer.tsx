@@ -2,13 +2,16 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Image as ImageIcon, Award, Send, X, ChevronDown } from "lucide-react";
+import { Image as ImageIcon, Award, Send, X, ChevronDown, BarChart3 } from "lucide-react";
 import { api, getUser } from "@/lib/api";
 import { Avatar } from "./avatar";
 import { KudoModal } from "./kudo-modal";
 import { MentionTextarea } from "./mention-textarea";
+import { PollCreator } from "./poll";
 import { cn } from "@/lib/utils";
 import type { Space } from "./types";
+
+type DraftPoll = { question: string; options: string[]; multi_choice: boolean };
 
 export function PostComposer({
   canPin,
@@ -26,6 +29,8 @@ export function PostComposer({
   const [kudoOpen, setKudoOpen] = useState(false);
   const [spaceId, setSpaceId] = useState<number | null>(forceSpaceId ?? null);
   const [spacePickerOpen, setSpacePickerOpen] = useState(false);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [poll, setPoll] = useState<DraftPoll | null>(null);
 
   const { data: spaces } = useQuery<{ items: Space[] }>({
     queryKey: ["people-spaces"],
@@ -49,6 +54,7 @@ export function PostComposer({
           image_url: imageUrl,
           space_id: effectiveSpaceId,
           mention_user_ids: mentions,
+          poll: poll ?? undefined,
         }),
       }),
     onSuccess: () => {
@@ -56,6 +62,8 @@ export function PostComposer({
       setMentions([]);
       setImageUrl(null);
       setShowImageInput(false);
+      setPoll(null);
+      setPollOpen(false);
       qc.invalidateQueries({ queryKey: ["people-feed"] });
       qc.invalidateQueries({ queryKey: ["people-spaces"] });
     },
@@ -143,6 +151,16 @@ export function PostComposer({
               </div>
             )}
 
+            {pollOpen && (
+              <PollCreator
+                onChange={setPoll}
+                onCancel={() => {
+                  setPollOpen(false);
+                  setPoll(null);
+                }}
+              />
+            )}
+
             <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
               <div className="flex items-center gap-1 text-xs text-text-muted">
                 <button
@@ -151,6 +169,16 @@ export function PostComposer({
                   className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-bg-muted transition"
                 >
                   <ImageIcon size={14} /> Imagen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPollOpen((v) => !v)}
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-bg-muted transition",
+                    pollOpen && "text-primary",
+                  )}
+                >
+                  <BarChart3 size={14} /> Encuesta
                 </button>
                 <button
                   type="button"

@@ -212,10 +212,12 @@ function MentionDropdown({
 
 /**
  * Render-side helper: convierte content con `@[Name|123]` en JSX con links clickeables.
+ * Tambien aplica markdown light: **bold**, *italic*, `code`, y links http(s) auto.
  */
 export function renderContentWithMentions(content: string): React.ReactNode[] {
-  const re = /@\[([^|\]]+)\|(\d+)\]/g;
   const out: React.ReactNode[] = [];
+  // Token regex: @mention | **bold** | *italic* | `code` | http(s) link
+  const re = /(@\[[^|\]]+\|\d+\])|(\*\*[^*\n]+\*\*)|(\*[^*\n]+\*)|(`[^`\n]+`)|((?:https?:\/\/)[^\s<>"]+)/g;
   let lastIdx = 0;
   let m: RegExpExecArray | null;
   let key = 0;
@@ -223,19 +225,45 @@ export function renderContentWithMentions(content: string): React.ReactNode[] {
     if (m.index > lastIdx) {
       out.push(<span key={key++}>{content.slice(lastIdx, m.index)}</span>);
     }
-    const name = m[1];
-    const id = m[2];
-    out.push(
-      <a
-        key={key++}
-        href={`/dashboard/people/${id}`}
-        className="text-primary font-semibold hover:underline"
-        onClick={(e) => e.stopPropagation()}
-      >
-        @{name}
-      </a>,
-    );
-    lastIdx = m.index + m[0].length;
+    const token = m[0];
+    if (m[1]) {
+      // Mention
+      const mm = /@\[([^|\]]+)\|(\d+)\]/.exec(token)!;
+      out.push(
+        <a
+          key={key++}
+          href={`/dashboard/people/${mm[2]}`}
+          className="text-primary font-semibold hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          @{mm[1]}
+        </a>,
+      );
+    } else if (m[2]) {
+      out.push(<strong key={key++} className="font-bold">{token.slice(2, -2)}</strong>);
+    } else if (m[3]) {
+      out.push(<em key={key++} className="italic">{token.slice(1, -1)}</em>);
+    } else if (m[4]) {
+      out.push(
+        <code key={key++} className="bg-bg-muted border border-border rounded px-1 py-0.5 text-[0.85em] font-mono">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else if (m[5]) {
+      out.push(
+        <a
+          key={key++}
+          href={token}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-primary underline break-all"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {token}
+        </a>,
+      );
+    }
+    lastIdx = m.index + token.length;
   }
   if (lastIdx < content.length) {
     out.push(<span key={key++}>{content.slice(lastIdx)}</span>);

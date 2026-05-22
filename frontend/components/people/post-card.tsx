@@ -5,12 +5,13 @@ import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MessageCircle, Pin, PinOff, MoreHorizontal, Trash2, CheckCircle2,
-  Megaphone, Smile, Send,
+  Megaphone, Smile, Send, Bookmark, Pencil, X,
 } from "lucide-react";
 import { api, getUser } from "@/lib/api";
 import { Avatar } from "./avatar";
 import { cn } from "@/lib/utils";
 import { MentionTextarea, renderContentWithMentions } from "./mention-textarea";
+import { PollDisplay } from "./poll";
 import type { FeedPost, FeedComment } from "./types";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "🚀", "👏", "🔥"];
@@ -37,6 +38,30 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
   const [pickerOpen, setPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [commentText, setCommentText] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(post.content);
+  const [editMentions, setEditMentions] = useState<number[]>([]);
+
+  const editMut = useMutation({
+    mutationFn: () =>
+      api(`/api/people/feed/${post.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ content: editText, mention_user_ids: editMentions }),
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ["people-feed"] });
+    },
+  });
+
+  const bookmarkMut = useMutation({
+    mutationFn: () =>
+      api<{ bookmarked: boolean }>(`/api/people/feed/${post.id}/bookmark`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["people-feed"] });
+      qc.invalidateQueries({ queryKey: ["people-bookmarks"] });
+    },
+  });
 
   const reactMut = useMutation({
     mutationFn: (emoji: string) =>
@@ -159,15 +184,27 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
                   </button>
                 )}
                 {canEdit && (
-                  <button
-                    onClick={() => {
-                      if (confirm("Borrar este post?")) deleteMut.mutate();
-                      setMenuOpen(false);
-                    }}
-                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-muted inline-flex items-center gap-2 text-error"
-                  >
-                    <Trash2 size={12} /> Borrar
-                  </button>
+                  <>
+                    <button
+                      onClick={() => {
+                        setEditing(true);
+                        setEditText(post.content);
+                        setMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-muted inline-flex items-center gap-2"
+                    >
+                      <Pencil size={12} /> Editar
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm("Borrar este post?")) deleteMut.mutate();
+                        setMenuOpen(false);
+                      }}
+                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-bg-muted inline-flex items-center gap-2 text-error"
+                    >
+                      <Trash2 size={12} /> Borrar
+                    </button>
+                  </>
                 )}
               </div>
             )}
@@ -206,12 +243,47 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
         </div>
       )}
 
-      {/* Content */}
-      {(!post.kudo || post.kudo.message !== post.content.split("\n\n").pop()) && (
-        <div className="mt-3 text-sm text-text whitespace-pre-wrap break-words">
-          {renderContentWithMentions(post.content)}
+      {/* Content (edit mode or read) */}
+      {editing ? (
+        <div className="mt-3">
+          <MentionTextarea
+            value={editText}
+            onChange={(v, ids) => {
+              setEditText(v);
+              setEditMentions(ids);
+            }}
+            rows={3}
+            autoFocus
+          />
+          <div className="flex justify-end gap-2 mt-2">
+            <button
+              onClick={() => setEditing(false)}
+              className="text-xs px-3 py-1 rounded-full hover:bg-bg-muted"
+            >
+              <X size={11} className="inline mr-1" /> Cancelar
+            </button>
+            <button
+              onClick={() => editText.trim() && editMut.mutate()}
+              disabled={!editText.trim() || editMut.isPending}
+              className="text-xs px-3 py-1 bg-primary text-white rounded-full hover:opacity-90 disabled:opacity-40"
+            >
+              {editMut.isPending ? "Guardando..." : "Guardar"}
+            </button>
+          </div>
         </div>
+      ) : (
+        (!post.kudo || post.kudo.message !== post.content.split("\n\n").pop()) && (
+          <div className="mt-3 text-sm text-text whitespace-pre-wrap break-words">
+            {renderContentWithMentions(post.content)}
+            {post.edited_at && (
+              <span className="ml-1.5 text-[10px] text-text-muted italic">(editado)</span>
+            )}
+          </div>
+        )
       )}
+
+      {/* Poll */}
+      {post.poll && <PollDisplay postId={post.id} poll={post.poll} />}
 
       {post.image_url && (
         <img
@@ -278,6 +350,16 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
         >
           <MessageCircle size={14} />
           Comentar {post.comment_count > 0 && `(${post.comment_count})`}
+        </button>
+        <button
+          onClick={() => bookmarkMut.mutate()}
+          className={cn(
+            "inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-bg-muted transition",
+            post.bookmarked && "text-primary",
+          )}
+          title={post.bookmarked ? "Quitar bookmark" : "Guardar"}
+        >
+          <Bookmark size={14} className={post.bookmarked ? "fill-current" : ""} />
         </button>
         {post.requires_read_ack && !post.has_read && (
           <button

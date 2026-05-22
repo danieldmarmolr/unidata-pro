@@ -106,11 +106,19 @@ def get_stories(
 
 # ---------- feed ----------
 
+class PollBody(BaseModel):
+    question: str = Field(..., min_length=1, max_length=400)
+    options: list[str] = Field(..., min_length=2, max_length=10)
+    multi_choice: bool = False
+    closes_at: str | None = None
+
+
 class CreatePostBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
     image_url: str | None = None
     space_id: int | None = None
     mention_user_ids: list[int] | None = None
+    poll: PollBody | None = None
 
 
 class UpdatePostBody(BaseModel):
@@ -170,6 +178,14 @@ def create_post(
             space_id=body.space_id,
             mention_user_ids=body.mention_user_ids,
         )
+        if body.poll:
+            people_db.create_poll(
+                post_id=post["id"],
+                question=body.poll.question,
+                options=body.poll.options,
+                multi_choice=body.poll.multi_choice,
+                closes_at=body.poll.closes_at,
+            )
     except ValueError as e:
         raise HTTPException(400, str(e))
     return post
@@ -622,3 +638,97 @@ def mark_notif_read(
 def mark_all_read(user: Annotated[dict, Depends(current_user)]) -> dict:
     n = people_db.mark_all_notifications_read(user_id=user["id"])
     return {"marked": n}
+
+
+# ============================================================
+# Edit comment
+# ============================================================
+
+class UpdateCommentBody(BaseModel):
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+@router.patch("/comments/{comment_id}")
+def update_comment(
+    comment_id: int,
+    body: UpdateCommentBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    existing = people_db.get_comment(comment_id)
+    if not existing:
+        raise HTTPException(404, "Comentario no encontrado")
+    if existing["author_id"] != user["id"] and not _can_manage_people(user):
+        raise HTTPException(403, "Solo el autor o People/admin puede editar")
+    try:
+        return people_db.update_comment(comment_id, content=body.content) or {}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ============================================================
+# Polls
+# ============================================================
+
+class VoteBody(BaseModel):
+    option_id: int
+
+
+@router.post("/feed/{post_id}/poll/vote")
+def vote_on_poll(
+    post_id: int,
+    body: VoteBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        return people_db.vote_poll(post_id=post_id, option_id=body.option_id, user_id=user["id"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/feed/{post_id}/poll/vote")
+def unvote_on_poll(
+    post_id: int,
+    option_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        return people_db.unvote_poll(post_id=post_id, option_id=option_id, user_id=user["id"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+# ============================================================
+# Bookmarks
+# ============================================================
+
+@router.post("/feed/{post_id}/bookmark")
+def toggle_bookmark(
+    post_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    existing = people_db.get_post(post_id)
+    if not existing or existing.get("deleted_at"):
+        raise HTTPException(404, "Post no encontrado")
+    return people_db.toggle_bookmark(post_id=post_id, user_id=user["id"])
+
+
+@router.get("/bookmarks")
+def list_bookmarks(
+    user: Annotated[dict, Depends(current_user)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    items = people_db.list_my_bookmarks(user_id=user["id"], limit=limit)
+    return {"items": items, "count": len(items)}
+
+
+# ============================================================
+# Search global
+# ============================================================
+
+@router.get("/search")
+def search(
+    user: Annotated[dict, Depends(current_user)],
+    q: str = "",
+    limit: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> dict:
+    return people_db.search_all(query=q, viewer_id=user["id"], limit=limit)
