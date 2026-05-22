@@ -1,4 +1,4 @@
-"""Jira Flow API — SITU + ITDEV + Confluence + Gemini, restringido a area it_data."""
+"""Jira Flow API — SITU + ITDEV + Confluence + Gemini, restringido a areas it/data."""
 from __future__ import annotations
 
 import base64
@@ -47,7 +47,7 @@ def _base_url() -> str:
 
 
 def _guard(user: dict) -> None:
-    require_area(user, ["it_data"])
+    require_area(user, ["it", "data"])
 
 
 # ---------- Health / Config ----------

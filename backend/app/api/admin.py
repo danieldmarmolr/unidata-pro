@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path
 from pydantic import BaseModel
 
 from app.auth.security import require_admin
-from app.db import users_db
+from app.db import areas_db, users_db
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -18,6 +18,11 @@ class UserCreate(BaseModel):
     password: str
     role: str = "user"
     is_admin: bool = False
+    area_id: int | None = None
+    secondary_area_ids: list[int] | None = None
+    manager_user_id: int | None = None
+    job_title: str | None = None
+    bio: str | None = None
 
 
 class UserUpdate(BaseModel):
@@ -26,6 +31,18 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     is_admin: bool | None = None
     new_password: str | None = None
+    area_id: int | None = None
+    secondary_area_ids: list[int] | None = None
+    manager_user_id: int | None = None
+    job_title: str | None = None
+    bio: str | None = None
+    clear_area: bool = False
+    clear_manager: bool = False
+
+
+@router.get("/areas")
+def list_areas_admin(admin: Annotated[dict, Depends(require_admin)]) -> list[dict]:
+    return areas_db.list_areas()
 
 
 @router.get("/users")
@@ -39,7 +56,7 @@ def create_user(
     admin: Annotated[dict, Depends(require_admin)],
 ) -> dict:
     try:
-        return users_db.create(
+        created = users_db.create(
             email=body.email,
             name=body.name,
             password=body.password,
@@ -47,6 +64,27 @@ def create_user(
             is_admin=body.is_admin,
             created_by=admin["email"],
         )
+        needs_extra = (
+            body.area_id is not None
+            or body.manager_user_id is not None
+            or body.job_title is not None
+            or body.bio is not None
+        )
+        if needs_extra:
+            users_db.update(
+                created["id"],
+                area_id=body.area_id,
+                manager_user_id=body.manager_user_id,
+                job_title=body.job_title,
+                bio=body.bio,
+            )
+        if body.secondary_area_ids is not None:
+            areas_db.set_user_areas(
+                created["id"],
+                primary_area_id=body.area_id,
+                secondary_area_ids=body.secondary_area_ids,
+            )
+        return created
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -74,9 +112,32 @@ def update_user(
             is_active=body.is_active,
             is_admin=body.is_admin,
             new_password=body.new_password,
+            area_id=body.area_id,
+            manager_user_id=body.manager_user_id,
+            job_title=body.job_title,
+            bio=body.bio,
+            clear_area=body.clear_area,
+            clear_manager=body.clear_manager,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Si vino la lista de secundarias, la sobrescribimos atomicamente.
+    # Aceptamos lista vacia (= sin secundarias). None = no tocar.
+    if body.secondary_area_ids is not None:
+        # Primaria final tras eventual update (clear_area / area_id)
+        with_users = users_db.find_by_id(user_id)
+        primary = with_users["area_id"] if with_users else None
+        try:
+            areas_db.set_user_areas(
+                user_id,
+                primary_area_id=primary,
+                secondary_area_ids=body.secondary_area_ids,
+            )
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        # Re-fetch para devolver el estado final tras el ajuste de secundarias
+        result = users_db.find_by_id(user_id)
+        result = users_db._to_dict(result) if result else result
     if result is None:
         raise HTTPException(404, "Usuario no encontrado o sin cambios")
     return result

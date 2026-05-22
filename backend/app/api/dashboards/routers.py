@@ -690,7 +690,7 @@ def get_forecast_batch(
 def get_cancel_nlp(user: Annotated[dict, Depends(current_user)]) -> dict:
     """Clustering simple de motivos de cancelacion (90d).
     Cruza cancel_reason enum + lexicon manual sobre notas libres."""
-    require_area(user, ["cs", "it_data"])
+    require_area(user, ["cs", "it", "data"])
     key = "cancel-nlp-v1"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
@@ -706,7 +706,7 @@ def get_dev_nlp(
     """Clustering de causas de devoluciones (Unidev) usando lexicon manual.
     Analiza devolucion_items_fallas.descripcion (texto libre) y agrupa en
     causas operativas + top SKUs afectados por causa."""
-    require_area(user, ["cs", "it_data"])
+    require_area(user, ["cs", "it", "data"])
     key = f"dev-nlp-{period_days}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:

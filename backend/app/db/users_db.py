@@ -129,8 +129,36 @@ def find_by_email(email: str) -> dict | None:
 
 def list_all() -> list[dict]:
     init()
+    # Garantiza que las columnas extendidas / tabla user_areas existan
+    from app.db import areas_db  # lazy para evitar ciclos
+    areas_db.init()
     with get_conn() as c, c.cursor() as cur:
-        cur.execute("SELECT * FROM users ORDER BY created_at DESC")
+        cur.execute("""
+            SELECT u.*,
+                   a.slug   AS area_slug,
+                   a.name   AS area_name,
+                   a.color  AS area_color,
+                   m.name   AS manager_name,
+                   m.email  AS manager_email,
+                   m.role   AS manager_role,
+                   COALESCE(
+                       (
+                           SELECT json_agg(json_build_object(
+                                       'id', a2.id, 'slug', a2.slug,
+                                       'name', a2.name, 'color', a2.color
+                                   ) ORDER BY a2.sort_order)
+                           FROM user_areas ua
+                           JOIN areas a2 ON a2.id = ua.area_id
+                           WHERE ua.user_id = u.id
+                             AND ua.area_id IS DISTINCT FROM u.area_id
+                       ),
+                       '[]'::json
+                   ) AS secondary_areas
+            FROM users u
+            LEFT JOIN areas a ON a.id = u.area_id
+            LEFT JOIN users m ON m.id = u.manager_user_id
+            ORDER BY u.created_at DESC
+        """)
         rows = cur.fetchall()
     return [_to_dict(r) for r in rows]
 
@@ -171,6 +199,12 @@ def update(
     is_active: bool | None = None,
     is_admin: bool | None = None,
     new_password: str | None = None,
+    area_id: int | None = None,
+    manager_user_id: int | None = None,
+    job_title: str | None = None,
+    bio: str | None = None,
+    clear_area: bool = False,
+    clear_manager: bool = False,
 ) -> dict | None:
     init()
     sets: list[str] = []
@@ -192,6 +226,20 @@ def update(
         if len(new_password) < 6:
             raise ValueError("password muy corto (min 6 chars)")
         sets.append("password_hash = %s"); params.append(_hash(new_password))
+    if clear_area:
+        sets.append("area_id = NULL")
+    elif area_id is not None:
+        sets.append("area_id = %s"); params.append(int(area_id))
+    if clear_manager:
+        sets.append("manager_user_id = NULL")
+    elif manager_user_id is not None:
+        if int(manager_user_id) == int(user_id):
+            raise ValueError("un usuario no puede ser gerente de si mismo")
+        sets.append("manager_user_id = %s"); params.append(int(manager_user_id))
+    if job_title is not None:
+        sets.append("job_title = %s"); params.append(job_title.strip() or None)
+    if bio is not None:
+        sets.append("bio = %s"); params.append(bio.strip() or None)
     if not sets:
         return None
     sets.append("updated_at = NOW()")

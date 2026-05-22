@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 
 class ProfilePatch(BaseModel):
     area_id: int | None = None
+    secondary_area_ids: list[int] | None = None
     birthday_month: int | None = Field(default=None, ge=1, le=12)
     birthday_day: int | None = Field(default=None, ge=1, le=31)
     birthday_year: int | None = Field(default=None, ge=1900, le=2030)
@@ -30,6 +31,8 @@ class ProfilePatch(BaseModel):
     location_city: str | None = None
     interests: str | None = None
     avatar_url: str | None = None
+    job_title: str | None = None
+    bio: str | None = None
     mark_completed: bool = False
 
 
@@ -51,6 +54,7 @@ def patch_me(
         updated = areas_db.update_profile(
             user["id"],
             area_id=body.area_id,
+            secondary_area_ids=body.secondary_area_ids,
             birthday_month=body.birthday_month,
             birthday_day=body.birthday_day,
             birthday_year=body.birthday_year,
@@ -58,6 +62,8 @@ def patch_me(
             location_city=body.location_city,
             interests=body.interests,
             avatar_url=body.avatar_url,
+            job_title=body.job_title,
+            bio=body.bio,
             mark_completed=body.mark_completed,
         )
     except ValueError as e:

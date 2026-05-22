@@ -73,21 +73,20 @@ async def current_user(
         "is_admin": bool(row.get("is_admin")) or row["role"] == "admin",
         "area_id": profile.get("area_id") if profile else None,
         "area_slug": profile.get("area_slug") if profile else None,
+        # Lista combinada primaria + secundarias (primaria primero, sin duplicados)
+        "area_slugs": profile.get("area_slugs") if profile else [],
     }
 
 
 def require_area(user: dict, areas: list[str]) -> None:
-    """Lanza 403 si el usuario no pertenece a ninguna de las areas requeridas.
-    Admin y gerencia tienen bypass completo.
+    """No-op temporal — vistas abiertas a todos los roles autenticados.
+
+    El RBAC por area se va a re-definir cuando este establecida la relacion
+    colaborador → gerente. Mientras tanto, los unicos gates son:
+      - `require_admin` (admin/admin-flag para gestion de plataforma)
+      - filtros por `role` en el sidebar (Gerencia / Gerencia 360)
     """
-    if user.get("is_admin") or user.get("role") in ("admin", "gerencia"):
-        return
-    user_area = user.get("area_slug")
-    if not user_area or user_area not in areas:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            f"Tu área ({user_area or 'sin área asignada'}) no tiene acceso a este recurso",
-        )
+    return
 
 
 async def require_admin(user: Annotated[dict, Depends(current_user)]) -> dict:

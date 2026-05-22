@@ -30,7 +30,7 @@ _LOCK = threading.RLock()
 _INITIALIZED = False
 
 
-# 9 areas operativas. Gerencia NO es un area sino un ROL del usuario
+# 10 areas operativas. Gerencia NO es un area sino un ROL del usuario
 # (role='gerencia' en la tabla users): cualquier user con ese rol ve TODAS
 # las areas + el dashboard de Gerencia. El admin lo toggle desde /admin/usuarios.
 AREAS_SEED: list[tuple[str, str, str, str]] = [
@@ -43,7 +43,8 @@ AREAS_SEED: list[tuple[str, str, str, str]] = [
     ("cs",              "Customer Success",        "#a855f7", "Soporte, retencion, devoluciones"),
     ("marketing",       "Marketing",               "#f43f5e", "Campanas, paid, contenido"),
     ("people",          "People",                  "#84cc16", "RRHH, cultura, beneficios"),
-    ("it_data",         "IT / Data",               "#6366f1", "Plataformas, datos, automatizaciones"),
+    ("it",              "IT",                      "#6366f1", "Plataformas, integraciones, automatizaciones"),
+    ("data",            "Data",                    "#0891b2", "BI, analytics, modelos, MCP"),
 ]
 
 
@@ -68,6 +69,7 @@ def init() -> None:
             """)
             # Extensiones idempotentes de users
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS area_id BIGINT REFERENCES areas(id) ON DELETE SET NULL')
+            cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS manager_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday_month SMALLINT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday_day SMALLINT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS birthday_year SMALLINT')
@@ -76,13 +78,39 @@ def init() -> None:
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS interests TEXT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN NOT NULL DEFAULT FALSE')
+            cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT')
+            cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT')
+
+            # Tabla M:N para areas secundarias del user (la primaria sigue siendo users.area_id)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_areas (
+                    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    area_id    BIGINT NOT NULL REFERENCES areas(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, area_id)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_user_areas_user ON user_areas(user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_user_areas_area ON user_areas(area_id)")
 
             # Migracion: eliminar el area 'gerencia' si existe (paso a ser rol, no area).
             # Antes de borrarla, des-asignamos a quien la tenia.
             cur.execute("UPDATE users SET area_id = NULL WHERE area_id IN (SELECT id FROM areas WHERE slug = 'gerencia')")
             cur.execute("DELETE FROM areas WHERE slug = 'gerencia'")
 
-            # Seed areas si la tabla esta vacia
+            # Migracion: split it_data en 'data' (rename) + 'it' (nuevo).
+            # Hacemos rename hard: el area_id de los users que estaban en it_data
+            # apunta ahora a 'data'. Si alguien era IT puro, el admin lo mueve a mano.
+            cur.execute("""
+                UPDATE areas
+                SET slug = 'data',
+                    name = 'Data',
+                    color = '#0891b2',
+                    description = 'BI, analytics, modelos, MCP'
+                WHERE slug = 'it_data'
+            """)
+
+            # Seed areas si la tabla esta vacia, o asegurar que cada slug seedeado exista
             cur.execute("SELECT COUNT(*) AS n FROM areas")
             n = cur.fetchone()["n"]
             if n == 0:
@@ -92,6 +120,20 @@ def init() -> None:
                         (slug, name, color, desc, i),
                     )
                 log.info("areas seedeadas: %d", len(AREAS_SEED))
+            else:
+                # Idempotente: agregar los slugs nuevos del seed que todavia no existen
+                # (ej. 'it' despues del split). NO sobreescribe areas existentes.
+                cur.execute("SELECT COALESCE(MAX(sort_order), 0) AS max_o FROM areas")
+                max_o = int(cur.fetchone()["max_o"])
+                for slug, name, color, desc in AREAS_SEED:
+                    cur.execute("SELECT 1 FROM areas WHERE slug = %s", (slug,))
+                    if cur.fetchone() is None:
+                        max_o += 1
+                        cur.execute(
+                            "INSERT INTO areas (slug, name, color, description, sort_order) VALUES (%s, %s, %s, %s, %s)",
+                            (slug, name, color, desc, max_o),
+                        )
+                        log.info("area nueva seedeada: %s", slug)
         _INITIALIZED = True
 
 
@@ -110,7 +152,7 @@ def get_user_profile(user_id: int) -> dict | None:
             SELECT u.id, u.email, u.name, u.role, u.is_admin, u.is_active,
                    u.area_id, u.birthday_month, u.birthday_day, u.birthday_year,
                    u.joined_at, u.location_city, u.interests, u.avatar_url,
-                   u.profile_completed, u.created_at,
+                   u.profile_completed, u.created_at, u.job_title, u.bio,
                    a.slug AS area_slug, a.name AS area_name, a.color AS area_color
             FROM users u
             LEFT JOIN areas a ON a.id = u.area_id
@@ -128,13 +170,72 @@ def get_user_profile(user_id: int) -> dict | None:
         d["is_active"] = bool(d.get("is_active"))
         d["is_admin"] = bool(d.get("is_admin"))
         d["profile_completed"] = bool(d.get("profile_completed"))
+        # Areas secundarias (primaria es u.area_id)
+        secondary = get_user_secondary_areas(user_id)
+        d["secondary_areas"] = secondary
+        d["area_slugs"] = _merge_slugs(d.get("area_slug"), secondary)
         return d
+
+
+def _merge_slugs(primary_slug: str | None, secondary_areas: list[dict]) -> list[str]:
+    """Combina slug primario + secundarios sin duplicados, primario primero."""
+    out: list[str] = []
+    seen: set[str] = set()
+    if primary_slug:
+        out.append(primary_slug)
+        seen.add(primary_slug)
+    for a in secondary_areas:
+        s = a.get("slug")
+        if s and s not in seen:
+            out.append(s)
+            seen.add(s)
+    return out
+
+
+def get_user_secondary_areas(user_id: int) -> list[dict]:
+    """Areas secundarias del user (excluye la primaria de users.area_id)."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT a.id, a.slug, a.name, a.color
+            FROM user_areas ua
+            JOIN areas a ON a.id = ua.area_id
+            WHERE ua.user_id = %s
+              AND ua.area_id IS DISTINCT FROM (SELECT area_id FROM users WHERE id = %s)
+            ORDER BY a.sort_order
+        """, (user_id, user_id))
+        return [dict(r) for r in cur.fetchall()]
+
+
+def set_user_areas(user_id: int, primary_area_id: int | None, secondary_area_ids: list[int]) -> None:
+    """Reemplaza primaria + secundarias de forma atomica.
+
+    - primary_area_id: id del area primaria (o None para limpiar)
+    - secondary_area_ids: lista de ids de areas secundarias (sin incluir la primaria)
+    """
+    init()
+    # Dedup + remover la primaria si vino accidentalmente en secondary
+    sec_set: set[int] = set(int(x) for x in (secondary_area_ids or []))
+    if primary_area_id is not None:
+        sec_set.discard(int(primary_area_id))
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET area_id = %s, updated_at = NOW() WHERE id = %s",
+            (int(primary_area_id) if primary_area_id is not None else None, user_id),
+        )
+        cur.execute("DELETE FROM user_areas WHERE user_id = %s", (user_id,))
+        for aid in sec_set:
+            cur.execute(
+                "INSERT INTO user_areas (user_id, area_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (user_id, int(aid)),
+            )
 
 
 def update_profile(
     user_id: int,
     *,
     area_id: int | None = None,
+    secondary_area_ids: list[int] | None = None,
     birthday_month: int | None = None,
     birthday_day: int | None = None,
     birthday_year: int | None = None,
@@ -142,6 +243,8 @@ def update_profile(
     location_city: str | None = None,
     interests: str | None = None,
     avatar_url: str | None = None,
+    job_title: str | None = None,
+    bio: str | None = None,
     mark_completed: bool = False,
 ) -> dict | None:
     init()
@@ -186,19 +289,40 @@ def update_profile(
         _add("interests", interests.strip() or None)
     if avatar_url is not None:
         _add("avatar_url", avatar_url.strip() or None)
+    if job_title is not None:
+        _add("job_title", job_title.strip() or None)
+    if bio is not None:
+        _add("bio", bio.strip() or None)
     if mark_completed:
         _add("profile_completed", True)
 
-    if not sets:
-        return get_user_profile(user_id)
+    if sets:
+        sets.append("updated_at = NOW()")
+        params.append(user_id)
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute(
+                f"UPDATE users SET {', '.join(sets)} WHERE id = %s",
+                params,
+            )
 
-    sets.append("updated_at = NOW()")
-    params.append(user_id)
-    with get_conn() as c, c.cursor() as cur:
-        cur.execute(
-            f"UPDATE users SET {', '.join(sets)} WHERE id = %s",
-            params,
-        )
+    if secondary_area_ids is not None:
+        # Si vino la lista, reemplazamos las secundarias (preservando la primaria
+        # que ya quedo en users.area_id, asi no se toca aca).
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("SELECT area_id FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            primary = row["area_id"] if row else None
+        sec_set: set[int] = set(int(x) for x in secondary_area_ids)
+        if primary is not None:
+            sec_set.discard(int(primary))
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("DELETE FROM user_areas WHERE user_id = %s", (user_id,))
+            for aid in sec_set:
+                cur.execute(
+                    "INSERT INTO user_areas (user_id, area_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (user_id, int(aid)),
+                )
+
     return get_user_profile(user_id)
 
 

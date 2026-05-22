@@ -7,12 +7,15 @@ import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 
 type Area = { id: number; slug: string; name: string; color: string; description: string };
+type AreaChip = { id: number; slug: string; name: string; color: string };
 type Me = {
   user: {
     id: number; email: string; name: string; role: string;
     area_id: number | null; area_name: string | null; area_color: string | null;
+    secondary_areas: AreaChip[];
     birthday_month: number | null; birthday_day: number | null; birthday_year: number | null;
     joined_at: string | null; location_city: string | null; interests: string | null;
+    job_title: string | null; bio: string | null;
     profile_completed: boolean; created_at: string;
   };
   needs_onboarding: boolean;
@@ -33,23 +36,29 @@ export default function PerfilPage() {
   });
 
   const [areaId, setAreaId] = useState<number | null>(null);
+  const [secondaryIds, setSecondaryIds] = useState<number[]>([]);
   const [bd, setBd] = useState<number | null>(null);
   const [bm, setBm] = useState<number | null>(null);
   const [by, setBy] = useState<number | null>(null);
   const [joinedYM, setJoinedYM] = useState<string>("");
   const [city, setCity] = useState<string>("");
   const [interests, setInterests] = useState<string>("");
+  const [jobTitle, setJobTitle] = useState<string>("");
+  const [bio, setBio] = useState<string>("");
 
   useEffect(() => {
     if (meQ.data?.user) {
       const u = meQ.data.user;
       setAreaId(u.area_id);
+      setSecondaryIds((u.secondary_areas ?? []).map((a) => a.id));
       setBd(u.birthday_day);
       setBm(u.birthday_month);
       setBy(u.birthday_year);
       setJoinedYM(u.joined_at?.slice(0, 7) ?? "");
       setCity(u.location_city ?? "");
       setInterests(u.interests ?? "");
+      setJobTitle(u.job_title ?? "");
+      setBio(u.bio ?? "");
     }
   }, [meQ.data]);
 
@@ -62,14 +71,23 @@ export default function PerfilPage() {
   function onSave() {
     save.mutate({
       area_id: areaId,
+      secondary_area_ids: secondaryIds.filter((x) => x !== areaId),
       birthday_month: bm,
       birthday_day: bd,
       birthday_year: by || null,
       joined_at: joinedYM || null,
       location_city: city || null,
       interests: interests || null,
+      job_title: jobTitle || null,
+      bio: bio || null,
       mark_completed: true,
     });
+  }
+
+  function toggleSecondary(id: number) {
+    setSecondaryIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
   }
 
   const u = meQ.data?.user;
@@ -100,17 +118,82 @@ export default function PerfilPage() {
             </div>
 
             {/* Area */}
-            <Section icon={UserIcon} title="Area" subtitle="Defina los dashboards que ves por defecto">
-              <select
-                value={areaId ?? ""}
-                onChange={(e) => setAreaId(e.target.value ? parseInt(e.target.value, 10) : null)}
-                className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-sm"
-              >
-                <option value="">— Sin asignar —</option>
-                {areasQ.data?.areas.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
+            <Section icon={UserIcon} title="Áreas" subtitle="Tu área principal define los dashboards por defecto. Podés sumar adicionales si colaborás con varias.">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">Área principal</label>
+                  <select
+                    value={areaId ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value ? parseInt(e.target.value, 10) : null;
+                      setAreaId(v);
+                      if (v !== null) setSecondaryIds((prev) => prev.filter((x) => x !== v));
+                    }}
+                    className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-sm"
+                  >
+                    <option value="">— Sin asignar —</option>
+                    {areasQ.data?.areas.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                </div>
+                {areaId !== null && (
+                  <div>
+                    <label className="block text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">También colaborás en</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(areasQ.data?.areas ?? [])
+                        .filter((a) => a.id !== areaId)
+                        .map((a) => {
+                          const checked = secondaryIds.includes(a.id);
+                          return (
+                            <button
+                              key={a.id}
+                              type="button"
+                              onClick={() => toggleSecondary(a.id)}
+                              className={
+                                "inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition " +
+                                (checked
+                                  ? "border-primary bg-primary/10 text-primary font-semibold"
+                                  : "border-border text-text-muted hover:border-primary/40")
+                              }
+                            >
+                              <span className="w-1.5 h-1.5 rounded-full" style={{ background: a.color }} />
+                              {a.name}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Section>
+
+            {/* Rol en el equipo */}
+            <Section icon={Briefcase} title="Tu rol en el equipo" subtitle="Para que el resto sepa qué hacés en UNIDATA.">
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">Job title</label>
+                  <input
+                    type="text"
+                    value={jobTitle}
+                    onChange={(e) => setJobTitle(e.target.value)}
+                    placeholder="ej. Lead Marketing, Analista de Logística, Owner Data..."
+                    maxLength={120}
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm w-full"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider font-bold text-text-muted mb-1">Bio corta</label>
+                  <textarea
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                    placeholder="Una línea sobre lo que hacés en Unistore. Ej: 'Owner del stack de datos: BI, MCP y automatizaciones.'"
+                    maxLength={300}
+                    rows={2}
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm w-full resize-none"
+                  />
+                </div>
+              </div>
             </Section>
 
             {/* Cumple */}

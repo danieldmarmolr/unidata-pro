@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { fmtArDate } from "@/lib/dates";
-import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X } from "lucide-react";
+import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers } from "lucide-react";
+
+type AreaChip = { id: number; slug: string; name: string; color: string };
 
 type User = {
   id: number;
@@ -17,6 +19,26 @@ type User = {
   created_at: string;
   updated_at: string;
   created_by: string | null;
+  area_id: number | null;
+  area_slug: string | null;
+  area_name: string | null;
+  area_color: string | null;
+  secondary_areas: AreaChip[];
+  manager_user_id: number | null;
+  manager_name: string | null;
+  manager_email: string | null;
+  manager_role: string | null;
+  job_title: string | null;
+  bio: string | null;
+};
+
+type Area = {
+  id: number;
+  slug: string;
+  name: string;
+  color: string;
+  description: string;
+  sort_order: number;
 };
 
 export default function AdminUsersPage() {
@@ -28,11 +50,29 @@ export default function AdminUsersPage() {
     staleTime: 10_000,
   });
 
+  const { data: areas } = useQuery<Area[]>({
+    queryKey: ["admin", "areas"],
+    queryFn: () => api("/api/admin/areas"),
+    staleTime: 5 * 60_000,
+  });
+
   const [showNew, setShowNew] = useState(false);
   const [editPwd, setEditPwd] = useState<{ id: number; email: string } | null>(null);
+  const [editAreas, setEditAreas] = useState<User | null>(null);
 
   const createMut = useMutation({
-    mutationFn: (b: { email: string; name: string; password: string; role: string; is_admin: boolean }) =>
+    mutationFn: (b: {
+      email: string;
+      name: string;
+      password: string;
+      role: string;
+      is_admin: boolean;
+      area_id: number | null;
+      secondary_area_ids: number[];
+      manager_user_id: number | null;
+      job_title: string | null;
+      bio: string | null;
+    }) =>
       api("/api/admin/users", { method: "POST", body: JSON.stringify(b) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -83,13 +123,19 @@ export default function AdminUsersPage() {
                 <th className="text-left px-3 py-2">Nombre</th>
                 <th className="text-center px-3 py-2">Rol</th>
                 <th className="text-center px-3 py-2" title="Permisos de admin (puede gestionar usuarios)">Admin</th>
+                <th className="text-left px-3 py-2">Área</th>
+                <th className="text-left px-3 py-2">Gerente</th>
                 <th className="text-center px-3 py-2">Activo</th>
                 <th className="text-left px-3 py-2">Creado</th>
                 <th className="text-right px-3 py-2 pr-4">Acciones</th>
               </tr>
             </thead>
             <tbody>
-              {(data ?? []).map((u) => (
+              {(data ?? []).map((u) => {
+                const managerOptions = (data ?? []).filter(
+                  (m) => m.id !== u.id && m.is_active,
+                );
+                return (
                 <tr key={u.id} className="border-t border-border hover:bg-soft transition">
                   <td className="px-3 py-2 font-semibold">
                     {u.email}
@@ -132,6 +178,72 @@ export default function AdminUsersPage() {
                       }
                     />
                   </td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {u.area_id && u.area_name ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full border"
+                          style={{
+                            color: u.area_color ?? "#666",
+                            borderColor: (u.area_color ?? "#999") + "55",
+                            background: (u.area_color ?? "#999") + "11",
+                          }}
+                          title="Área principal"
+                        >
+                          <span
+                            className="w-1.5 h-1.5 rounded-full"
+                            style={{ background: u.area_color ?? "#666" }}
+                          />
+                          {u.area_name}
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-text-muted italic">sin área</span>
+                      )}
+                      {(u.secondary_areas ?? []).map((sa) => (
+                        <span
+                          key={sa.id}
+                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border border-dashed"
+                          style={{
+                            color: sa.color,
+                            borderColor: sa.color + "66",
+                          }}
+                          title="Área secundaria"
+                        >
+                          {sa.name}
+                        </span>
+                      ))}
+                      <button
+                        onClick={() => setEditAreas(u)}
+                        className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-border hover:border-primary hover:text-primary transition"
+                        title="Editar áreas"
+                      >
+                        <Layers size={10} /> editar
+                      </button>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <select
+                      value={u.manager_user_id ?? ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === "") {
+                          updateMut.mutate({ id: u.id, body: { clear_manager: true } });
+                        } else {
+                          updateMut.mutate({ id: u.id, body: { manager_user_id: Number(v) } });
+                        }
+                      }}
+                      className="px-2 py-1 text-xs rounded border border-border bg-bg outline-none focus:border-primary min-w-[160px]"
+                      title={u.manager_email ?? undefined}
+                    >
+                      <option value="">— sin asignar —</option>
+                      {managerOptions.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name || m.email}
+                          {m.role === "gerencia" || m.is_admin ? " ★" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   <td className="px-3 py-2 text-center">
                     <button
                       disabled={u.id === me.id}
@@ -160,10 +272,11 @@ export default function AdminUsersPage() {
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
               {!isLoading && (!data || data.length === 0) && (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-text-muted">
+                  <td colSpan={9} className="py-10 text-center text-text-muted">
                     No hay usuarios.
                   </td>
                 </tr>
@@ -172,7 +285,16 @@ export default function AdminUsersPage() {
           </table>
         </div>
 
-        {showNew && <NewUserModal onClose={() => setShowNew(false)} onCreate={(b) => createMut.mutate(b)} loading={createMut.isPending} error={createMut.error?.message ?? null} />}
+        {showNew && (
+          <NewUserModal
+            areas={areas ?? []}
+            users={data ?? []}
+            onClose={() => setShowNew(false)}
+            onCreate={(b) => createMut.mutate(b)}
+            loading={createMut.isPending}
+            error={createMut.error?.message ?? null}
+          />
+        )}
 
         {editPwd && (
           <ResetPasswordModal
@@ -182,6 +304,30 @@ export default function AdminUsersPage() {
               updateMut.mutate(
                 { id: editPwd.id, body: { new_password: pwd } },
                 { onSuccess: () => setEditPwd(null) },
+              );
+            }}
+            loading={updateMut.isPending}
+            error={updateMut.error?.message ?? null}
+          />
+        )}
+
+        {editAreas && (
+          <EditAreasModal
+            user={editAreas}
+            areas={areas ?? []}
+            onClose={() => setEditAreas(null)}
+            onSave={(primaryId, secondaryIds) => {
+              updateMut.mutate(
+                {
+                  id: editAreas.id,
+                  body: {
+                    ...(primaryId === null
+                      ? { clear_area: true }
+                      : { area_id: primaryId }),
+                    secondary_area_ids: secondaryIds,
+                  },
+                },
+                { onSuccess: () => setEditAreas(null) },
               );
             }}
             loading={updateMut.isPending}
@@ -210,13 +356,28 @@ function ModalShell({ title, onClose, children }: { title: string; onClose: () =
 }
 
 function NewUserModal({
+  areas,
+  users,
   onClose,
   onCreate,
   loading,
   error,
 }: {
+  areas: Area[];
+  users: User[];
   onClose: () => void;
-  onCreate: (b: { email: string; name: string; password: string; role: string; is_admin: boolean }) => void;
+  onCreate: (b: {
+    email: string;
+    name: string;
+    password: string;
+    role: string;
+    is_admin: boolean;
+    area_id: number | null;
+    secondary_area_ids: number[];
+    manager_user_id: number | null;
+    job_title: string | null;
+    bio: string | null;
+  }) => void;
   loading: boolean;
   error: string | null;
 }) {
@@ -225,12 +386,37 @@ function NewUserModal({
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
   const [isAdmin, setIsAdmin] = useState(false);
+  const [areaId, setAreaId] = useState<string>("");
+  const [secondaryIds, setSecondaryIds] = useState<number[]>([]);
+  const [managerUserId, setManagerUserId] = useState<string>("");
+  const [jobTitle, setJobTitle] = useState("");
+  const [bio, setBio] = useState("");
+
+  const toggleSecondary = (id: number) => {
+    setSecondaryIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const primaryNum = areaId === "" ? null : Number(areaId);
+
   return (
     <ModalShell title="Agregar usuario" onClose={onClose}>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onCreate({ email, name, password, role, is_admin: isAdmin });
+          onCreate({
+            email,
+            name,
+            password,
+            role,
+            is_admin: isAdmin,
+            area_id: primaryNum,
+            secondary_area_ids: secondaryIds.filter((x) => x !== primaryNum),
+            manager_user_id: managerUserId === "" ? null : Number(managerUserId),
+            job_title: jobTitle.trim() || null,
+            bio: bio.trim() || null,
+          });
         }}
         className="space-y-3"
       >
@@ -250,6 +436,84 @@ function NewUserModal({
             <option value="user">user · todos los dashboards (sin SQL/admin)</option>
             <option value="admin">admin (legacy) · ya implica permisos de admin</option>
           </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Área principal</label>
+          <select
+            value={areaId}
+            onChange={(e) => {
+              setAreaId(e.target.value);
+              if (e.target.value !== "") {
+                setSecondaryIds((prev) => prev.filter((x) => x !== Number(e.target.value)));
+              }
+            }}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
+          >
+            <option value="">— sin asignar —</option>
+            {areas.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Áreas adicionales (opcional)</label>
+          <div className="space-y-1 max-h-[180px] overflow-y-auto border border-border rounded-lg p-2">
+            {areas.length === 0 && (
+              <div className="text-xs text-text-muted px-2 py-1">No hay áreas.</div>
+            )}
+            {areas.map((a) => {
+              const isPrimary = a.id === primaryNum;
+              const checked = secondaryIds.includes(a.id);
+              return (
+                <label
+                  key={a.id}
+                  className={
+                    "flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm transition " +
+                    (isPrimary ? "opacity-40 cursor-not-allowed" : "hover:bg-soft")
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isPrimary}
+                    onChange={() => toggleSecondary(a.id)}
+                  />
+                  <span className="w-2 h-2 rounded-full" style={{ background: a.color }} />
+                  <span className="flex-1">{a.name}</span>
+                  {isPrimary && <span className="text-[9px] uppercase font-bold text-primary">principal</span>}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+        <Field label="Job title (opcional)" value={jobTitle} onChange={setJobTitle} hint="Ej: 'Lead Marketing', 'Analista Logistica'" />
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Bio (opcional)</label>
+          <textarea
+            value={bio}
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="Una linea sobre lo que hace en Unistore"
+            className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary resize-none"
+            rows={2}
+            maxLength={300}
+          />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">Gerente directo</label>
+          <select
+            value={managerUserId}
+            onChange={(e) => setManagerUserId(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
+          >
+            <option value="">— sin asignar —</option>
+            {users.filter((u) => u.is_active).map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name || u.email}
+                {u.role === "gerencia" || u.is_admin ? " ★" : ""}
+              </option>
+            ))}
+          </select>
+          <div className="text-[11px] text-text-muted mt-1">★ marca gerentes o admins. Podes elegir cualquier user; despues optimizamos.</div>
         </div>
         <label className="flex items-start gap-2 cursor-pointer p-3 border border-border rounded-lg hover:border-primary/40 transition">
           <input
@@ -277,6 +541,120 @@ function NewUserModal({
           {loading ? "Creando..." : "Crear usuario"}
         </button>
       </form>
+    </ModalShell>
+  );
+}
+
+function EditAreasModal({
+  user,
+  areas,
+  onClose,
+  onSave,
+  loading,
+  error,
+}: {
+  user: User;
+  areas: Area[];
+  onClose: () => void;
+  onSave: (primaryId: number | null, secondaryIds: number[]) => void;
+  loading: boolean;
+  error: string | null;
+}) {
+  const [primaryId, setPrimaryId] = useState<number | null>(user.area_id);
+  const [secondaryIds, setSecondaryIds] = useState<number[]>(
+    (user.secondary_areas ?? []).map((a) => a.id),
+  );
+
+  const toggleSecondary = (id: number) => {
+    setSecondaryIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  return (
+    <ModalShell title={`Áreas de ${user.name || user.email}`} onClose={onClose}>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
+            Área principal
+          </label>
+          <select
+            value={primaryId ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              const newPrimary = v === "" ? null : Number(v);
+              setPrimaryId(newPrimary);
+              if (newPrimary !== null) {
+                setSecondaryIds((prev) => prev.filter((x) => x !== newPrimary));
+              }
+            }}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-bg outline-none focus:border-primary"
+          >
+            <option value="">— sin asignar —</option>
+            {areas.map((a) => (
+              <option key={a.id} value={a.id}>{a.name}</option>
+            ))}
+          </select>
+          <div className="text-[11px] text-text-muted mt-1">
+            Aparece en el organigrama, perfil y como filtro principal.
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-1">
+            Áreas adicionales (colabora también)
+          </label>
+          <div className="space-y-1 max-h-[280px] overflow-y-auto border border-border rounded-lg p-2">
+            {areas.length === 0 && (
+              <div className="text-xs text-text-muted px-2 py-1">No hay áreas.</div>
+            )}
+            {areas.map((a) => {
+              const isPrimary = a.id === primaryId;
+              const checked = secondaryIds.includes(a.id);
+              return (
+                <label
+                  key={a.id}
+                  className={
+                    "flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm transition " +
+                    (isPrimary ? "opacity-40 cursor-not-allowed" : "hover:bg-soft")
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={isPrimary}
+                    onChange={() => toggleSecondary(a.id)}
+                    className="cursor-pointer disabled:cursor-not-allowed"
+                  />
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: a.color }}
+                  />
+                  <span className="flex-1">{a.name}</span>
+                  {isPrimary && (
+                    <span className="text-[9px] uppercase font-bold text-primary">principal</span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-error rounded-lg px-3 py-2 text-xs">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="button"
+          disabled={loading}
+          onClick={() => onSave(primaryId, secondaryIds)}
+          className="w-full py-2 rounded-lg bg-gradient-to-r from-primary to-accent text-white font-semibold text-sm shadow-md disabled:opacity-50"
+        >
+          {loading ? "Guardando..." : "Guardar áreas"}
+        </button>
+      </div>
     </ModalShell>
   );
 }

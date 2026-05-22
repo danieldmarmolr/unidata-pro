@@ -12,6 +12,7 @@ type Me = {
   user: {
     id: number; email: string; name: string;
     area_id: number | null; area_name: string | null; area_color: string | null; area_slug: string | null;
+    secondary_areas: { id: number; slug: string; name: string; color: string }[];
     birthday_month: number | null; birthday_day: number | null; birthday_year: number | null;
     joined_at: string | null; location_city: string | null; interests: string | null;
     profile_completed: boolean;
@@ -61,6 +62,9 @@ function OnboardingModal({ initial }: { initial: Me["user"] }) {
   const qc = useQueryClient();
   const [step, setStep] = useState(0);
   const [areaId, setAreaId] = useState<number | null>(initial.area_id);
+  const [secondaryIds, setSecondaryIds] = useState<number[]>(
+    (initial.secondary_areas ?? []).map((a) => a.id),
+  );
   const [birthMonth, setBirthMonth] = useState<number | null>(initial.birthday_month);
   const [birthDay, setBirthDay] = useState<number | null>(initial.birthday_day);
   const [birthYear, setBirthYear] = useState<number | null>(initial.birthday_year);
@@ -90,6 +94,7 @@ function OnboardingModal({ initial }: { initial: Me["user"] }) {
   function finish(markCompleted: boolean) {
     save.mutate({
       area_id: areaId,
+      secondary_area_ids: secondaryIds.filter((x) => x !== areaId),
       birthday_month: birthMonth,
       birthday_day: birthDay,
       birthday_year: birthYear || null,
@@ -141,7 +146,7 @@ function OnboardingModal({ initial }: { initial: Me["user"] }) {
             <div>
               <div className="text-base font-bold text-text mb-1">¿En qué área colaborás?</div>
               <div className="text-xs text-text-muted mb-4">
-                Esto define qué dashboards vas a ver por defecto. Si trabajás cross, igual elegí la principal — después te damos acceso a más.
+                Elegí tu área <b>principal</b>. Si colaborás con más de una (ej. Admin + Finanzas), marcá las adicionales abajo.
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {areasQ.data?.areas.map((a) => {
@@ -150,7 +155,10 @@ function OnboardingModal({ initial }: { initial: Me["user"] }) {
                     <button
                       key={a.id}
                       type="button"
-                      onClick={() => setAreaId(a.id)}
+                      onClick={() => {
+                        setAreaId(a.id);
+                        setSecondaryIds((prev) => prev.filter((x) => x !== a.id));
+                      }}
                       className={
                         "text-left p-3 rounded-lg border-2 transition " +
                         (selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40")
@@ -165,6 +173,41 @@ function OnboardingModal({ initial }: { initial: Me["user"] }) {
                   );
                 })}
               </div>
+
+              {areaId !== null && (
+                <div className="mt-4">
+                  <div className="text-[11px] uppercase tracking-wider font-bold text-text-muted mb-2">
+                    También colaborás en (opcional)
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(areasQ.data?.areas ?? [])
+                      .filter((a) => a.id !== areaId)
+                      .map((a) => {
+                        const checked = secondaryIds.includes(a.id);
+                        return (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() =>
+                              setSecondaryIds((prev) =>
+                                prev.includes(a.id) ? prev.filter((x) => x !== a.id) : [...prev, a.id],
+                              )
+                            }
+                            className={
+                              "inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full border transition " +
+                              (checked
+                                ? "border-primary bg-primary/10 text-primary font-semibold"
+                                : "border-border text-text-muted hover:border-primary/40")
+                            }
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: a.color }} />
+                            {a.name}
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
