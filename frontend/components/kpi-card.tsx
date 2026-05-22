@@ -30,8 +30,9 @@ export function KpiCard({
   href?: string;
   drill?: KpiDrill;
 }) {
-  const { label, value, delta, prefix, suffix, hint } = data;
+  const { label, value, delta, delta_yoy, delta_yoy_label, prefix, suffix, hint } = data;
   const positive = (delta ?? 0) >= 0;
+  const yoyPositive = (delta_yoy ?? 0) >= 0;
   const [open, setOpen] = useState(false);
 
   const interactive = !!href || !!drill;
@@ -65,6 +66,17 @@ export function KpiCard({
       <div className="mt-3 text-3xl font-extrabold tracking-tight text-text">
         {formatValue(value, prefix, suffix)}
       </div>
+      {delta_yoy !== null && delta_yoy !== undefined && (
+        <div
+          className={cn(
+            "mt-1 text-[10px] font-semibold",
+            yoyPositive ? "text-success" : "text-error",
+          )}
+          title={delta_yoy_label ?? "vs mismo periodo hace 1 ano"}
+        >
+          {yoyPositive ? "▲" : "▼"} {Math.abs(delta_yoy).toFixed(1)}% {delta_yoy_label ?? "YoY"}
+        </div>
+      )}
       {hint && (
         <div className="mt-2 text-xs text-text-muted truncate">{hint}</div>
       )}

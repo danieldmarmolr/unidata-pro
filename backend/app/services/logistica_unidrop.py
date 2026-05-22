@@ -58,6 +58,15 @@ def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: 
     """, p2) or 0)
     delta_comp = ((completados - completados_prev) / completados_prev * 100) if completados_prev > 0 else None
 
+    # Year-over-year (DigiP Unidrop tiene poca historia, suele dar null)
+    completados_yoy = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'completo'
+          AND "Fecha" >= NOW() - INTERVAL '1 year' - make_interval(days => :days)
+          AND "Fecha" <  NOW() - INTERVAL '1 year'
+    """, p) or 0)
+    delta_yoy = ((completados - completados_yoy) / completados_yoy * 100) if completados_yoy > 0 else None
+
     # ---------- KPI 4: eliminados en periodo (tasa de cancelacion) ----------
     eliminados = int(scalar(eng, """
         SELECT COUNT(*) FROM digip_dev.pedidos
@@ -92,6 +101,8 @@ def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: 
                   "hint": "DigiP: estado=preparacion"})
     cards.append({"label": f"Completados ({period})", "value": completados,
                   "delta": round(delta_comp, 1) if delta_comp is not None else None,
+                  "delta_yoy": round(delta_yoy, 1) if delta_yoy is not None else None,
+                  "delta_yoy_label": "vs hace 1 ano",
                   "hint": "DigiP: estado=completo en periodo"})
     cards.append({"label": f"Eliminados ({period})", "value": eliminados,
                   "hint": f"Tasa cancelacion: {round(tasa_cancel,1)}%" if tasa_cancel is not None else "Sin terminales"})

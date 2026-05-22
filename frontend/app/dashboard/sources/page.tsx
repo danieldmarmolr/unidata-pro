@@ -18,7 +18,7 @@ function fmtRelative(iso: string | null | undefined): string {
   if (diffSec < 86400 * 30) return `hace ${Math.floor(diffSec / 86400)} d`;
   return dt.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" });
 }
-import { Download, Database, Search, X, Loader2, Pencil, Tag, BookOpen, Save } from "lucide-react";
+import { Download, Database, Search, X, Loader2, Pencil, Tag, BookOpen, Save, Sparkles, Wand2 } from "lucide-react";
 
 type Unit = "unistore" | "unidrop";
 
@@ -173,6 +173,42 @@ export default function SourcesPage() {
       tags,
     });
   }
+
+  // Auto-doc con Gemini - una tabla puntual
+  const autoDocTableMut = useMutation({
+    mutationFn: async (vars: { force: boolean }) =>
+      api<{ status: string; ai?: { description: string; tags: string[] } }>(
+        `/api/catalog-metadata/${unit}/${schema}/${table}/auto-doc?force=${vars.force}`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["catalog-metadata", unit] });
+    },
+  });
+
+  // Auto-doc batch - todo el schema
+  const autoDocSchemaMut = useMutation({
+    mutationFn: async (vars: { force: boolean }) =>
+      api<{
+        unit: string;
+        schema: string;
+        duration_sec: number;
+        total_tables: number;
+        processed: { table: string; description: string; tags: string[] }[];
+        skipped: { table: string; reason: string }[];
+        errors: { table: string; error: string }[];
+        more_pending: boolean;
+      }>(
+        `/api/catalog-metadata/${unit}/auto-doc?schema=${encodeURIComponent(schema)}&force=${vars.force}`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["catalog-metadata", unit] });
+    },
+  });
+
+  const [autoDocConfirm, setAutoDocConfirm] = useState<boolean>(false);
+  const [autoDocForce, setAutoDocForce] = useState<boolean>(false);
 
   const schemasQ = useQuery<string[]>({
     queryKey: ["sources", unit, "schemas"],
@@ -450,15 +486,109 @@ export default function SourcesPage() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           {/* Schemas + Tables */}
           <div className="lg:col-span-5 bg-surface border border-border rounded-xl p-4">
-            <div className="text-sm font-bold text-text mb-3 flex items-center gap-2">
+            <div className="text-sm font-bold text-text mb-3 flex items-center gap-2 flex-wrap">
               <Database size={14} className="text-primary" />
-              Tablas
+              <span>Tablas</span>
               {tagFilter && (
-                <span className="ml-2 text-[10px] font-normal text-text-muted">
+                <span className="ml-1 text-[10px] font-normal text-text-muted">
                   · filtradas por <span className="font-mono text-primary">#{tagFilter}</span>
                 </span>
               )}
+              {canEdit && schema && (
+                <button
+                  onClick={() => setAutoDocConfirm(true)}
+                  disabled={autoDocSchemaMut.isPending}
+                  className="ml-auto inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20 disabled:opacity-50"
+                  title="Genera descripcion + tags con IA para todas las tablas sin metadata"
+                >
+                  {autoDocSchemaMut.isPending ? (
+                    <Loader2 size={11} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={11} />
+                  )}
+                  Auto-doc schema
+                </button>
+              )}
             </div>
+
+            {/* Modal confirmacion auto-doc schema */}
+            {autoDocConfirm && (
+              <div className="mb-3 bg-primary/5 border border-primary/30 rounded-lg p-3">
+                <div className="text-[11px] font-bold text-text mb-1">
+                  Auto-documentar schema <span className="font-mono">{schema}</span>?
+                </div>
+                <p className="text-[10px] text-text-muted mb-2">
+                  Genera descripcion + tags con Gemini para cada tabla. Toma ~2s por tabla.
+                  Por default salta las que ya tienen metadata.
+                </p>
+                <label className="flex items-center gap-1 text-[10px] text-text-muted mb-2">
+                  <input
+                    type="checkbox"
+                    checked={autoDocForce}
+                    onChange={(e) => setAutoDocForce(e.target.checked)}
+                  />
+                  Sobreescribir las que ya tienen metadata (force)
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      autoDocSchemaMut.mutate({ force: autoDocForce });
+                      setAutoDocConfirm(false);
+                    }}
+                    className="text-[10px] font-bold px-2 py-1 rounded bg-primary text-white"
+                  >
+                    Si, generar
+                  </button>
+                  <button
+                    onClick={() => setAutoDocConfirm(false)}
+                    className="text-[10px] px-2 py-1 rounded border border-border hover:border-primary"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Reporte post-batch */}
+            {autoDocSchemaMut.data && !autoDocSchemaMut.isPending && (
+              <div className="mb-3 bg-soft border border-border rounded-lg p-3 text-[11px]">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-text">
+                    Auto-doc {autoDocSchemaMut.data.schema} ·{" "}
+                    {autoDocSchemaMut.data.duration_sec}s
+                  </span>
+                  <button
+                    onClick={() => autoDocSchemaMut.reset()}
+                    className="text-text-muted hover:text-text"
+                  >
+                    <X size={11} />
+                  </button>
+                </div>
+                <div className="text-text-muted">
+                  <span className="text-success font-bold">
+                    {autoDocSchemaMut.data.processed.length}
+                  </span>{" "}
+                  procesadas ·{" "}
+                  <span className="text-text-muted">{autoDocSchemaMut.data.skipped.length}</span>{" "}
+                  saltadas
+                  {autoDocSchemaMut.data.errors.length > 0 && (
+                    <>
+                      {" "}·{" "}
+                      <span className="text-error">{autoDocSchemaMut.data.errors.length}</span> con
+                      error
+                    </>
+                  )}
+                  {autoDocSchemaMut.data.more_pending && (
+                    <span className="ml-1 text-warning">(quedan mas - corre de nuevo)</span>
+                  )}
+                </div>
+              </div>
+            )}
+            {autoDocSchemaMut.isError && (
+              <div className="mb-3 bg-error/5 border border-error/30 rounded-lg p-2 text-[11px] text-error">
+                Error auto-doc: {(autoDocSchemaMut.error as Error).message}
+              </div>
+            )}
             <div className="mb-3">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1">
                 Schema
@@ -559,12 +689,27 @@ export default function SourcesPage() {
                       </div>
                     )}
                     {canEdit && !editing && (
-                      <button
-                        onClick={openEditor}
-                        className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
-                      >
-                        <Pencil size={11} /> Editar
-                      </button>
+                      <>
+                        <button
+                          onClick={() => autoDocTableMut.mutate({ force: !!currentMeta?.description })}
+                          disabled={autoDocTableMut.isPending}
+                          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-50"
+                          title="Genera descripcion + tags con Gemini para esta tabla"
+                        >
+                          {autoDocTableMut.isPending ? (
+                            <Loader2 size={11} className="animate-spin" />
+                          ) : (
+                            <Wand2 size={11} />
+                          )}
+                          {currentMeta?.description ? "Re-generar" : "Auto-doc"}
+                        </button>
+                        <button
+                          onClick={openEditor}
+                          className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                        >
+                          <Pencil size={11} /> Editar
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>

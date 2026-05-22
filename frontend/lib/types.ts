@@ -8,6 +8,8 @@ export type KpiCard = {
   label: string;
   value: number | string;
   delta?: number | null;
+  delta_yoy?: number | null;
+  delta_yoy_label?: string | null;
   prefix?: string;
   suffix?: string;
   hint?: string | null;

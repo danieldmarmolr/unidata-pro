@@ -49,6 +49,13 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
           AND fecha <  NOW() - make_interval(days => :days)
     """, {"days": days, "days2": days * 2}) or 0)
     delta_disp = ((despachados_periodo - despachados_prev) / despachados_prev * 100) if despachados_prev > 0 else None
+    # Year-over-year: mismo periodo hace 1 ano (null si no hay datos historicos)
+    despachados_yoy = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip."DespachoPedido"
+        WHERE fecha >= NOW() - INTERVAL '1 year' - make_interval(days => :days)
+          AND fecha <  NOW() - INTERVAL '1 year'
+    """, p) or 0)
+    delta_yoy = ((despachados_periodo - despachados_yoy) / despachados_yoy * 100) if despachados_yoy > 0 else None
 
     # Lead time Pedido Digip -> Despacho (filtra negativos provenientes de imports historicos)
     lead_avg = scalar(eng, """
@@ -83,7 +90,9 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     cards.append({"label": "En preparacion", "value": en_preparacion,
                   "hint": "Preparaciones no finalizadas"})
     cards.append({"label": f"Despachados ({period})", "value": despachados_periodo,
-                  "delta": round(delta_disp, 1) if delta_disp is not None else None})
+                  "delta": round(delta_disp, 1) if delta_disp is not None else None,
+                  "delta_yoy": round(delta_yoy, 1) if delta_yoy is not None else None,
+                  "delta_yoy_label": "vs hace 1 ano"})
     cards.append({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
                   "suffix": " dias", "hint": "Order TN -> Despacho Digip"})
     cards.append({"label": "Pedidos atascados", "value": stuck,

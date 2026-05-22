@@ -63,6 +63,7 @@ export default function LogisticaPage() {
   const _qs = periodToQuery(period, customFrom, customTo);
   const [unit, setUnit, unitLocked] = useUnitFromQuery("unistore");
   const [drillOrderId, setDrillOrderId] = useState<number | null>(null);
+  const [estadoFilter, setEstadoFilter] = useState<string | null>(null);
 
   const { data, isLoading, isFetching, error } = useQuery<LogResp>({
     queryKey: ["dashboards", "logistica", unit, period, customFrom, customTo],
@@ -357,8 +358,10 @@ export default function LogisticaPage() {
             ) : (
               <DonutChart
                 data={(data.by_estado ?? []).map((s) => ({ name: s.category, value: s.value }))}
-                caption="Distribucion por estado (DigiP)"
+                caption="Distribucion por estado (DigiP) · click para filtrar"
                 colorMap={DIGIP_ESTADO_COLORS}
+                onSliceClick={(d) => setEstadoFilter((cur) => (cur === d.name ? null : d.name))}
+                highlightName={estadoFilter}
                 height={300}
               />
             )}
@@ -391,18 +394,49 @@ export default function LogisticaPage() {
           </div>
         )}
 
+        {/* Chip clearable cuando hay filtro de estado activo */}
+        {estadoFilter && (
+          <div className="mb-3 flex items-center gap-2 flex-wrap text-[11px]">
+            <span className="text-text-muted">Filtrando por estado:</span>
+            <button
+              onClick={() => setEstadoFilter(null)}
+              className="inline-flex items-center gap-1 font-bold px-2 py-0.5 rounded bg-primary text-white"
+              title="Click para limpiar"
+            >
+              {estadoFilter} ×
+            </button>
+            <span className="text-text-muted">
+              · click otra vez en el slice del donut para limpiar
+            </span>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {isLoading || !data ? (
             <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
           ) : (
             <CategoryTable
-              caption="Pedidos atascados (>5 dias)"
+              caption={
+                estadoFilter
+                  ? `Pedidos atascados · filtro: ${estadoFilter}`
+                  : "Pedidos atascados (>5 dias)"
+              }
               subtitle={
                 unit === "unistore"
                   ? "Pagados aun en estado abierto - click en una fila para ver items"
                   : "DigiP: pendiente/preparacion > 5 dias - enriquecido con MELI"
               }
-              data={data.stuck_orders}
+              data={
+                estadoFilter
+                  ? data.stuck_orders.filter((r) => {
+                      const e =
+                        unit === "unistore"
+                          ? (r.extra as any)?.digip_estado
+                          : (r.extra as any)?.estado;
+                      return e === estadoFilter;
+                    })
+                  : data.stuck_orders
+              }
               formatter="currency"
               extraColumns={
                 unit === "unistore"
