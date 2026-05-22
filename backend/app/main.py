@@ -195,6 +195,9 @@ app.include_router(public_refund_requests_api.router)
 from app.api import flujo_fondos as flujo_fondos_api
 app.include_router(flujo_fondos_api.router)
 
+from app.api import catalog_metadata as catalog_metadata_api
+app.include_router(catalog_metadata_api.router)
+
 
 @app.get("/api/health")
 def health() -> dict:

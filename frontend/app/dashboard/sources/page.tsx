@@ -1,15 +1,53 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { Segmented } from "@/components/segmented";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { api } from "@/lib/api";
 import { formatNumber } from "@/lib/utils";
-import { Download, Database, Search, X, Loader2 } from "lucide-react";
+
+function fmtRelative(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const dt = new Date(iso);
+  const diffSec = (Date.now() - dt.getTime()) / 1000;
+  if (diffSec < 60) return "hace segundos";
+  if (diffSec < 3600) return `hace ${Math.floor(diffSec / 60)} min`;
+  if (diffSec < 86400) return `hace ${Math.floor(diffSec / 3600)} h`;
+  if (diffSec < 86400 * 30) return `hace ${Math.floor(diffSec / 86400)} d`;
+  return dt.toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" });
+}
+import { Download, Database, Search, X, Loader2, Pencil, Tag, BookOpen, Save } from "lucide-react";
 
 type Unit = "unistore" | "unidrop";
+
+type Me = {
+  id: number;
+  email: string;
+  role: string;
+  is_admin: boolean;
+  area_slug: string | null;
+};
+
+type CatalogMetadataItem = {
+  unit: string;
+  schema_name: string;
+  table_name: string;
+  description: string | null;
+  tags: string[];
+  updated_by_email: string | null;
+  updated_at: string | null;
+  queries: number;
+  last_used_at: string | null;
+  last_user: string | null;
+};
+
+type CatalogMetadataResponse = {
+  unit: string;
+  items: CatalogMetadataItem[];
+  tags: { tag: string; count: number }[];
+};
 
 type TableInfo = {
   schema: string;
@@ -61,6 +99,7 @@ function downloadCsv(filename: string, columns: string[], rows: unknown[][]) {
 }
 
 export default function SourcesPage() {
+  const qc = useQueryClient();
   const [unit, setUnit] = useState<Unit>("unistore");
   const [schema, setSchema] = useState<string>("");
   const [table, setTable] = useState<string>("");
@@ -68,6 +107,72 @@ export default function SourcesPage() {
   const [searchDraft, setSearchDraft] = useState<string>("");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [searchScope, setSearchScope] = useState<SearchScope>("local");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [editing, setEditing] = useState<boolean>(false);
+  const [editDesc, setEditDesc] = useState<string>("");
+  const [editTags, setEditTags] = useState<string>("");
+
+  const meQ = useQuery<Me>({
+    queryKey: ["users-me"],
+    queryFn: () => api<Me>("/api/users/me"),
+    staleTime: 5 * 60_000,
+  });
+  const canEdit = useMemo(() => {
+    const u = meQ.data;
+    if (!u) return false;
+    if (u.is_admin) return true;
+    const role = (u.role || "").toLowerCase();
+    if (role === "admin" || role === "gerencia") return true;
+    return (u.area_slug || "").toLowerCase() === "it_data";
+  }, [meQ.data]);
+
+  const metadataQ = useQuery<CatalogMetadataResponse>({
+    queryKey: ["catalog-metadata", unit],
+    queryFn: () => api(`/api/catalog-metadata/${unit}`),
+    staleTime: 60_000,
+  });
+
+  // Indice schema.table -> metadata para lookup O(1)
+  const metaByKey = useMemo(() => {
+    const m = new Map<string, CatalogMetadataItem>();
+    (metadataQ.data?.items ?? []).forEach((it) => {
+      m.set(`${it.schema_name}.${it.table_name}`, it);
+    });
+    return m;
+  }, [metadataQ.data]);
+
+  const currentMeta = useMemo(() => {
+    if (!schema || !table) return null;
+    return metaByKey.get(`${schema}.${table}`) ?? null;
+  }, [metaByKey, schema, table]);
+
+  const saveMetaMut = useMutation({
+    mutationFn: async (body: { description: string | null; tags: string[] }) =>
+      api<CatalogMetadataItem>(
+        `/api/catalog-metadata/${unit}/${schema}/${table}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["catalog-metadata", unit] });
+      setEditing(false);
+    },
+  });
+
+  function openEditor() {
+    setEditDesc(currentMeta?.description ?? "");
+    setEditTags((currentMeta?.tags ?? []).join(", "));
+    setEditing(true);
+  }
+  function saveMeta() {
+    const tags = editTags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
+    saveMetaMut.mutate({
+      description: editDesc.trim() || null,
+      tags,
+    });
+  }
 
   const schemasQ = useQuery<string[]>({
     queryKey: ["sources", unit, "schemas"],
@@ -82,7 +187,12 @@ export default function SourcesPage() {
   useEffect(() => {
     setSchema("");
     setTable("");
+    setTagFilter(null);
   }, [unit]);
+
+  useEffect(() => {
+    setEditing(false);
+  }, [unit, schema, table]);
 
   const tablesQ = useQuery<TableInfo[]>({
     queryKey: ["sources", unit, "tables", schema],
@@ -90,6 +200,16 @@ export default function SourcesPage() {
     staleTime: 5 * 60_000,
     enabled: !!schema,
   });
+
+  // Filtrado de tablas por tag (se aplica sobre tablesQ.data)
+  const filteredTables = useMemo(() => {
+    if (!tablesQ.data) return [];
+    if (!tagFilter) return tablesQ.data;
+    return tablesQ.data.filter((t) => {
+      const meta = metaByKey.get(`${schema}.${t.table_name}`);
+      return meta?.tags?.includes(tagFilter) ?? false;
+    });
+  }, [tablesQ.data, tagFilter, metaByKey, schema]);
 
   const colsQ = useQuery<ColumnInfo[]>({
     queryKey: ["sources", unit, "cols", schema, table],
@@ -288,12 +408,56 @@ export default function SourcesPage() {
           </div>
         )}
 
+        {/* Chips de tags - filtran la lista de tablas */}
+        {(metadataQ.data?.tags?.length ?? 0) > 0 && (
+          <div className="mb-3 flex items-center gap-2 flex-wrap">
+            <Tag size={12} className="text-text-muted" />
+            <span className="text-[10px] uppercase tracking-wider text-text-muted">
+              Filtrar por tag:
+            </span>
+            <button
+              onClick={() => setTagFilter(null)}
+              className={
+                "text-[10px] font-bold px-2 py-0.5 rounded border transition " +
+                (!tagFilter
+                  ? "bg-primary text-white border-primary"
+                  : "border-border text-text-muted hover:border-primary")
+              }
+            >
+              Todos
+            </button>
+            {(metadataQ.data?.tags ?? []).map((t) => (
+              <button
+                key={t.tag}
+                onClick={() => setTagFilter(tagFilter === t.tag ? null : t.tag)}
+                className={
+                  "text-[10px] font-bold px-2 py-0.5 rounded border transition " +
+                  (tagFilter === t.tag
+                    ? "bg-primary text-white border-primary"
+                    : "border-border text-text hover:border-primary")
+                }
+                title={`${t.count} tabla(s)`}
+              >
+                {t.tag}
+                <span className={"ml-1 " + (tagFilter === t.tag ? "text-white/70" : "text-text-muted")}>
+                  ·{t.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           {/* Schemas + Tables */}
           <div className="lg:col-span-5 bg-surface border border-border rounded-xl p-4">
             <div className="text-sm font-bold text-text mb-3 flex items-center gap-2">
               <Database size={14} className="text-primary" />
               Tablas
+              {tagFilter && (
+                <span className="ml-2 text-[10px] font-normal text-text-muted">
+                  · filtradas por <span className="font-mono text-primary">#{tagFilter}</span>
+                </span>
+              )}
             </div>
             <div className="mb-3">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-1">
@@ -322,20 +486,42 @@ export default function SourcesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(tablesQ.data ?? []).map((t) => (
-                    <tr
-                      key={t.table_name}
-                      onClick={() => setTable(t.table_name)}
-                      className={
-                        "cursor-pointer border-t border-border hover:bg-soft transition " +
-                        (table === t.table_name ? "bg-soft" : "")
-                      }
-                    >
-                      <td className="px-3 py-1.5 font-mono">{t.table_name}</td>
-                      <td className="px-2 py-1.5 text-right tabular-nums">{formatNumber(t.approx_rows)}</td>
-                      <td className="px-2 py-1.5 text-right text-text-muted">{t.size_pretty}</td>
-                    </tr>
-                  ))}
+                  {filteredTables.map((t) => {
+                    const meta = metaByKey.get(`${schema}.${t.table_name}`);
+                    const hasDesc = !!meta?.description;
+                    const tagsCount = meta?.tags?.length ?? 0;
+                    return (
+                      <tr
+                        key={t.table_name}
+                        onClick={() => setTable(t.table_name)}
+                        className={
+                          "cursor-pointer border-t border-border hover:bg-soft transition " +
+                          (table === t.table_name ? "bg-soft" : "")
+                        }
+                      >
+                        <td className="px-3 py-1.5 font-mono">
+                          <span>{t.table_name}</span>
+                          {(hasDesc || tagsCount > 0) && (
+                            <span className="ml-2 inline-flex items-center gap-1 align-middle">
+                              {hasDesc && (
+                                <BookOpen
+                                  size={11}
+                                  className="text-primary"
+                                />
+                              )}
+                              {tagsCount > 0 && (
+                                <span className="text-[9px] font-bold text-primary bg-primary/10 px-1 rounded">
+                                  {tagsCount}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">{formatNumber(t.approx_rows)}</td>
+                        <td className="px-2 py-1.5 text-right text-text-muted">{t.size_pretty}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {tablesQ.isLoading && (
@@ -346,6 +532,129 @@ export default function SourcesPage() {
 
           {/* Columns + Preview */}
           <div className="lg:col-span-7 space-y-4">
+            {/* Panel Metadata - descripcion + tags + stats de uso */}
+            {table && (
+              <div className="bg-surface border border-border rounded-xl p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[10px] uppercase tracking-wider text-text-muted mb-0.5">
+                      Metadata
+                    </div>
+                    <div className="text-sm font-bold text-text truncate font-mono">
+                      {schema}.{table}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 text-[11px] text-text-muted shrink-0">
+                    {currentMeta && currentMeta.queries > 0 && (
+                      <div title="Queries en SQL libre">
+                        <span className="font-mono font-bold text-text">
+                          {formatNumber(currentMeta.queries)}
+                        </span>{" "}
+                        queries
+                      </div>
+                    )}
+                    {currentMeta?.last_used_at && (
+                      <div title={currentMeta.last_used_at}>
+                        ult. uso {fmtRelative(currentMeta.last_used_at)}
+                      </div>
+                    )}
+                    {canEdit && !editing && (
+                      <button
+                        onClick={openEditor}
+                        className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                      >
+                        <Pencil size={11} /> Editar
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {!editing ? (
+                  <>
+                    {/* Vista read-only */}
+                    {currentMeta?.description ? (
+                      <p className="text-[13px] text-text whitespace-pre-wrap leading-relaxed mb-2">
+                        {currentMeta.description}
+                      </p>
+                    ) : (
+                      <p className="text-[12px] text-text-muted italic mb-2">
+                        Sin descripcion.{" "}
+                        {canEdit && (
+                          <button
+                            onClick={openEditor}
+                            className="text-primary hover:underline not-italic"
+                          >
+                            Agregar
+                          </button>
+                        )}
+                      </p>
+                    )}
+                    {(currentMeta?.tags?.length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {currentMeta!.tags.map((t) => (
+                          <button
+                            key={t}
+                            onClick={() => setTagFilter(t)}
+                            className="text-[10px] font-bold bg-primary/10 text-primary border border-primary/30 px-1.5 py-0.5 rounded hover:bg-primary/20"
+                          >
+                            #{t}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {currentMeta?.updated_by_email && currentMeta.updated_at && (
+                      <div className="text-[10px] text-text-muted mt-2">
+                        Anotado por {currentMeta.updated_by_email} ·{" "}
+                        {fmtRelative(currentMeta.updated_at)}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {/* Editor */}
+                    <textarea
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      placeholder="Que tabla es, para que sirve, ojo con esta columna, esta es la fuente cuando..."
+                      rows={4}
+                      className="w-full px-3 py-2 rounded border border-border bg-bg text-sm outline-none focus:border-primary mb-2"
+                    />
+                    <input
+                      value={editTags}
+                      onChange={(e) => setEditTags(e.target.value)}
+                      placeholder="tags separados por coma (ej: ventas, ground-truth, lento)"
+                      className="w-full px-3 py-2 rounded border border-border bg-bg text-sm outline-none focus:border-primary mb-2"
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={saveMeta}
+                        disabled={saveMetaMut.isPending}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded bg-primary text-white disabled:opacity-50"
+                      >
+                        {saveMetaMut.isPending ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Save size={12} />
+                        )}
+                        Guardar
+                      </button>
+                      <button
+                        onClick={() => setEditing(false)}
+                        className="px-3 py-1.5 text-xs rounded border border-border hover:border-primary"
+                      >
+                        Cancelar
+                      </button>
+                      {saveMetaMut.isError && (
+                        <span className="text-[11px] text-error">
+                          Error: {(saveMetaMut.error as Error).message}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
             <div className="bg-surface border border-border rounded-xl p-4">
               <div className="text-sm font-bold text-text mb-3">
                 {table ? `${schema}.${table}` : "Selecciona una tabla"}
