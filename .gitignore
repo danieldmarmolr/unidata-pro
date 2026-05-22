@@ -11,6 +11,7 @@ backend/keys/
 scripts/_*.py
 scripts/_*.ps1
 scripts/_*.sh
+scripts/_*.txt
 
 # llaves SSH — NUNCA subir
 *.pem
