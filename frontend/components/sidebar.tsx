@@ -55,6 +55,7 @@ import {
   Award,
   Search,
   CalendarClock,
+  Calendar,
 } from "lucide-react";
 
 type Role = "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -157,6 +158,7 @@ const ITEMS: NavItem[] = [
       { label: "Buscar",       href: "/dashboard/people/search",       icon: Search    },
       { label: "Bookmarks",    href: "/dashboard/people/bookmarks",    icon: BookOpen  },
       { label: "Vacaciones",   href: "/dashboard/people/time-off",     icon: CalendarClock },
+      { label: "Eventos",      href: "/dashboard/people/events",       icon: Calendar },
       { label: "1:1s",         href: "/dashboard/people/one-on-ones",  icon: UserCircle },
       { label: "Onboarding",   href: "/dashboard/people/onboarding",   icon: Wand2     },
       { label: "Encuestas",    href: "/dashboard/people/surveys",      icon: Sparkles  },

@@ -361,3 +361,99 @@ def close(
     if not ok:
         raise HTTPException(404, "encuesta no encontrada")
     return {"ok": True}
+
+
+# ============================================================
+# Events
+# ============================================================
+
+class EventBody(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    description: str = Field(default="", max_length=4000)
+    location: str = Field(default="", max_length=400)
+    starts_at: str
+    ends_at: str | None = None
+    capacity: int | None = None
+
+
+class RsvpBody(BaseModel):
+    status: Literal["yes", "maybe", "no"]
+
+
+@router.get("/events")
+def list_events(
+    user: Annotated[dict, Depends(current_user)],
+    upcoming_only: bool = True,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> dict:
+    items = people_hr_db.list_events(viewer_id=user["id"], upcoming_only=upcoming_only, limit=limit)
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/events", status_code=201)
+def create_event(
+    body: EventBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        return people_hr_db.create_event(
+            title=body.title, description=body.description, location=body.location,
+            starts_at=body.starts_at, ends_at=body.ends_at, capacity=body.capacity,
+            created_by=user["id"],
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/events/{event_id}/attendees")
+def event_attendees(
+    event_id: int,
+    _: Annotated[dict, Depends(current_user)],
+) -> dict:
+    items = people_hr_db.get_event_attendees(event_id=event_id)
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/events/{event_id}/rsvp")
+def rsvp(
+    event_id: int,
+    body: RsvpBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        return people_hr_db.rsvp_event(event_id=event_id, user_id=user["id"], status=body.status)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/events/{event_id}/rsvp")
+def cancel_rsvp(
+    event_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    ok = people_hr_db.delete_rsvp(event_id=event_id, user_id=user["id"])
+    return {"ok": ok}
+
+
+@router.delete("/events/{event_id}")
+def delete_event(
+    event_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    if not _can_manage_people(user):
+        raise HTTPException(403, "solo admin/People puede borrar eventos")
+    ok = people_hr_db.delete_event(event_id=event_id)
+    return {"ok": ok}
+
+
+# ============================================================
+# Auto-cumples (job manual; ideal correrlo desde Railway cron diario)
+# ============================================================
+
+@router.post("/cron/auto-birthdays")
+def cron_birthdays(user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Crea posts auto en espacio 'cumples' para users que cumplen hoy.
+    Idempotente del dia."""
+    if not _can_manage_people(user):
+        raise HTTPException(403, "solo admin/People puede correr el cron")
+    return people_hr_db.auto_post_today_birthdays()

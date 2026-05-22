@@ -129,6 +129,36 @@ def init() -> None:
                 "ON people_pulse_surveys (is_active, starts_at DESC)"
             )
 
+            # --- events
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_events (
+                    id           BIGSERIAL PRIMARY KEY,
+                    title        TEXT NOT NULL,
+                    description  TEXT NOT NULL DEFAULT '',
+                    location     TEXT NOT NULL DEFAULT '',
+                    starts_at    TIMESTAMPTZ NOT NULL,
+                    ends_at      TIMESTAMPTZ,
+                    capacity     INT,
+                    created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                    space_id     BIGINT,
+                    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_upcoming "
+                "ON people_events (starts_at)"
+            )
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_event_rsvp (
+                    event_id   BIGINT NOT NULL REFERENCES people_events(id) ON DELETE CASCADE,
+                    user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    status     TEXT NOT NULL DEFAULT 'yes' CHECK (status IN ('yes','maybe','no')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (event_id, user_id)
+                )
+            """)
+
             # --- pulse_responses
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS people_pulse_responses (
@@ -737,3 +767,169 @@ def close_survey(*, survey_id: int) -> bool:
             (survey_id,),
         )
         return cur.fetchone() is not None
+
+
+# ============================================================
+# Events + RSVP
+# ============================================================
+
+def create_event(*, title: str, description: str, location: str, starts_at: str, ends_at: str | None, capacity: int | None, created_by: int) -> dict:
+    init()
+    if not title.strip(): raise ValueError("title vacio")
+    if not starts_at: raise ValueError("starts_at vacio")
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """INSERT INTO people_events
+               (title, description, location, starts_at, ends_at, capacity, created_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *""",
+            (title.strip(), description.strip(), location.strip(), starts_at, ends_at,
+             int(capacity) if capacity else None, created_by),
+        )
+        row = dict(cur.fetchone())
+    for k in ("starts_at", "ends_at", "created_at"):
+        row[k] = _iso(row.get(k))
+    return row
+
+
+def list_events(*, viewer_id: int, upcoming_only: bool = True, limit: int = 50) -> list[dict]:
+    init()
+    sql = """
+        SELECT e.*, u.name AS creator_name,
+               (SELECT COUNT(*) FROM people_event_rsvp r WHERE r.event_id = e.id AND r.status = 'yes') AS yes_count,
+               (SELECT COUNT(*) FROM people_event_rsvp r WHERE r.event_id = e.id AND r.status = 'maybe') AS maybe_count,
+               (SELECT COUNT(*) FROM people_event_rsvp r WHERE r.event_id = e.id AND r.status = 'no') AS no_count,
+               (SELECT status FROM people_event_rsvp r WHERE r.event_id = e.id AND r.user_id = %s) AS my_rsvp
+          FROM people_events e
+          LEFT JOIN users u ON u.id = e.created_by
+    """
+    params: list = [viewer_id]
+    if upcoming_only:
+        sql += " WHERE e.starts_at >= NOW() - INTERVAL '1 day'"
+    sql += " ORDER BY e.starts_at ASC LIMIT %s"
+    params.append(int(limit))
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        for k in ("starts_at", "ends_at", "created_at"):
+            r[k] = _iso(r.get(k))
+        r["yes_count"] = int(r.get("yes_count") or 0)
+        r["maybe_count"] = int(r.get("maybe_count") or 0)
+        r["no_count"] = int(r.get("no_count") or 0)
+    return rows
+
+
+def get_event_attendees(*, event_id: int) -> list[dict]:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT r.user_id, r.status, r.created_at,
+                   u.name, u.avatar_url, u.job_title,
+                   a.color AS area_color, a.name AS area_name
+              FROM people_event_rsvp r
+              JOIN users u ON u.id = r.user_id
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE r.event_id = %s
+             ORDER BY r.status, u.name
+        """, (event_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["created_at"] = _iso(r.get("created_at"))
+    return rows
+
+
+def rsvp_event(*, event_id: int, user_id: int, status: str) -> dict:
+    init()
+    if status not in {"yes", "maybe", "no"}:
+        raise ValueError("status invalido")
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """INSERT INTO people_event_rsvp (event_id, user_id, status)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (event_id, user_id) DO UPDATE SET status = EXCLUDED.status, created_at = NOW()
+               RETURNING *""",
+            (event_id, user_id, status),
+        )
+        row = dict(cur.fetchone())
+    row["created_at"] = _iso(row.get("created_at"))
+    return row
+
+
+def delete_rsvp(*, event_id: int, user_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "DELETE FROM people_event_rsvp WHERE event_id = %s AND user_id = %s RETURNING 1",
+            (event_id, user_id),
+        )
+        return cur.fetchone() is not None
+
+
+def delete_event(*, event_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("DELETE FROM people_events WHERE id = %s RETURNING id", (event_id,))
+        return cur.fetchone() is not None
+
+
+# ============================================================
+# Auto-cumples post (job idempotente)
+# ============================================================
+
+def auto_post_today_birthdays() -> dict:
+    """Crea un post en espacio 'cumples' por cada user que cumple hoy.
+
+    Idempotente del dia: solo crea si no existe un post hoy con marker
+    `[auto-cumple:{user_id}:{YYYY-MM-DD}]` en el content.
+    """
+    init()
+    from app.utils.tz import today_ar
+    today = today_ar()
+    today_iso = today.isoformat()
+
+    with get_conn() as c, c.cursor() as cur:
+        # Buscar el space cumples
+        cur.execute("SELECT id FROM people_spaces WHERE slug = 'cumples'")
+        space = cur.fetchone()
+        if not space:
+            return {"created": 0, "skipped": 0, "reason": "no cumples space"}
+        space_id = space["id"]
+
+        # Users con cumple hoy
+        cur.execute("""
+            SELECT id, name FROM users
+             WHERE is_active = TRUE
+               AND birthday_month = %s AND birthday_day = %s
+        """, (today.month, today.day))
+        birthday_users = [dict(r) for r in cur.fetchall()]
+
+        # System user para crear los posts: usamos el primer admin disponible
+        cur.execute("SELECT id FROM users WHERE is_admin = TRUE OR role = 'admin' ORDER BY id LIMIT 1")
+        admin_row = cur.fetchone()
+        if not admin_row:
+            return {"created": 0, "skipped": len(birthday_users), "reason": "no admin user"}
+        system_id = admin_row["id"]
+
+        created = 0
+        skipped = 0
+        for u in birthday_users:
+            marker = f"[auto-cumple:{u['id']}:{today_iso}]"
+            cur.execute(
+                "SELECT 1 FROM people_posts WHERE space_id = %s AND content LIKE %s LIMIT 1",
+                (space_id, f"%{marker}%"),
+            )
+            if cur.fetchone():
+                skipped += 1
+                continue
+            content = (
+                f"🎂 Hoy cumple @[{u['name']}|{u['id']}]\n\n"
+                f"Mandale tus mejores deseos en los comentarios o dale kudos!\n\n"
+                f"{marker}"
+            )
+            cur.execute(
+                """INSERT INTO people_posts (author_id, space_id, content)
+                   VALUES (%s, %s, %s) RETURNING id""",
+                (system_id, space_id, content),
+            )
+            created += 1
+        return {"created": created, "skipped": skipped, "checked": len(birthday_users)}
