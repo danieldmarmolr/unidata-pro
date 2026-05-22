@@ -32,13 +32,18 @@ type LogResp = {
   cards: KpiCardT[];
   funnel: CategoryValue[];
   lead_time_daily?: TimeSeriesPoint[];
+  lead_time_etapas?: { pedido_to_prep_avg: number | null; prep_to_despacho_avg: number | null };
   daily_dispatch?: TimeSeriesPoint[];
   stock_by_area?: CategoryValue[];
   stock_critico?: CategoryValue[];
+  stock_por_contenedor?: CategoryValue[];
   ajustes?: CategoryValue[];
   top_provinces?: CategoryValue[];
+  top_localidades?: CategoryValue[];
   by_estado?: CategoryValue[];
   top_skus?: CategoryValue[];
+  items_pendientes?: CategoryValue[];
+  prep_throughput?: Array<{ date: string; creadas: number; finalizadas: number }>;
   stuck_orders: CategoryValue[];
   generated_at: string;
 };
@@ -76,7 +81,7 @@ export default function LogisticaPage() {
         title={`Centro Logístico · ${unit === "unistore" ? "Unistore" : "Unidrop"}`}
         subtitle={
           unit === "unistore"
-            ? "Funnel Order TN -> Pedido Digip -> Despacho · stock por area · pedidos atascados"
+            ? "DigiP cerebro · funnel item-level · throughput preparacion · items pendientes · stock por contenedor"
             : "DigiP (digip_dev) cerebro · estados pendiente/preparacion/completo · enriquecido con MELI"
         }
       />
@@ -178,32 +183,171 @@ export default function LogisticaPage() {
         </div>
 
         {unit === "unistore" && (
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
-            {isLoading || !data ? (
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-            ) : (
-              <HBarChart
-                data={(data.stock_by_area ?? []).map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
-                caption="Stock por area (unidades totales)"
-                formatter="number"
-              />
+          <>
+            {/* F1: Donut por estado + Lead time desglosado 2 etapas */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[300px] animate-pulse xl:col-span-1" />
+              ) : (
+                <DonutChart
+                  data={(data.by_estado ?? []).map((s) => ({ name: s.category, value: s.value }))}
+                  caption="Distribucion por estado (DigiP)"
+                  colorMap={DIGIP_ESTADO_COLORS}
+                  height={280}
+                />
+              )}
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[300px] animate-pulse xl:col-span-2" />
+              ) : (
+                <div className="bg-surface border border-border rounded-xl p-5 xl:col-span-2">
+                  <div className="text-sm font-semibold text-text mb-1">Lead time desglosado</div>
+                  <div className="text-[11px] text-text-muted mb-4">
+                    Las 2 etapas del proceso DigiP en el periodo
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-bg border border-border rounded-lg p-4">
+                      <div className="text-[11px] text-text-muted">Pedido → Preparacion</div>
+                      <div className="text-3xl font-bold text-text mt-1">
+                        {data.lead_time_etapas?.pedido_to_prep_avg ?? "—"}
+                        <span className="text-sm font-normal text-text-muted ml-1">dias</span>
+                      </div>
+                      <div className="text-[11px] text-text-muted mt-2">
+                        Tiempo promedio hasta empezar a preparar
+                      </div>
+                    </div>
+                    <div className="bg-bg border border-border rounded-lg p-4">
+                      <div className="text-[11px] text-text-muted">Preparacion → Despacho</div>
+                      <div className="text-3xl font-bold text-text mt-1">
+                        {data.lead_time_etapas?.prep_to_despacho_avg ?? "—"}
+                        <span className="text-sm font-normal text-text-muted ml-1">dias</span>
+                      </div>
+                      <div className="text-[11px] text-text-muted mt-2">
+                        Tiempo desde preparacion lista hasta despacho
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* F2: Throughput preparacion (creadas vs finalizadas) */}
+            {data?.prep_throughput && data.prep_throughput.length > 0 && (
+              <div className="mb-6">
+                <InteractiveMetricChart
+                  points={data.prep_throughput as any[]}
+                  metrics={[
+                    { key: "creadas", label: "Preparaciones creadas", kind: "number", color: "#7a3eae" },
+                    { key: "finalizadas", label: "Preparaciones finalizadas", kind: "number", color: "#22c55e" },
+                  ]}
+                  defaultPrimary="creadas"
+                  caption="Throughput de preparacion (60 dias)"
+                  subtitle="Comparar creadas vs finalizadas - gap = acumulacion"
+                  height={300}
+                />
+              </div>
             )}
-            {isLoading || !data ? (
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-            ) : (
-              <CategoryTable
-                caption="Productos con stock critico"
-                subtitle="<= 5 unidades totales en todas las areas"
-                data={data.stock_critico ?? []}
-                formatter="number"
-                extraColumns={[
-                  { key: "desc", label: "Descripcion", format: "raw" },
-                  { key: "areas", label: "Areas", format: "number" },
-                ]}
-                showProgress={false}
-              />
-            )}
-          </div>
+
+            {/* F1+F2: Stock por area + por contenedor */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <HBarChart
+                  data={(data.stock_by_area ?? []).map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
+                  caption="Stock por area (unidades totales)"
+                  formatter="number"
+                />
+              )}
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <HBarChart
+                  data={(data.stock_por_contenedor ?? []).map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
+                  caption="Stock por contenedor (top 15)"
+                  formatter="number"
+                />
+              )}
+            </div>
+
+            {/* F1: Top SKUs pedidos + Items pendientes por SKU */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <CategoryTable
+                  caption="Top SKUs pedidos"
+                  subtitle="Unidades pedidas en el periodo - click abre el producto 360"
+                  data={data.top_skus ?? []}
+                  formatter="number"
+                  extraColumns={[
+                    { key: "desc", label: "Descripcion", format: "raw" },
+                    { key: "pedidos", label: "Pedidos", format: "number" },
+                  ]}
+                  showProgress={false}
+                  onRowClick={(r) => {
+                    const sku = r.category;
+                    if (sku && sku !== "(sin)") {
+                      router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
+                    }
+                  }}
+                />
+              )}
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <CategoryTable
+                  caption="Items pendientes (gap pedido - despacho)"
+                  subtitle="Unidades pedidas sin despacho efectivo - bottleneck operativo"
+                  data={data.items_pendientes ?? []}
+                  formatter="number"
+                  extraColumns={[
+                    { key: "desc", label: "Descripcion", format: "raw" },
+                    { key: "uds_pedidas", label: "Pedidas", format: "number" },
+                    { key: "uds_despachadas", label: "Desp.", format: "number" },
+                  ]}
+                  showProgress={false}
+                  onRowClick={(r) => {
+                    const sku = r.category;
+                    if (sku && sku !== "(sin)") {
+                      router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
+                    }
+                  }}
+                />
+              )}
+            </div>
+
+            {/* F1: Top localidades + Stock critico */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <HBarChart
+                  data={(data.top_localidades ?? []).map((s) => ({
+                    name: s.category,
+                    value: s.value,
+                    extra: s.extra,
+                  }))}
+                  caption="Top localidades de despacho"
+                  formatter="number"
+                />
+              )}
+              {isLoading || !data ? (
+                <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+              ) : (
+                <CategoryTable
+                  caption="Productos con stock critico"
+                  subtitle="<= 5 unidades totales en todas las areas"
+                  data={data.stock_critico ?? []}
+                  formatter="number"
+                  extraColumns={[
+                    { key: "desc", label: "Descripcion", format: "raw" },
+                    { key: "areas", label: "Areas", format: "number" },
+                  ]}
+                  showProgress={false}
+                />
+              )}
+            </div>
+          </>
         )}
 
         {unit === "unidrop" && (
@@ -264,7 +408,8 @@ export default function LogisticaPage() {
                 unit === "unistore"
                   ? [
                       { key: "dias_atrasado", label: "Dias", format: "number" },
-                      { key: "shipping", label: "Estado envio", format: "raw" },
+                      { key: "shipping", label: "Estado TN", format: "raw" },
+                      { key: "digip_estado", label: "Estado DigiP", format: "raw" },
                     ]
                   : [
                       { key: "dias_atrasado", label: "Dias", format: "number" },
