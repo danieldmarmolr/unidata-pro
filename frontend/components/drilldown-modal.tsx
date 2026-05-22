@@ -99,29 +99,61 @@ function waNumber(raw: string): string {
 const METODO_PAGO_TIPO_HINT = /^(metodo_pago_tipo|payment_type)$/i;
 const GANANCIA_NETA_HINT = /^(ganancia_neta|profit_net|net_profit)$/i;
 
-function MetodoPagoTipoBadge({ tipo }: { tipo: string }) {
+function MetodoPagoTipoBadge({ tipo, metodo }: { tipo: string; metodo?: string | null }) {
   const lc = tipo.toLowerCase();
-  if (lc === "efectivo") {
-    return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold uppercase tracking-wider"
-        title="Cobro fuera del gateway (efectivo / transferencia / deposito presencial)"
-      >
-        💵 Efectivo
-      </span>
-    );
+  const isEfectivo = lc === "efectivo";
+  const isOnline = lc === "online";
+  if (!isEfectivo && !isOnline) {
+    return <span className="text-text-muted text-[10px] uppercase">{tipo}</span>;
   }
-  if (lc === "online") {
-    return (
+  const styles = isEfectivo
+    ? {
+        badge: "bg-amber-100 text-amber-900 border-amber-300",
+        icon: "💵",
+        label: "Efectivo",
+        descripcion: "Cobro fuera del gateway (efectivo / transferencia / deposito presencial)",
+        accent: "text-amber-900",
+        ring: "ring-amber-300/50",
+      }
+    : {
+        badge: "bg-violet-100 text-violet-900 border-violet-300",
+        icon: "🟣",
+        label: "Online",
+        descripcion: "Cobro online via gateway (Pago Nube / GoCuotas / Mercado Pago)",
+        accent: "text-violet-900",
+        ring: "ring-violet-300/50",
+      };
+  const metodoLimpio = metodo ? metodo.trim() : "";
+  const tieneMetodo = metodoLimpio.length > 0;
+  const titleFallback = tieneMetodo
+    ? `${styles.label} · ${metodoLimpio}\n${styles.descripcion}`
+    : styles.descripcion;
+  return (
+    <span className="relative inline-block group/mptipo">
       <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-100 text-violet-900 border border-violet-300 text-[10px] font-bold uppercase tracking-wider"
-        title="Cobro online (Pago Nube / GoCuotas / Mercado Pago)"
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold uppercase tracking-wider cursor-help transition group-hover/mptipo:ring-2 ${styles.badge} ${styles.ring}`}
+        title={titleFallback}
       >
-        🟣 Online
+        {styles.icon} {styles.label}
+        {tieneMetodo && <span className="opacity-50 text-[8px] ml-0.5">ⓘ</span>}
       </span>
-    );
-  }
-  return <span className="text-text-muted text-[10px] uppercase">{tipo}</span>;
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute z-30 left-1/2 -translate-x-1/2 top-full mt-1.5 w-max max-w-[280px] opacity-0 group-hover/mptipo:opacity-100 transition-opacity duration-150"
+      >
+        <span className="block rounded-lg border border-border bg-surface shadow-xl px-3 py-2 text-left normal-case">
+          {tieneMetodo && (
+            <span className={`block font-semibold text-[11px] ${styles.accent} mb-0.5`}>
+              {metodoLimpio}
+            </span>
+          )}
+          <span className="block text-[10px] text-text-muted leading-snug">
+            {styles.descripcion}
+          </span>
+        </span>
+      </span>
+    </span>
+  );
 }
 
 function GananciaNetaCell({ value, profit }: { value: number; profit: ProfitDict | null }) {
@@ -172,8 +204,12 @@ export function CellRenderer({
   if (v === null || v === undefined || v === "") return <>—</>;
 
   // Tipo de medio de pago → badge color (efectivo / online)
+  // Lee la columna metodo_pago de la misma fila para mostrarla en tooltip al hover.
   if (METODO_PAGO_TIPO_HINT.test(col)) {
-    return <MetodoPagoTipoBadge tipo={String(v)} />;
+    const metodoVal = row && columns
+      ? findColValue(columns, row, ["metodo_pago", "gateway_name", "gatewayName"])
+      : null;
+    return <MetodoPagoTipoBadge tipo={String(v)} metodo={metodoVal != null ? String(metodoVal) : null} />;
   }
 
   // Ganancia neta → moneda + tooltip con desglose contable (lee 'profit' dict de la misma fila)
@@ -843,6 +879,7 @@ export function DrillDownModal({
             const hasPayment = data.columns.some((c) => /^(payment|paymentStatus|pago|payment_status)$/i.test(c));
             const hasCanal = data.columns.some((c) => /^(canal|canal_envio|shipping_channel)$/i.test(c));
             const hasNumero = data.columns.some((c) => /^(numero|order_number|order_numero)$/i.test(c));
+            const hasMetodoPagoTipo = data.columns.some((c) => METODO_PAGO_TIPO_HINT.test(c));
             const isHiddenColumn = (c: string) => {
               if (/^(customer_id|customerId|cliente_id|id_cliente)$/i.test(c)) return true;
               if (/^(empaquetada|packed|is_packed)$/i.test(c)) return true;
@@ -850,6 +887,8 @@ export function DrillDownModal({
               if (hasPayment && /^(shipping|shippingstatus|envio|shipping_status|estado_envio)$/i.test(c)) return true;
               if (hasPayment && /^(status|estado|order_status)$/i.test(c)) return true;
               if (hasCanal && /^(metodo_envio|shipping_method|metodo|envio_metodo)$/i.test(c)) return true;
+              // metodo_pago (texto descriptivo del gateway) se expone en tooltip del badge metodo_pago_tipo
+              if (hasMetodoPagoTipo && /^(metodo_pago|gateway_name|gatewayName)$/i.test(c)) return true;
               // Columnas tecnicas del engine de ganancia (se exponen via tooltip / badge)
               if (/^(profit|gateway_id)$/i.test(c)) return true;
               return false;
