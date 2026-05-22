@@ -220,9 +220,15 @@ def deuda_talo_pendiente() -> float:
 # ---------------------------------------------------------------------------
 
 def profit_daily_series(days: int = 90) -> dict:
-    """Serie diaria de ganancia neta Unistore separando TN y ML."""
-    eng = get_engine("unistore")
-    cost_idx = cost_index_unistore()
+    """Serie diaria de ganancia neta Unistore separando TN y ML.
+
+    Resiliente: si el engine falla, devuelve {points: [], error: "..."}."""
+    try:
+        eng = get_engine("unistore")
+        cost_idx = cost_index_unistore()
+    except Exception as exc:
+        log.warning("profit_daily_series init: %s", exc)
+        return {"days": days, "points": [], "error": str(exc)}
 
     tn_rows = q(eng, """
         SELECT DATE(o."createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
@@ -294,18 +300,64 @@ def profit_daily_series(days: int = 90) -> dict:
             "revenue_total": round(total_rev, 0),
         })
 
-    return {"days": days, "points": points}
+    return {"days": days, "points": points, "error": None}
 
 
 # ---------------------------------------------------------------------------
 # Overview consolidado para Gerencia 360
 # ---------------------------------------------------------------------------
 
+_UNISTORE_EMPTY = {
+    "unit": "unistore", "revenue": 0, "revenue_con_costo": 0, "costo": 0,
+    "ganancia_neta": 0, "margen_pct": 0, "cobertura_costos_pct": 0,
+    "skus_con_costo": 0, "skus_sin_costo": 0,
+    "top10_skus_by_profit": [], "bottom_skus_low_margin": [],
+}
+
+_UNIDROP_EMPTY = {
+    "unit": "unidrop", "facturacion": 0, "comisiones": 0,
+    "egresos_operativos": 0, "ganancia_neta": 0, "margen_pct": 0,
+}
+
+
 def gerencia_profit_overview(period: str = "30d", from_iso: str | None = None,
                               to_iso: str | None = None) -> dict:
-    cost_idx = cost_index_unistore()
-    uni = ganancia_unistore(period, from_iso, to_iso, cost_idx=cost_idx)
-    drop = ganancia_unidrop(period, from_iso, to_iso)
+    """Vista principal de ganancia — SIN la serie 90d (esa va por endpoint aparte).
+
+    Resiliente: cada sub-funcion va en su propio try. Si un engine SSH se cae
+    o una query timeoutea, devolvemos esa parte vacia con flag de error y el
+    resto del panel sigue funcionando. La UI muestra el warning correspondiente
+    en cada bloque sin tumbar la pagina.
+    """
+    errors: dict[str, str] = {}
+
+    try:
+        cost_idx = cost_index_unistore()
+    except Exception as exc:
+        log.warning("cost_index_unistore: %s", exc)
+        cost_idx = {}
+        errors["cost_idx"] = str(exc)
+
+    try:
+        uni = ganancia_unistore(period, from_iso, to_iso, cost_idx=cost_idx)
+    except Exception as exc:
+        log.warning("ganancia_unistore: %s", exc)
+        uni = dict(_UNISTORE_EMPTY)
+        errors["unistore"] = str(exc)
+
+    try:
+        drop = ganancia_unidrop(period, from_iso, to_iso)
+    except Exception as exc:
+        log.warning("ganancia_unidrop: %s", exc)
+        drop = dict(_UNIDROP_EMPTY)
+        errors["unidrop"] = str(exc)
+
+    try:
+        deuda = deuda_talo_pendiente()
+    except Exception as exc:
+        log.warning("deuda_talo_pendiente: %s", exc)
+        deuda = 0
+        errors["deuda_talo"] = str(exc)
 
     ganancia_total = uni["ganancia_neta"] + drop["ganancia_neta"]
     revenue_total = uni["revenue"] + drop["facturacion"]
@@ -321,7 +373,7 @@ def gerencia_profit_overview(period: str = "30d", from_iso: str | None = None,
             "margen_pct": round(margen_consolidado, 1),
             "cobertura_costos_unistore_pct": uni["cobertura_costos_pct"],
         },
-        "deuda_talo_pendiente": deuda_talo_pendiente(),
-        "profit_series_90d": profit_daily_series(90),
+        "deuda_talo_pendiente": deuda,
+        "errors": errors or None,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }

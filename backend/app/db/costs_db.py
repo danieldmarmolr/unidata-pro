@@ -68,25 +68,28 @@ def init() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_costitem_sku ON cost_item (LOWER(sku))")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_costitem_lote ON cost_item (lote_id)")
 
-            # Migracion: agregar columnas nuevas para el parser corregido del CSV
-            # 'VALOR PRODUCTO.csv'. El CSV trae 3 columnas distintas con
-            # "Costo Total S/ IVA" y antes las mezclabamos en _usd. Ahora:
-            #   costo_unit_usd_max  <- "Costo Total S/ IVA Max (USD)" - USD per-unit landed
-            #   costo_unit_usd_min  <- "Costo Total S/ IVA Min (USD)2"
-            #   costo_unit_ars      <- "Costo Total S/ IVA " (sin sufijo) - ARS per-unit
-            #   costo_con_iva_unit_ars <- "Costo con IVA" - ARS per-unit con IVA
-            #   rent_neta_lote_ars  <- "Rent, Neta Lote" - ARS total profit del lote
-            #   facturacion_ars     <- "Facturacion" - ARS total revenue del lote
-            for col_def in [
+            # Migracion: agregar columnas nuevas para el parser corregido del CSV.
+            # Checkeamos primero information_schema (lectura barata, no toma lock)
+            # antes de hacer ALTER TABLE (que toma AccessExclusiveLock y puede
+            # generar deadlocks entre procesos cuando dos backends arrancan
+            # simultaneamente — pasaba en local con --reload).
+            cur.execute("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'cost_item'
+            """)
+            existing_cols = {r["column_name"] for r in cur.fetchall()}
+            new_cols = [
                 "costo_unit_usd_max DOUBLE PRECISION",
                 "costo_unit_usd_min DOUBLE PRECISION",
                 "costo_unit_ars DOUBLE PRECISION",
                 "costo_con_iva_unit_ars DOUBLE PRECISION",
                 "rent_neta_lote_ars DOUBLE PRECISION",
                 "facturacion_ars DOUBLE PRECISION",
-            ]:
+            ]
+            for col_def in new_cols:
                 col_name = col_def.split()[0]
-                cur.execute(f"ALTER TABLE cost_item ADD COLUMN IF NOT EXISTS {col_def}")
+                if col_name not in existing_cols:
+                    cur.execute(f"ALTER TABLE cost_item ADD COLUMN IF NOT EXISTS {col_def}")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS usd_rate_cache (

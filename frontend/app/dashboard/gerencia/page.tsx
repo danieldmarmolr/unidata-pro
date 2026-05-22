@@ -70,11 +70,12 @@ type GerenciaResponse = {
     cobertura_costos_unistore_pct: number;
   };
   deuda_talo_pendiente: number;
-  profit_series_90d: {
-    days: number;
-    points: { date: string; ganancia_tn: number; ganancia_ml: number; ganancia_total: number; revenue_total: number }[];
-  };
   generated_at: string;
+};
+
+type ProfitSeriesResponse = {
+  days: number;
+  points: { date: string; ganancia_tn: number; ganancia_ml: number; ganancia_total: number; revenue_total: number }[];
 };
 
 type DropshipperRow = {
@@ -333,12 +334,21 @@ export default function GerenciaPage() {
     staleTime: 5 * 60_000,
   });
 
+  // Serie 90d aparte — query mas pesada, vive en su propio skeleton para no bloquear el panel
+  const { data: profitSeries, isLoading: loadingSeries } = useQuery<ProfitSeriesResponse>({
+    queryKey: ["dashboards", "gerencia-profit-series", 90],
+    queryFn: () => api<ProfitSeriesResponse>(`/api/dashboards/gerencia/profit-series?days=90`),
+    staleTime: 10 * 60_000,
+    enabled: !!data, // arranca recien cuando el panel principal cargo
+  });
+
   // Bloques 360 (Fase 2 + 3) — periodo simple, no usa custom range
   const periodSimple = period === "custom" ? "30d" : period;
   const { data: d360, isLoading: loading360 } = useQuery<Gerencia360Response>({
     queryKey: ["dashboards", "gerencia360", periodSimple],
     queryFn: () => api<Gerencia360Response>(`/api/dashboards/gerencia/360?period=${periodSimple}`),
     staleTime: 5 * 60_000,
+    enabled: !!data, // idem, no compite con el panel principal
   });
 
   return (
@@ -450,11 +460,11 @@ export default function GerenciaPage() {
             <div className="text-sm font-bold text-text">Ganancia diaria Unistore 90d (TN + ML)</div>
             <div className="text-[10px] text-text-muted">SKUs con costo cargado · neto de IVA/IIBB/fee</div>
           </div>
-          {isLoading || !data ? (
+          {loadingSeries || !profitSeries ? (
             <div className="h-[280px] bg-soft/50 rounded animate-pulse" />
           ) : (
             <ResponsiveContainer width="100%" height={280}>
-              <AreaChart data={data.profit_series_90d.points}>
+              <AreaChart data={profitSeries.points}>
                 <defs>
                   <linearGradient id="profitTn" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#5b8def" stopOpacity={0.7} />

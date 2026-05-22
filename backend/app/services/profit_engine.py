@@ -164,14 +164,37 @@ def calc_profit(
 # Helpers para integrar con el flujo actual (drilldowns / today_snapshot)
 # ---------------------------------------------------------------------------
 
-def cost_index_unistore() -> dict[str, dict]:
+_COST_IDX_CACHE: dict[str, dict] | None = None
+_COST_IDX_TS: float = 0.0
+_COST_IDX_TTL_S: float = 300.0  # 5 min — los costos no cambian salvo nuevo lote
+
+
+def cost_index_unistore(*, force_reload: bool = False) -> dict[str, dict]:
     """Indice SKU.lower() -> {costo_sin_iva, costo_con_iva, iva_aliq_derived}.
 
-    Pensado para cachear una sola vez por request y reutilizar.
+    Cacheado a nivel modulo (TTL 5 min). Iterar 20k filas + transformar es
+    costoso y se llama desde varios endpoints (gerencia, productos, today).
     """
+    global _COST_IDX_CACHE, _COST_IDX_TS
+    import time as _time
+    now = _time.time()
+    if not force_reload and _COST_IDX_CACHE is not None and (now - _COST_IDX_TS) < _COST_IDX_TTL_S:
+        return _COST_IDX_CACHE
+
     from app.db import costs_db
+    try:
+        rows = costs_db.current_costs(limit=20000) or []
+    except Exception as exc:
+        # Si DB falla (deadlock de migracion, red caida, etc) y tenemos cache
+        # previo, lo servimos stale antes que tumbar el panel. Si no hay cache,
+        # devolvemos vacio (las queries de profit se degradan a "sin cost data")
+        # en vez de romper la pagina entera.
+        import logging
+        logging.getLogger("unidata.profit").warning("cost_index_unistore: %s — sirviendo cache stale o vacio", exc)
+        return _COST_IDX_CACHE if _COST_IDX_CACHE is not None else {}
+
     idx: dict[str, dict] = {}
-    for c in (costs_db.current_costs(limit=20000) or []):
+    for c in rows:
         sku = (c.get("sku") or "").strip().lower()
         if not sku:
             continue
@@ -182,6 +205,8 @@ def cost_index_unistore() -> dict[str, dict]:
             "costo_con_iva": con_iva,
             "iva_aliquot": derive_iva_aliquot(sin_iva, con_iva),
         }
+    _COST_IDX_CACHE = idx
+    _COST_IDX_TS = now
     return idx
 
 

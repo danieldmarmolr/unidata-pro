@@ -144,6 +144,14 @@ def _startup() -> None:
         _mcp_tokens_db.init()
     except Exception as e:
         logging.warning("mcp_tokens_db init: %s", e)
+    # Pre-inicializar costs_db al boot. Antes se inicializaba lazy en el primer
+    # request a /dashboards/gerencia o /products/*, y eso disparaba ALTER TABLE
+    # concurrentemente con otro request → deadlock entre procesos Postgres.
+    from app.db import costs_db as _costs_db
+    try:
+        _costs_db.init()
+    except Exception as e:
+        logging.warning("costs_db init: %s", e)
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)
