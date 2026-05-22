@@ -146,6 +146,20 @@ def complete(
     return result
 
 
+@router.post("/{action_id}/reopen")
+def reopen(
+    action_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Reabre una accion done/cancelled. Si tenia assigned_to vuelve a 'doing',
+    sino a 'pending'."""
+    require_area(user, ["cs", "marketing"])
+    result = cs_actions_db.reopen_action(action_id)
+    if not result:
+        raise HTTPException(404, "Accion no encontrada o no esta cerrada")
+    return result
+
+
 @router.post("/{action_id}/cancel")
 def cancel(
     action_id: int,

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Target, Check, X, ChevronDown, ChevronRight, Inbox, Hand, Send, Flame, Clock,
-  AlertTriangle, Calendar,
+  AlertTriangle, Calendar, RotateCcw,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
@@ -113,6 +113,10 @@ export default function CsAccionesPage() {
       api(`/api/cs-actions/${id}/deadline`, { method: "PATCH", body: JSON.stringify({ deadline_at }) }),
     onSuccess: invalidate,
   });
+  const reopenMut = useMutation({
+    mutationFn: (id: number) => api(`/api/cs-actions/${id}/reopen`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
 
   return (
     <>
@@ -169,6 +173,7 @@ export default function CsAccionesPage() {
                 onPriority={(p) => priorityMut.mutate({ id: a.id, priority: p })}
                 onDeadline={(d) => deadlineMut.mutate({ id: a.id, deadline_at: d })}
                 onBroadcast={() => setBroadcastFor(a)}
+                onReopen={() => reopenMut.mutate(a.id)}
               />
             ))}
           </div>
@@ -190,7 +195,7 @@ export default function CsAccionesPage() {
 }
 
 function ActionCard({
-  action: a, onTake, onComplete, onCancel, onPriority, onDeadline, onBroadcast,
+  action: a, onTake, onComplete, onCancel, onPriority, onDeadline, onBroadcast, onReopen,
 }: {
   action: Action;
   onTake: () => void;
@@ -199,6 +204,7 @@ function ActionCard({
   onPriority: (p: Priority) => void;
   onDeadline: (d: string | null) => void;
   onBroadcast: () => void;
+  onReopen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -264,6 +270,19 @@ function ActionCard({
               title="Difundir por WhatsApp"
             >
               <Send size={11} /> Difundir
+            </button>
+          )}
+          {!isOpen && (
+            <button
+              onClick={() => {
+                if (confirm(`Reabrir accion #${a.id}? Vuelve a quedar ${a.assigned_to ? "'en curso'" : "'pendiente'"}.`)) {
+                  onReopen();
+                }
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold rounded-lg border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 transition"
+              title="Reabrir esta accion"
+            >
+              <RotateCcw size={11} /> Reabrir
             </button>
           )}
           <button

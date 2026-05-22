@@ -251,6 +251,29 @@ def cancel_action(action_id: int, user_id: int, note: str | None = None) -> dict
         return _to_dict(row) if row else None
 
 
+def reopen_action(action_id: int) -> dict | None:
+    """Reabre una accion done/cancelled: vuelve a 'doing' si tenia assigned_to,
+    sino a 'pending'. Limpia completed_at."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cs_actions
+            SET status = CASE WHEN assigned_to IS NOT NULL THEN 'doing' ELSE 'pending' END,
+                completed_at = NULL,
+                updated_at = NOW()
+            WHERE id = %s AND status IN ('done','cancelled')
+            RETURNING id, source_type, source_key, unit, title, suggested_action,
+                      target_ids, target_count, metadata, status, assigned_to,
+                      created_by, notes, priority, deadline_at,
+                      created_at, updated_at, completed_at
+            """,
+            (int(action_id),),
+        )
+        row = cur.fetchone()
+        return _to_dict(row) if row else None
+
+
 def set_priority(action_id: int, priority: str) -> dict | None:
     if priority not in ("low", "normal", "high"):
         raise ValueError(f"priority invalida: {priority}")
