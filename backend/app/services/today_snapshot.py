@@ -355,15 +355,14 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
         cost_idx = cost_index_unistore()
 
         def day_aggregates(days_back: int) -> dict:
-            """Una sola query SQL trae todo. Antes usaba LATERAL pero hacia
-            timeout en prod (statement timeout). Ahora una sola pasada agrupa
-            por (sku, orderId) y calcula los agregados en Python."""
+            """Trae los items del dia (sin SUM/GROUP BY, raw) y agrega en Python.
+            Antes usaba LATERAL JOIN que daba statement timeout en prod. Despues
+            un SELECT con SUM sin GROUP BY (invalido SQL) que tambien colgaba.
+            Esta version mueve toda la agregacion a Python — 1 dia de TN ~ <1000
+            filas, trivial para iterar."""
             from_ts, to_ts = _day_bounds(days_back)
             sku_rows = _q(uni, """
-                SELECT oi.sku,
-                       oi."orderId" AS order_id,
-                       SUM(oi.quantity)::int AS units,
-                       SUM(oi.quantity * oi.price)::float AS revenue
+                SELECT oi.sku, oi."orderId", oi.quantity, oi.price
                 FROM tienda_nube."OrderItem" oi
                 JOIN tienda_nube."Order" o ON o.id = oi."orderId"
                 WHERE o."paymentStatus" = 'paid'
@@ -371,18 +370,18 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
                   AND oi.sku IS NOT NULL
             """, {"from_ts": from_ts, "to_ts": to_ts}) or []
 
-            # Agregados en Python (un solo paso sobre las filas, no extra DB)
             skus_set: set[str] = set()
             order_skus: dict = {}
             unidades = 0
             sku_agg: dict[str, tuple[int, float]] = {}  # sku -> (units, revenue)
-            for sk, oid, u, rev in sku_rows:
-                u = int(u or 0); rev = float(rev or 0)
+            for sk, oid, qty, price in sku_rows:
+                qty = int(qty or 0)
+                line_rev = qty * float(price or 0)
                 skus_set.add(sk)
-                unidades += u
+                unidades += qty
                 order_skus.setdefault(oid, set()).add(sk)
                 prev = sku_agg.get(sk, (0, 0.0))
-                sku_agg[sk] = (prev[0] + u, prev[1] + rev)
+                sku_agg[sk] = (prev[0] + qty, prev[1] + line_rev)
             skus = len(skus_set)
             ordenes = len(order_skus)
             sku_per_ord = (sum(len(s) for s in order_skus.values()) / ordenes) if ordenes else 0.0
