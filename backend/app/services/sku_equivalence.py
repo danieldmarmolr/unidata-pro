@@ -140,6 +140,30 @@ def sku_equivalence(period_months: int = 6, min_units: int = 5) -> dict:
             if len(norm) >= 4:
                 prefix_to_uni[norm[:4]].append((sku, name or sku))
 
+    # --- 3.5. Mapear sku -> (imagen, ean) para Unistore (catalogo TN)
+    uni_sku_set = list(uni_set)
+    image_by_sku: dict[str, dict] = {}
+    if uni_sku_set:
+        CHUNK = 500
+        for i in range(0, len(uni_sku_set), CHUNK):
+            chunk = uni_sku_set[i:i + CHUNK]
+            try:
+                rows = q(eng_uni, """
+                    SELECT pv.sku,
+                           COALESCE(MAX(pv.barcode), '') AS ean,
+                           (SELECT pi.src FROM tienda_nube."ProductImage" pi
+                            WHERE pi."productId" = MAX(p.id)
+                            ORDER BY pi.position ASC NULLS LAST LIMIT 1) AS imagen
+                    FROM tienda_nube."ProductVariant" pv
+                    JOIN tienda_nube."Product" p ON p.id = pv."productId"
+                    WHERE pv.sku = ANY(:skus)
+                    GROUP BY pv.sku
+                """, {"skus": chunk}) or []
+                for sku, ean, imagen in rows:
+                    image_by_sku[sku] = {"ean": ean or "", "imagen": imagen or ""}
+            except Exception as e:
+                log.warning("uni image chunk %d fail: %s", i, e)
+
     # --- 4. Para cada huerfano Unidrop, buscar candidato Unistore
     proposals = []
     for canal_label, huerfanos, units_by_sku in [
@@ -153,6 +177,7 @@ def sku_equivalence(period_months: int = 6, min_units: int = 5) -> dict:
             # 4a) Match exacto normalizado
             if norm in norm_to_uni:
                 for uni_sku, uni_name, uni_units in norm_to_uni[norm]:
+                    enr = image_by_sku.get(uni_sku, {})
                     proposals.append({
                         "sku_canal": sku,
                         "name_canal": name,
@@ -161,6 +186,8 @@ def sku_equivalence(period_months: int = 6, min_units: int = 5) -> dict:
                         "sku_unistore": uni_sku,
                         "name_unistore": uni_name,
                         "units_unistore": uni_units,
+                        "imagen_unistore": enr.get("imagen", ""),
+                        "ean_unistore": enr.get("ean", ""),
                         "score": "alta_normalizado",
                         "match_type": "Match exacto post-normalizar (uppercase + sin separadores)",
                     })
@@ -189,6 +216,7 @@ def sku_equivalence(period_months: int = 6, min_units: int = 5) -> dict:
 
             if best and best_distance <= 5:
                 uni_name, uni_units = uni_by_sku.get(best, (best, 0))
+                enr = image_by_sku.get(best, {})
                 proposals.append({
                     "sku_canal": sku,
                     "name_canal": name,
@@ -197,6 +225,8 @@ def sku_equivalence(period_months: int = 6, min_units: int = 5) -> dict:
                     "sku_unistore": best,
                     "name_unistore": uni_name,
                     "units_unistore": uni_units,
+                    "imagen_unistore": enr.get("imagen", ""),
+                    "ean_unistore": enr.get("ean", ""),
                     "score": "media_prefijo_nombre",
                     "match_type": f"Prefijo comun + nombre similar (dist nombre={best_distance})",
                 })
