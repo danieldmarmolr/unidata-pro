@@ -1951,6 +1951,175 @@ def is_bookmarked(post_id: int, user_id: int) -> bool:
 # Search global (posts, users, spaces)
 # ============================================================
 
+def insights_dashboard(*, since_days: int = 30) -> dict:
+    """Engagement analytics agregado para admin/People/gerencia.
+
+    Devuelve:
+    - totals: posts, comments, reactions, kudos, dms en el periodo
+    - by_area: actividad por area
+    - top_posters: top 10 users por count de posts
+    - top_kudo_givers: top 10 quienes mas dieron kudos
+    - top_kudo_receivers: top 10 quienes mas recibieron
+    - silent_users: users activos sin actividad en el periodo
+    - engagement_rate: % de users activos que postearon, comentaron o reaccionaron
+    - posts_by_day: serie temporal de posts
+    """
+    init()
+    since_clause = "NOW() - (%s::text || ' days')::interval"
+    with get_conn() as c, c.cursor() as cur:
+        # Totals
+        cur.execute(f"SELECT COUNT(*) AS n FROM people_posts WHERE deleted_at IS NULL AND created_at >= {since_clause}", (since_days,))
+        posts = cur.fetchone()["n"]
+        cur.execute(f"SELECT COUNT(*) AS n FROM people_post_comments WHERE deleted_at IS NULL AND created_at >= {since_clause}", (since_days,))
+        comments = cur.fetchone()["n"]
+        cur.execute(f"SELECT COUNT(*) AS n FROM people_post_reactions WHERE created_at >= {since_clause}", (since_days,))
+        reactions = cur.fetchone()["n"]
+        cur.execute(f"SELECT COUNT(*) AS n FROM people_kudos WHERE created_at >= {since_clause}", (since_days,))
+        kudos = cur.fetchone()["n"]
+        cur.execute(f"SELECT COUNT(*) AS n FROM people_messages WHERE deleted_at IS NULL AND created_at >= {since_clause}", (since_days,))
+        dms = cur.fetchone()["n"]
+        cur.execute("SELECT COUNT(*) AS n FROM users WHERE is_active = TRUE")
+        active_users = cur.fetchone()["n"]
+
+        # Engagement: users que tuvieron alguna actividad (post/comment/reaccion/kudo dado/DM)
+        cur.execute(f"""
+            SELECT COUNT(DISTINCT user_id) AS n FROM (
+                SELECT author_id AS user_id FROM people_posts WHERE deleted_at IS NULL AND created_at >= {since_clause}
+                UNION
+                SELECT author_id FROM people_post_comments WHERE deleted_at IS NULL AND created_at >= {since_clause}
+                UNION
+                SELECT user_id FROM people_post_reactions WHERE created_at >= {since_clause}
+                UNION
+                SELECT from_user_id FROM people_kudos WHERE created_at >= {since_clause}
+                UNION
+                SELECT author_id FROM people_messages WHERE deleted_at IS NULL AND created_at >= {since_clause}
+            ) t
+        """, (since_days,) * 5)
+        engaged = cur.fetchone()["n"]
+        engagement_rate = round((engaged / active_users) * 100, 1) if active_users else 0
+
+        # By area
+        cur.execute(f"""
+            SELECT a.slug, a.name, a.color,
+                   COUNT(DISTINCT p.id) AS posts,
+                   COUNT(DISTINCT c.id) AS comments,
+                   COUNT(DISTINCT u.id) AS users
+              FROM areas a
+              LEFT JOIN users u ON u.area_id = a.id AND u.is_active = TRUE
+              LEFT JOIN people_posts p ON p.author_id = u.id AND p.deleted_at IS NULL AND p.created_at >= {since_clause}
+              LEFT JOIN people_post_comments c ON c.author_id = u.id AND c.deleted_at IS NULL AND c.created_at >= {since_clause}
+             GROUP BY a.id, a.slug, a.name, a.color, a.sort_order
+             ORDER BY a.sort_order
+        """, (since_days, since_days))
+        by_area = [dict(r) for r in cur.fetchall()]
+
+        # Top posters
+        cur.execute(f"""
+            SELECT u.id, u.name, u.avatar_url, a.color AS area_color,
+                   COUNT(p.id) AS n
+              FROM users u
+              LEFT JOIN areas a ON a.id = u.area_id
+              JOIN people_posts p ON p.author_id = u.id
+             WHERE p.deleted_at IS NULL AND p.created_at >= {since_clause}
+             GROUP BY u.id, u.name, u.avatar_url, a.color
+             ORDER BY n DESC LIMIT 10
+        """, (since_days,))
+        top_posters = [dict(r) for r in cur.fetchall()]
+
+        # Top kudo givers/receivers
+        cur.execute(f"""
+            SELECT u.id, u.name, u.avatar_url, a.color AS area_color,
+                   COUNT(k.id) AS n
+              FROM users u LEFT JOIN areas a ON a.id = u.area_id
+              JOIN people_kudos k ON k.from_user_id = u.id
+             WHERE k.created_at >= {since_clause}
+             GROUP BY u.id, u.name, u.avatar_url, a.color
+             ORDER BY n DESC LIMIT 10
+        """, (since_days,))
+        top_kudo_givers = [dict(r) for r in cur.fetchall()]
+        cur.execute(f"""
+            SELECT u.id, u.name, u.avatar_url, a.color AS area_color,
+                   COUNT(k.id) AS n
+              FROM users u LEFT JOIN areas a ON a.id = u.area_id
+              JOIN people_kudos k ON k.to_user_id = u.id
+             WHERE k.created_at >= {since_clause}
+             GROUP BY u.id, u.name, u.avatar_url, a.color
+             ORDER BY n DESC LIMIT 10
+        """, (since_days,))
+        top_kudo_receivers = [dict(r) for r in cur.fetchall()]
+
+        # Silent users (sin actividad en periodo)
+        cur.execute(f"""
+            SELECT u.id, u.name, u.avatar_url, u.email, u.job_title,
+                   a.color AS area_color, a.name AS area_name
+              FROM users u
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE u.is_active = TRUE
+               AND NOT EXISTS (SELECT 1 FROM people_posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL AND p.created_at >= {since_clause})
+               AND NOT EXISTS (SELECT 1 FROM people_post_comments c WHERE c.author_id = u.id AND c.deleted_at IS NULL AND c.created_at >= {since_clause})
+               AND NOT EXISTS (SELECT 1 FROM people_post_reactions r WHERE r.user_id = u.id AND r.created_at >= {since_clause})
+               AND NOT EXISTS (SELECT 1 FROM people_kudos k WHERE k.from_user_id = u.id AND k.created_at >= {since_clause})
+               AND NOT EXISTS (SELECT 1 FROM people_messages m WHERE m.author_id = u.id AND m.deleted_at IS NULL AND m.created_at >= {since_clause})
+             ORDER BY u.name LIMIT 50
+        """, (since_days,) * 5)
+        silent = [dict(r) for r in cur.fetchall()]
+
+        # Posts por dia (serie)
+        cur.execute(f"""
+            SELECT DATE_TRUNC('day', created_at)::date AS day, COUNT(*) AS n
+              FROM people_posts
+             WHERE deleted_at IS NULL AND created_at >= {since_clause}
+             GROUP BY day ORDER BY day
+        """, (since_days,))
+        posts_by_day = [{"day": _iso(r["day"]), "count": int(r["n"])} for r in cur.fetchall()]
+
+        # eNPS reciente (encuesta NPS mas reciente con respuestas)
+        cur.execute("""
+            SELECT s.id, s.question, s.created_at,
+                   COUNT(r.id) AS n,
+                   SUM(CASE WHEN r.value >= 9 THEN 1 ELSE 0 END) AS promoters,
+                   SUM(CASE WHEN r.value BETWEEN 7 AND 8 THEN 1 ELSE 0 END) AS passives,
+                   SUM(CASE WHEN r.value <= 6 THEN 1 ELSE 0 END) AS detractors
+              FROM people_pulse_surveys s
+              LEFT JOIN people_pulse_responses r ON r.survey_id = s.id
+             WHERE s.scale = 'nps'
+             GROUP BY s.id, s.question, s.created_at
+             HAVING COUNT(r.id) > 0
+             ORDER BY s.created_at DESC LIMIT 1
+        """)
+        enps_row = cur.fetchone()
+        enps_summary = None
+        if enps_row and enps_row["n"]:
+            n = int(enps_row["n"])
+            prom = int(enps_row["promoters"] or 0)
+            det = int(enps_row["detractors"] or 0)
+            enps_summary = {
+                "survey_id": enps_row["id"],
+                "question": enps_row["question"],
+                "responses": n,
+                "score": round(((prom - det) / n) * 100, 1) if n else 0,
+                "promoters_pct": round((prom / n) * 100, 1) if n else 0,
+                "detractors_pct": round((det / n) * 100, 1) if n else 0,
+            }
+
+    return {
+        "since_days": since_days,
+        "totals": {
+            "posts": posts, "comments": comments, "reactions": reactions,
+            "kudos": kudos, "dms": dms,
+            "active_users": active_users, "engaged_users": engaged,
+            "engagement_rate": engagement_rate,
+        },
+        "by_area": by_area,
+        "top_posters": top_posters,
+        "top_kudo_givers": top_kudo_givers,
+        "top_kudo_receivers": top_kudo_receivers,
+        "silent_users": silent,
+        "posts_by_day": posts_by_day,
+        "enps_summary": enps_summary,
+    }
+
+
 def search_all(*, query: str, viewer_id: int, limit: int = 20) -> dict:
     init()
     q = (query or "").strip()

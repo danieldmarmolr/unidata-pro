@@ -165,6 +165,7 @@ const ITEMS: NavItem[] = [
       { label: "Directorio",   href: "/dashboard/people/directory",    icon: Users     },
       { label: "Org Chart",    href: "/dashboard/people/org-chart",    icon: Network   },
       { label: "Kudos",        href: "/dashboard/people/kudos",        icon: Award     },
+      { label: "Insights",     href: "/dashboard/people/insights",     icon: TrendingUp },
     ],
   },
   {

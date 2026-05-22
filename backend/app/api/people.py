@@ -732,3 +732,17 @@ def search(
     limit: Annotated[int, Query(ge=1, le=50)] = 20,
 ) -> dict:
     return people_db.search_all(query=q, viewer_id=user["id"], limit=limit)
+
+
+# ============================================================
+# Insights (analytics) - solo admin/People/gerencia
+# ============================================================
+
+@router.get("/insights")
+def insights(
+    user: Annotated[dict, Depends(current_user)],
+    since_days: Annotated[int, Query(ge=7, le=365)] = 30,
+) -> dict:
+    if not _can_manage_people(user):
+        raise HTTPException(403, "Solo admin/gerencia/People puede ver insights")
+    return people_db.insights_dashboard(since_days=since_days)
