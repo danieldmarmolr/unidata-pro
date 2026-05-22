@@ -241,13 +241,15 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     by_estado = [{"category": (r[0] or "(sin)"), "value": float(r[1] or 0)} for r in rows]
 
     # ---------- Top SKUs pedidos via PedidoDetalle ----------
+    # Schema gotcha: PedidoDetalle usa PascalCase ("CodigoArticulo", "Unidades")
+    # y join por "pedidoId" integer, NO por pedidoCodigo text.
     rows = q(eng, """
-        SELECT pdd."articuloCodigo",
-               MAX(pdd."articuloDescripcion") AS desc,
-               SUM(pdd.unidades)::int AS uds,
+        SELECT pdd."CodigoArticulo",
+               MAX(pdd."DescripcionArticulo") AS desc,
+               SUM(pdd."Unidades")::int AS uds,
                COUNT(DISTINCT pd."Codigo")::int AS pedidos
         FROM digip."PedidoDetalle" pdd
-        JOIN digip."Pedido" pd ON pd."Codigo" = pdd."pedidoCodigo"
+        JOIN digip."Pedido" pd ON pd.id = pdd."pedidoId"
         WHERE pd."Fecha" >= NOW() - make_interval(days => :days)
         GROUP BY 1
         ORDER BY uds DESC
@@ -284,19 +286,21 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     # ============================================================
 
     # ---------- Lead time desglosado: Pedido->Preparacion y Preparacion->Despacho ----------
+    # Schema gotcha: Preparacion NO tiene columna "fecha". Usa "createdAt" (cuando
+    # se creo la preparacion) y "fechaHoraEstado" (ultimo cambio de estado).
     lt_pedido_prep = scalar(eng, """
-        SELECT AVG(EXTRACT(EPOCH FROM (pr.fecha - pd."Fecha"))/86400.0)::float
+        SELECT AVG(EXTRACT(EPOCH FROM (pr."createdAt" - pd."Fecha"))/86400.0)::float
         FROM digip."Pedido" pd
         JOIN digip."Preparacion" pr ON pr."pedidoCodigo" = pd."Codigo"
-        WHERE pr.fecha >= NOW() - make_interval(days => :days)
-          AND pr.fecha >= pd."Fecha"
+        WHERE pr."createdAt" >= NOW() - make_interval(days => :days)
+          AND pr."createdAt" >= pd."Fecha"
     """, p)
     lt_prep_despacho = scalar(eng, """
-        SELECT AVG(EXTRACT(EPOCH FROM (dp.fecha - pr.fecha))/86400.0)::float
+        SELECT AVG(EXTRACT(EPOCH FROM (dp.fecha - pr."createdAt"))/86400.0)::float
         FROM digip."Preparacion" pr
         JOIN digip."DespachoPedido" dp ON dp."pedidoCodigo" = pr."pedidoCodigo"
         WHERE dp.fecha >= NOW() - make_interval(days => :days)
-          AND dp.fecha >= pr.fecha
+          AND dp.fecha >= pr."createdAt"
     """, p)
     lead_time_etapas = {
         "pedido_to_prep_avg": round(float(lt_pedido_prep), 2) if lt_pedido_prep else None,
@@ -304,12 +308,13 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     }
 
     # ---------- Throughput preparaciones: creadas vs finalizadas por dia (60d) ----------
+    # Cohort throughput por createdAt: de las que ENTRARON ese dia, cuantas hoy estan Finalizadas
     rows = q(eng, """
-        SELECT date_trunc('day', fecha)::date AS d,
+        SELECT date_trunc('day', "createdAt")::date AS d,
                COUNT(*)::int AS creadas,
                SUM(CASE WHEN "preparacionEstado" ILIKE '%Finalizada%' THEN 1 ELSE 0 END)::int AS finalizadas
         FROM digip."Preparacion"
-        WHERE fecha >= NOW() - INTERVAL '60 days'
+        WHERE "createdAt" >= NOW() - INTERVAL '60 days'
         GROUP BY 1 ORDER BY 1
     """) or []
     prep_throughput = [{
@@ -319,14 +324,17 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     } for r in rows]
 
     # ---------- Items pendientes por SKU: pedidos - despachados ----------
-    # SUM por SKU de las unidades pedidas vs las que se despacharon
+    # Schema gotcha:
+    # - PedidoDetalle.CodigoArticulo / Unidades / pedidoId (PascalCase + camelCase id)
+    # - DespachoPedidoDetalle.articuloCodigo / unidades / despachoPedidoId (camelCase)
+    # - DespachoPedido tiene "Codigo" pero el join se hace por id
     rows = q(eng, """
         WITH pedidos_periodo AS (
-            SELECT pdd."articuloCodigo" AS sku,
-                   MAX(pdd."articuloDescripcion") AS desc,
-                   SUM(pdd.unidades)::int AS uds_pedidas
+            SELECT pdd."CodigoArticulo" AS sku,
+                   MAX(pdd."DescripcionArticulo") AS desc,
+                   SUM(pdd."Unidades")::int AS uds_pedidas
             FROM digip."PedidoDetalle" pdd
-            JOIN digip."Pedido" pd ON pd."Codigo" = pdd."pedidoCodigo"
+            JOIN digip."Pedido" pd ON pd.id = pdd."pedidoId"
             WHERE pd."Fecha" >= NOW() - make_interval(days => :days)
             GROUP BY 1
         ),
@@ -334,7 +342,7 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
             SELECT dpd."articuloCodigo" AS sku,
                    SUM(dpd.unidades)::int AS uds_desp
             FROM digip."DespachoPedidoDetalle" dpd
-            JOIN digip."DespachoPedido" dp ON dp."Codigo" = dpd."despachoPedidoCodigo"
+            JOIN digip."DespachoPedido" dp ON dp.id = dpd."despachoPedidoId"
             WHERE dp.fecha >= NOW() - make_interval(days => :days)
             GROUP BY 1
         )
@@ -358,13 +366,17 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
     } for r in rows]
 
     # ---------- Stock por contenedor (top 15) ----------
+    # Schema gotcha: DepositoContenedor NO tiene "Codigo" ni "areaDescripcion".
+    # Tiene "numero" (text), "ubicacionId" (int), join por "contenedorId" (no codigo).
+    # DepositoContenedorDetalle usa "codigoArticulo" (camelCase con c minus, DISTINTO
+    # de DespachoPedidoDetalle que es "articuloCodigo").
     rows = q(eng, """
-        SELECT dc."Codigo" AS contenedor,
-               COALESCE(dc."areaDescripcion",'(sin area)') AS area,
+        SELECT COALESCE(NULLIF(TRIM(dc."numero"),''), dc.id::text) AS contenedor,
+               dc."ubicacionId"::text AS ubicacion,
                SUM(dcd.unidades)::int AS unidades,
-               COUNT(DISTINCT dcd."articuloCodigo")::int AS skus
+               COUNT(DISTINCT dcd."codigoArticulo")::int AS skus
         FROM digip."DepositoContenedor" dc
-        JOIN digip."DepositoContenedorDetalle" dcd ON dcd."contenedorCodigo" = dc."Codigo"
+        JOIN digip."DepositoContenedorDetalle" dcd ON dcd."contenedorId" = dc.id
         GROUP BY 1, 2
         HAVING SUM(dcd.unidades) > 0
         ORDER BY unidades DESC
