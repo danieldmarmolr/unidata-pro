@@ -79,14 +79,25 @@ async def current_user(
 
 
 def require_area(user: dict, areas: list[str]) -> None:
-    """No-op temporal — vistas abiertas a todos los roles autenticados.
+    """Gate por area. Bypass para admin/gerencia. Backwards-compat: si el user
+    no tiene ninguna area asignada (legacy o onboarding incompleto), no se
+    bloquea — preserva el comportamiento `vistas abiertas` del commit d31fe49.
 
-    El RBAC por area se va a re-definir cuando este establecida la relacion
-    colaborador → gerente. Mientras tanto, los unicos gates son:
-      - `require_admin` (admin/admin-flag para gestion de plataforma)
-      - filtros por `role` en el sidebar (Gerencia / Gerencia 360)
+    Cuando un user pasa por el onboarding y elige sus areas, el RBAC empieza
+    a aplicarse para ese user. Esto permite migrar sin lockear a nadie.
     """
-    return
+    # Bypass total: admin (legacy o nuevo flag is_admin) + gerencia (cross-org)
+    if user.get("is_admin") or user.get("role") in ("admin", "gerencia"):
+        return
+    user_areas = user.get("area_slugs") or []
+    # Backwards-compat: legacy users sin area asignada siguen viendo todo
+    if not user_areas:
+        return
+    if not any(a in areas for a in user_areas):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Tu area no esta autorizada para esta accion. Requerido: {areas}",
+        )
 
 
 async def require_admin(user: Annotated[dict, Depends(current_user)]) -> dict:

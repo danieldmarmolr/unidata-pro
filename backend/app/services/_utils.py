@@ -126,8 +126,10 @@ def q(engine: Engine, sql: str, params: dict | None = None) -> list[Any] | None:
     except (OperationalError, DBAPIError) as e:
         if not _is_connection_err(e):
             if _is_schema_err(e):
-                # Schema mismatch esperado en queries defensivas
-                log.debug("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
+                # Schema mismatch esperado en queries defensivas. INFO (no DEBUG)
+                # asi queda visible en Railway logs - el CLAUDE.md documenta que
+                # estos skips silenciosos historicamente causaron KPIs en cero.
+                log.info("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
             else:
                 log.warning("Query failed (no-retry): %s :: %s", e, sql.strip().splitlines()[0][:80])
             return None
@@ -148,7 +150,7 @@ def q(engine: Engine, sql: str, params: dict | None = None) -> list[Any] | None:
         return None
     except Exception as e:
         if _is_schema_err(e):
-            log.debug("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
+            log.info("Query schema-skip: %s :: %s", e, sql.strip().splitlines()[0][:80])
         else:
             log.warning("Query failed: %s :: %s", e, sql.strip().splitlines()[0][:80])
         return None

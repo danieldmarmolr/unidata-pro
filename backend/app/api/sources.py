@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/sources", tags=["sources"])
 _schema_cache: TTLCache = TTLCache(maxsize=8, ttl=300)
 _tables_cache: TTLCache = TTLCache(maxsize=64, ttl=300)
 _samples_cache: TTLCache = TTLCache(maxsize=256, ttl=600)
+_existence_cache: TTLCache = TTLCache(maxsize=4096, ttl=300)
 
 _UNSEARCHABLE_TYPES = {
     "bytea", "USER-DEFINED", "ARRAY", "json", "jsonb",
@@ -30,6 +31,55 @@ def _check_unit(unit: str) -> str:
     if unit not in ("unistore", "unidrop", "unidev"):
         raise HTTPException(404, f"Unidad desconocida: {unit}")
     return unit
+
+
+def _assert_schema_exists(unit: str, schema: str) -> None:
+    """Verifica que el schema exista en `unit` antes de inyectarlo en SQL.
+    Cacheado 5min."""
+    cache_key = (unit, schema, None)
+    cached = _existence_cache.get(cache_key)
+    if cached is True:
+        return
+    if cached is False:
+        raise HTTPException(404, f"Schema desconocido: {schema}")
+    eng = get_engine(unit)
+    with eng.connect() as c:
+        row = c.execute(text("""
+            SELECT 1 FROM information_schema.schemata
+            WHERE schema_name = :s
+            LIMIT 1
+        """), {"s": schema}).first()
+    exists = row is not None
+    _existence_cache[cache_key] = exists
+    if not exists:
+        raise HTTPException(404, f"Schema desconocido: {schema}")
+
+
+def _assert_table_exists(unit: str, schema: str, table: str) -> None:
+    """Verifica que (schema, table) exista en `unit` antes de inyectar en SQL.
+
+    sources.py construye queries con f'"{schema}"."{table}"' porque PostgreSQL
+    requiere identificadores literales (no binding). Para evitar inyeccion (un
+    usuario autenticado podria mandar schema='public"; SELECT pg_sleep(60)--')
+    validamos contra information_schema y reusamos el resultado cacheado 5min.
+    """
+    cache_key = (unit, schema, table)
+    cached = _existence_cache.get(cache_key)
+    if cached is True:
+        return
+    if cached is False:
+        raise HTTPException(404, f"Tabla desconocida: {schema}.{table}")
+    eng = get_engine(unit)
+    with eng.connect() as c:
+        row = c.execute(text("""
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = :s AND table_name = :t
+            LIMIT 1
+        """), {"s": schema, "t": table}).first()
+    exists = row is not None
+    _existence_cache[cache_key] = exists
+    if not exists:
+        raise HTTPException(404, f"Tabla desconocida: {schema}.{table}")
 
 
 @router.get("/{unit}/schemas", response_model=list[str])
@@ -131,6 +181,7 @@ def preview_table(
     n: int = 100,
 ) -> dict:
     unit = _check_unit(unit)
+    _assert_table_exists(unit, schema, table)
     n = max(1, min(int(n), 1000))
     eng = get_engine(unit)
     with eng.connect() as c:
@@ -151,6 +202,7 @@ def column_samples(
 ) -> dict:
     """Top-N valores mas frecuentes por columna, sobre una muestra de filas."""
     unit = _check_unit(unit)
+    _assert_table_exists(unit, schema, table)
     sample_rows = max(50, min(int(sample_rows), 2000))
     top = max(1, min(int(top), 5))
     cache_key = f"{unit}:{schema}:{table}:{sample_rows}:{top}"
@@ -199,10 +251,14 @@ def search_value(
     y hace ILIKE. Cada query corre con statement_timeout para descartar tablas lentas.
     """
     unit = _check_unit(unit)
+    _assert_schema_exists(unit, schema)
     q = q.strip()
     if not q:
         raise HTTPException(400, "Query vacia")
     max_tables = max(1, min(int(max_tables), 200))
+    # Cap defensivo del timeout: el cast a int() abajo evita inyeccion, pero
+    # tambien limitamos el rango para que un user no setee 24h.
+    per_query_timeout_ms = max(500, min(int(per_query_timeout_ms), 30000))
 
     eng = get_engine(unit)
     with eng.connect() as c:
