@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
 type UnistoreRow = {
   id: number;
@@ -220,7 +221,7 @@ function UnistoreResults({ data, onOpen }: { data: SearchResp<UnistoreRow>; onOp
                   </td>
                   <td className="px-4 py-2.5 text-xs">
                     {r.email && <div className="text-text-muted inline-flex items-center gap-1"><Mail size={10} /> {r.email}</div>}
-                    {r.telefono && <div className="text-text-muted inline-flex items-center gap-1 mt-0.5"><Phone size={10} /> {r.telefono}</div>}
+                    {r.telefono && <div className="mt-0.5"><WhatsAppPhone phone={r.telefono} size={10} /></div>}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-text-muted">
                     {(r.ciudad || r.provincia) ? (
@@ -286,7 +287,7 @@ function UnidropResults({ data, onOpen }: { data: SearchResp<UnidropRow>; onOpen
                   </td>
                   <td className="px-4 py-2.5 text-xs">
                     {r.email && <div className="text-text-muted inline-flex items-center gap-1"><Mail size={10} /> {r.email}</div>}
-                    {r.telefono && <div className="text-text-muted inline-flex items-center gap-1 mt-0.5"><Phone size={10} /> {r.telefono}</div>}
+                    {r.telefono && <div className="mt-0.5"><WhatsAppPhone phone={r.telefono} size={10} /></div>}
                   </td>
                   <td className="px-4 py-2.5 text-xs text-text-muted">
                     {r.dni && <div className="inline-flex items-center gap-1"><IdCard size={10} /> DNI {r.dni}</div>}

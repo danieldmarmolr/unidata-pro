@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
 export type OrderItem = {
   sku: string;
@@ -527,7 +528,9 @@ export function UnifiedOrderModal({
                       <div className="text-text-muted text-[10px] mt-1">Recibe: <span className="text-text font-semibold">{order.shipping_receiver || order.shipment?.receiver_name}</span></div>
                     )}
                     {(order.shipping_phone || order.shipment?.receiver_phone) && (
-                      <div className="text-text-muted text-[10px]">📞 {order.shipping_phone || order.shipment?.receiver_phone}</div>
+                      <div className="text-[10px]">
+                        <WhatsAppPhone phone={order.shipping_phone || order.shipment?.receiver_phone} size={10} />
+                      </div>
                     )}
                   </div>
                 )}
@@ -548,7 +551,7 @@ export function UnifiedOrderModal({
                   <div className="flex items-center gap-1.5 text-text-muted"><Mail size={11} /> {order.contact_email}</div>
                 )}
                 {order.contact_phone && (
-                  <div className="flex items-center gap-1.5 text-text-muted"><Phone size={11} /> {order.contact_phone}</div>
+                  <div className="flex items-center gap-1.5"><WhatsAppPhone phone={order.contact_phone} size={11} /></div>
                 )}
                 {order.contact_dni && (
                   <div className="flex items-center gap-1.5 text-text-muted"><IdCard size={11} /> DNI/CUIT {order.contact_dni}</div>

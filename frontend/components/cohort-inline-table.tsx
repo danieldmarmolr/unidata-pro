@@ -6,6 +6,7 @@ import { X, Download, ExternalLink } from "lucide-react";
 import { api } from "@/lib/api";
 import { ExportButtons } from "@/components/export-buttons";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
 type Row = {
   customer_id: number;
@@ -101,8 +102,8 @@ export function CohortInlineTable({
               filename={`cohort_${state}_${unit}`}
               columns={
                 unit === "unidrop"
-                  ? ["ID", "Dropshipper", "Email", "Ventas ML", "Ventas TN", "Revenue periodo", "Ult. venta", "Dias desde ult."]
-                  : ["ID", "Cliente", "Email", "Ordenes (total)", "Ordenes (periodo)", "Revenue periodo", "Ult. compra", "Dias desde ult."]
+                  ? ["ID", "Dropshipper", "Email", "Telefono", "Ventas ML", "Ventas TN", "Revenue periodo", "Ult. venta", "Dias desde ult."]
+                  : ["ID", "Cliente", "Email", "Telefono", "Ordenes (total)", "Ordenes (periodo)", "Revenue periodo", "Ult. compra", "Dias desde ult."]
               }
               rows={items.map((r) =>
                 unit === "unidrop"
@@ -110,6 +111,7 @@ export function CohortInlineTable({
                       r.customer_id,
                       r.nombre,
                       r.email || "",
+                      r.phone || "",
                       r.ml_total ?? 0,
                       r.tn_total ?? 0,
                       r.revenue_periodo ?? 0,
@@ -120,6 +122,7 @@ export function CohortInlineTable({
                       r.customer_id,
                       r.nombre,
                       r.email || "",
+                      r.phone || "",
                       r.ordenes_total ?? 0,
                       r.ordenes_periodo ?? 0,
                       r.revenue_periodo ?? 0,
@@ -165,6 +168,7 @@ export function CohortInlineTable({
             <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
               <tr>
                 <th className="text-left px-3 py-2">{unit === "unidrop" ? "Dropshipper" : "Cliente"}</th>
+                <th className="text-left px-2 py-2">WhatsApp</th>
                 {unit === "unidrop" ? (
                   <>
                     <th className="text-right px-2 py-2">Ventas ML</th>
@@ -192,6 +196,13 @@ export function CohortInlineTable({
                         <div className="text-[10px] text-text-muted font-mono truncate max-w-[280px]">{r.email}</div>
                       )}
                     </Link>
+                  </td>
+                  <td className="px-2 py-2 text-[11px]">
+                    {r.phone ? (
+                      <WhatsAppPhone phone={r.phone} variant="chip" />
+                    ) : (
+                      <span className="text-text-muted">—</span>
+                    )}
                   </td>
                   {unit === "unidrop" ? (
                     <>

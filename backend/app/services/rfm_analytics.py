@@ -112,12 +112,17 @@ def rfm_segment_customers(segment: str, unit: str = "unistore", period_days: int
             eng = get_engine("unidrop")
             rows = q(eng, f"""
                 SELECT u.id, u.email, COALESCE(u.fantasy_name, u.name) AS nombre,
-                       u.dni::text AS dni
+                       u.dni::text AS dni, COALESCE(u.phone, '') AS phone
                 FROM public."User" u
                 WHERE u.id = ANY({ids_literal})
             """) or []
             for r in rows:
-                contacts[int(r[0])] = {"email": r[1] or "", "nombre": r[2] or "", "dni": r[3] or ""}
+                contacts[int(r[0])] = {
+                    "email": r[1] or "",
+                    "nombre": r[2] or "",
+                    "dni": r[3] or "",
+                    "phone": r[4] or "",
+                }
         else:
             eng = get_engine("unistore")
             rows = q(eng, f"""

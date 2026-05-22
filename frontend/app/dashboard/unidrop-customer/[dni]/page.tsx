@@ -8,6 +8,7 @@ import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
 type Consumer = {
   dni: string;
@@ -121,7 +122,7 @@ export default function UnidropCustomerPage() {
               <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-text-muted">
                 <span className="inline-flex items-center gap-1"><span className="font-semibold text-text">DNI</span> {consumer.dni}</span>
                 {consumer.email && <span className="inline-flex items-center gap-1"><Mail size={11} /> {consumer.email}</span>}
-                {consumer.telefono && <span className="inline-flex items-center gap-1"><Phone size={11} /> {consumer.telefono}</span>}
+                {consumer.telefono && <WhatsAppPhone phone={consumer.telefono} size={11} showBadge />}
                 {(consumer.provincia || consumer.ciudad) && (
                   <span className="inline-flex items-center gap-1">
                     <MapPin size={11} /> {[consumer.ciudad, consumer.provincia].filter(Boolean).join(", ")}

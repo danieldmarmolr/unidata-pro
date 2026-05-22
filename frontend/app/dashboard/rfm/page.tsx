@@ -15,6 +15,7 @@ import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { ActionableFooter } from "@/components/actionable-footer";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
@@ -237,10 +238,10 @@ function SegmentPopup({
 
   const fullList = fullData?.customers ?? [];
   const csvHeaders = unit === "unidrop"
-    ? ["ID", "Nombre", "Email", "DNI", "R", "F", "M", "Dias recencia", "Ventas", "Volumen", "Ultima compra"]
+    ? ["ID", "Nombre", "Email", "Telefono", "DNI", "R", "F", "M", "Dias recencia", "Ventas", "Volumen", "Ultima compra"]
     : ["ID", "Nombre", "Email", "Telefono", "R", "F", "M", "Dias recencia", "Ordenes", "Volumen", "Ultima compra"];
   const csvRows = fullList.map((c: any) => unit === "unidrop"
-    ? [c.customer_id, c.nombre, c.email || "", c.dni || "", c.r_score, c.f_score, c.m_score, c.recency_days, c.frequency, c.monetary, c.ultima_compra || ""]
+    ? [c.customer_id, c.nombre, c.email || "", c.phone || "", c.dni || "", c.r_score, c.f_score, c.m_score, c.recency_days, c.frequency, c.monetary, c.ultima_compra || ""]
     : [c.customer_id, c.nombre, c.email || "", c.phone || "", c.r_score, c.f_score, c.m_score, c.recency_days, c.frequency, c.monetary, c.ultima_compra || ""]
   );
   const targetIds = fullList.map((c) => c.customer_id);
@@ -291,13 +292,28 @@ function SegmentPopup({
           )}
         </div>
         <div className="flex-1 overflow-y-auto">
-          {customers.length === 0 ? (
-            <div className="py-8 text-center text-text-muted text-sm">Sin {unit === "unidrop" ? "dropshippers" : "clientes"} en este segmento</div>
-          ) : (
+          {(() => {
+            // Si ya bajo el fullList (con telefono enriquecido), preferirlo para
+            // mostrar los TOP 10 con WhatsApp link. Caso contrario, fallback al
+            // top que vino con el overview (sin phone).
+            const phoneMap = new Map<number, string>(
+              (fullList || []).map((c: any) => [c.customer_id, c.phone || ""])
+            );
+            const rowsToRender = customers.map((c: any) => ({
+              ...c,
+              phone: c.phone || phoneMap.get(c.customer_id) || "",
+            }));
+            if (rowsToRender.length === 0) {
+              return (
+                <div className="py-8 text-center text-text-muted text-sm">Sin {unit === "unidrop" ? "dropshippers" : "clientes"} en este segmento</div>
+              );
+            }
+            return (
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0">
                 <tr>
                   <th className="text-left px-4 py-2">{labelEntidad}</th>
+                  <th className="text-left px-2 py-2">WhatsApp</th>
                   <th className="text-right px-2 py-2">R</th>
                   <th className="text-right px-2 py-2">F</th>
                   <th className="text-right px-2 py-2">M</th>
@@ -307,12 +323,15 @@ function SegmentPopup({
                 </tr>
               </thead>
               <tbody>
-                {customers.map((c) => (
+                {rowsToRender.map((c: any) => (
                   <tr key={c.customer_id} className="border-t border-border hover:bg-soft/40">
                     <td className="px-4 py-2">
                       <Link href={unit === "unidrop" ? `/dashboard/dropshipper/${c.customer_id}` : `/dashboard/customer/${c.customer_id}`} className="text-primary hover:underline font-medium">
                         {c.nombre}
                       </Link>
+                    </td>
+                    <td className="px-2 py-2 text-[11px]">
+                      {c.phone ? <WhatsAppPhone phone={c.phone} variant="chip" /> : <span className="text-text-muted">—</span>}
                     </td>
                     <td className="px-2 py-2 text-right tabular-nums font-bold text-emerald-600">{c.r_score}</td>
                     <td className="px-2 py-2 text-right tabular-nums font-bold text-blue-600">{c.f_score}</td>
@@ -324,7 +343,8 @@ function SegmentPopup({
                 ))}
               </tbody>
             </table>
-          )}
+            );
+          })()}
         </div>
 
         {/* Footer accionable: Exportar CSV + Generar accion CS */}

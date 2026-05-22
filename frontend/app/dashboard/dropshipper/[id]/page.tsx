@@ -45,6 +45,7 @@ import {
   carrierLabel,
   type UnifiedOrder,
 } from "@/components/unified-order-modal";
+import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
 type DropshipperDetail = {
   user: {
@@ -340,9 +341,7 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
                   </span>
                 )}
                 {u.telefono && (
-                  <span className="inline-flex items-center gap-1">
-                    <Phone size={11} /> {u.telefono}
-                  </span>
+                  <WhatsAppPhone phone={u.telefono} size={11} showBadge />
                 )}
                 {(u.dni || u.cuit) && (
                   <span className="inline-flex items-center gap-1">
