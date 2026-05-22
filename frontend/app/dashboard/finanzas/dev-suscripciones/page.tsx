@@ -7,6 +7,7 @@ import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X, Receipt,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { api } from "@/lib/api";
 
 type Status = "pending" | "transferred" | "integration_cancelled" | "rejected";
@@ -155,6 +156,7 @@ export default function DevSuscripcionesPage() {
         hidePeriod
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unidrop" context="devoluciones" title="HOY · Dev. Suscripciones" />
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
             <TabBtn

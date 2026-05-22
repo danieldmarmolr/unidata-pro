@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
@@ -117,6 +118,7 @@ export default function MapaPage() {
         subtitle="Argentina · revenue / ordenes / clientes · ranking nacional por unidad de negocio"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <TodayPanel title="HOY · Mapa" allowCrossToggle={false} />
         {/* Filtros: Unidad + Metrica */}
         <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <div className="flex items-center gap-3 flex-wrap">

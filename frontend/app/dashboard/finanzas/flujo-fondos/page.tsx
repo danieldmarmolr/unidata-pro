@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { TodayPanel } from "@/components/today-panel";
 import { Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid, Legend } from "recharts";
 import { AlertTriangle, CalendarClock, CheckCircle2, Clock, Loader2, TrendingDown, TrendingUp, Handshake, Building2, Boxes, Landmark, Users } from "lucide-react";
 import { fmtArs, fmtArsCompact, fmtDate } from "./_components/helpers";
@@ -49,6 +50,7 @@ export default function FlujoFondosHomePage() {
 
   return (
     <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto space-y-6">
+      <TodayPanel context="finanzas" title="HOY · Flujo de Fondos" />
       {/* Banner "procesar hoy" */}
       {(k.atrasadas.count > 0 || k.proximas_7d.count > 0) && (
         <div className="rounded-xl border-2 border-primary bg-primary/5 p-4 flex flex-wrap items-center justify-between gap-3">
