@@ -519,10 +519,18 @@ def _build_order_select(eng) -> str:
     carrier_select = f", {carrier_col} AS carrier_name" if carrier_col else ""
     type_alias = "m.shipping_type" if type_col else None
     carrier_alias = "m.carrier_name" if carrier_col else None
+    # is_pva ahora viene del LEFT JOIN a pva_orders (p."orderId" IS NOT NULL).
+    # Lo expresamos como boolean directo en el alias para que _classify_channel_sql
+    # pueda usarlo en el CASE WHEN.
     canal_sql = _classify_channel_sql(
         "m.metodo_envio", type_alias=type_alias,
-        carrier_alias=carrier_alias, pva_alias="m.is_pva",
+        carrier_alias=carrier_alias, pva_alias='(p."orderId" IS NOT NULL)',
     )
+    # Refactor (qa): antes is_pva y empaquetada eran EXISTS correlacionados que
+    # ejecutaban una sub-query por cada row del resultado. Con 1000 orders eso
+    # eran 2000 sub-queries adicionales contra OrderItem y DespachoPedido/Pedido.
+    # Ahora: pre-agregamos en CTEs (pva_orders, empaquetadas) que escanean UNA
+    # sola vez filtrando por el set de orderIds del periodo - mucho mas barato.
     return f"""
         WITH base AS (
           SELECT o.id, o.number, o."createdAt"::text AS fecha,
@@ -533,29 +541,35 @@ def _build_order_select(eng) -> str:
                  {method_expr}{type_select}{carrier_select},
                  o."gatewayName",
                  o.gateway,
-                 EXISTS (
-                   SELECT 1 FROM tienda_nube."OrderItem" oi
-                   WHERE oi."orderId" = o.id AND oi.sku ILIKE 'PVA%'
-                 ) AS is_pva,
-                 EXISTS (
-                   SELECT 1 FROM digip."DespachoPedido" dp
-                   JOIN digip."Pedido" pd ON pd."Codigo" = dp."pedidoCodigo"
-                   WHERE pd."orderId" = o.id
-                 ) AS empaquetada
+                 o.id AS order_id_join
           FROM tienda_nube."Order" o
           LEFT JOIN tienda_nube."Customer" c ON c.id = o."customerId"
           LEFT JOIN tienda_nube."Fulfillment" f ON f."orderId" = o.id
           WHERE {{where}}
+        ),
+        pva_orders AS (
+          SELECT DISTINCT oi."orderId"
+          FROM tienda_nube."OrderItem" oi
+          WHERE oi."orderId" IN (SELECT id FROM base)
+            AND oi.sku ILIKE 'PVA%'
+        ),
+        empaquetadas AS (
+          SELECT DISTINCT pd."orderId"
+          FROM digip."Pedido" pd
+          JOIN digip."DespachoPedido" dp ON dp."pedidoCodigo" = pd."Codigo"
+          WHERE pd."orderId" IN (SELECT id FROM base)
         )
         SELECT m.id, m.number, m.fecha, m."paymentStatus", m."shippingStatus", m.status,
                m.total, m.cliente, m.provincia,
                m.metodo_envio,
                {canal_sql} AS canal,
-               m.empaquetada,
+               (e."orderId" IS NOT NULL) AS empaquetada,
                m.customer_id,
                m."gatewayName",
                m.gateway
         FROM base m
+        LEFT JOIN pva_orders p ON p."orderId" = m.order_id_join
+        LEFT JOIN empaquetadas e ON e."orderId" = m.order_id_join
         ORDER BY m.fecha DESC LIMIT 1000
     """
 
