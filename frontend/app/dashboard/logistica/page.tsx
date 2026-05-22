@@ -12,6 +12,7 @@ import { getCardDrill } from "@/lib/kpi-drill";
 import { Funnel } from "@/components/funnel";
 import { CategoryTable } from "@/components/generic-table";
 import { HBarChart } from "@/components/bar-chart";
+import { DonutChart } from "@/components/donut-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
 import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { DashboardHeader } from "@/components/dashboard-header";
@@ -27,6 +28,7 @@ type LogResp = {
   unit?: string;
   period: string;
   area?: string;
+  source?: string;
   cards: KpiCardT[];
   funnel: CategoryValue[];
   lead_time_daily?: TimeSeriesPoint[];
@@ -35,8 +37,17 @@ type LogResp = {
   stock_critico?: CategoryValue[];
   ajustes?: CategoryValue[];
   top_provinces?: CategoryValue[];
+  by_estado?: CategoryValue[];
+  top_skus?: CategoryValue[];
   stuck_orders: CategoryValue[];
   generated_at: string;
+};
+
+const DIGIP_ESTADO_COLORS: Record<string, string> = {
+  pendiente: "#facc15",
+  preparacion: "#7a3eae",
+  completo: "#22c55e",
+  eliminado: "#fb2c36",
 };
 
 export default function LogisticaPage() {
@@ -66,7 +77,7 @@ export default function LogisticaPage() {
         subtitle={
           unit === "unistore"
             ? "Funnel Order TN -> Pedido Digip -> Despacho · stock por area · pedidos atascados"
-            : "Envios OCA + LightData · etiquetas, lead times, atascados"
+            : "DigiP (digip_dev) cerebro · estados pendiente/preparacion/completo · enriquecido con MELI"
         }
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
@@ -157,10 +168,10 @@ export default function LogisticaPage() {
           ) : (
             <InteractiveMetricChart
               points={(data.daily_dispatch ?? []) as any[]}
-              metrics={[{ key: "value", label: "Despachos", kind: "number", color: "#7a3eae" }]}
+              metrics={[{ key: "value", label: "Completados", kind: "number", color: "#7a3eae" }]}
               defaultPrimary="value"
-              caption="Despachos diarios (60 dias)"
-              subtitle="OCA + LightData combinados"
+              caption="Pedidos completados por dia (60 dias)"
+              subtitle="DigiP: estado=completo"
               height={280}
             />
           )}
@@ -195,12 +206,43 @@ export default function LogisticaPage() {
           </div>
         )}
 
-        {unit === "unidrop" && data?.top_provinces && (
+        {unit === "unidrop" && (
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
+            {isLoading || !data ? (
+              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+            ) : (
+              <DonutChart
+                data={(data.by_estado ?? []).map((s) => ({ name: s.category, value: s.value }))}
+                caption="Distribucion por estado (DigiP)"
+                colorMap={DIGIP_ESTADO_COLORS}
+                height={300}
+              />
+            )}
+            {isLoading || !data ? (
+              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
+            ) : (
+              <HBarChart
+                data={(data.top_provinces ?? []).map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
+                caption="Top provincias (clientes_ubicaciones)"
+                formatter="number"
+              />
+            )}
+          </div>
+        )}
+
+        {unit === "unidrop" && data?.top_skus && data.top_skus.length > 0 && (
           <div className="mb-6">
-            <HBarChart
-              data={data.top_provinces.map((s) => ({ name: s.category, value: s.value, extra: s.extra }))}
-              caption="Top provincias por envios (OCA)"
+            <CategoryTable
+              caption="Top SKUs preparados"
+              subtitle="Unidades pedidas vs unidades satisfechas en el periodo"
+              data={data.top_skus}
               formatter="number"
+              extraColumns={[
+                { key: "desc", label: "Descripcion", format: "raw" },
+                { key: "uds_satisfechas", label: "Satisf.", format: "number" },
+                { key: "pedidos", label: "Pedidos", format: "number" },
+              ]}
+              showProgress={false}
             />
           </div>
         )}
@@ -211,7 +253,11 @@ export default function LogisticaPage() {
           ) : (
             <CategoryTable
               caption="Pedidos atascados (>5 dias)"
-              subtitle="Pagados aun en estado abierto - click en una fila para ver items"
+              subtitle={
+                unit === "unistore"
+                  ? "Pagados aun en estado abierto - click en una fila para ver items"
+                  : "DigiP: pendiente/preparacion > 5 dias - enriquecido con MELI"
+              }
               data={data.stuck_orders}
               formatter="currency"
               extraColumns={
@@ -222,13 +268,15 @@ export default function LogisticaPage() {
                     ]
                   : [
                       { key: "dias_atrasado", label: "Dias", format: "number" },
-                      { key: "payment", label: "Pago", format: "raw" },
-                      { key: "status", label: "Estado", format: "raw" },
+                      { key: "estado", label: "Estado DigiP", format: "raw" },
+                      { key: "provincia", label: "Provincia", format: "raw" },
+                      { key: "ml_status", label: "ML status", format: "raw" },
                     ]
               }
               showProgress={false}
               onRowClick={(r) => {
                 const id = r.extra?.id;
+                // Unistore: id numerico = TN order id -> abre drilldown
                 if (typeof id === "number") setDrillOrderId(id);
               }}
             />

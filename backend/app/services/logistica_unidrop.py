@@ -1,6 +1,16 @@
 """
-Logistica Unidrop: envios OCA + LightData + estados de orders TN/ML.
-Espejo del dashboard logistica de Unistore.
+Logistica Unidrop: DigiP como cerebro (schema digip_dev en unidrop_api).
+
+Schema descubierto 2026-05-21:
+- 4 tablas: clientes, clientes_ubicaciones, pedidos, pedidos_detalles
+- NO existen Despacho/Preparacion/Stock por separado - todo vive en `pedidos`
+- Solo pedidos MELI: 88.6% match contra OML.number = pedidos.Codigo,
+  0% contra TN (DigiP Unidrop no registra TN orders)
+- Estados reales: pendiente -> preparacion -> completo, mas `eliminado` (cancel)
+- pedidos.orderId esta siempre NULL (no usar para join)
+
+OCA/LightData quedan como bloques opcionales secundarios (despachos reales
+de TN), no como cerebro del funnel.
 """
 from __future__ import annotations
 
@@ -10,7 +20,8 @@ from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
+ESTADOS_ACTIVOS = ("pendiente", "preparacion")  # incluyen el happy path no terminado
+ATASCO_DIAS = 5
 
 
 def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
@@ -21,176 +32,212 @@ def logistica_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: 
 
     cards: list[dict] = []
 
-    # Pedidos pendientes (TN orders paid + open)
+    # ---------- KPI 1: pendientes (snapshot, no filtra por periodo) ----------
     pendientes = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE status::text='open' AND payment_status::text='paid'
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'pendiente'
     """) or 0)
 
-    # Despachados periodo
-    desp = int(scalar(eng, """
-        SELECT (
-            (SELECT COUNT(*) FROM public.oca_shipments
-              WHERE created_at >= NOW() - make_interval(days => :days)) +
-            (SELECT COUNT(*) FROM public.lightdata_shipments
-              WHERE creado_en >= NOW() - make_interval(days => :days))
-        )
-    """, p) or 0)
-    desp_prev = int(scalar(eng, """
-        SELECT (
-            (SELECT COUNT(*) FROM public.oca_shipments
-              WHERE created_at >= NOW() - make_interval(days => :days2)
-                AND created_at <  NOW() - make_interval(days => :days)) +
-            (SELECT COUNT(*) FROM public.lightdata_shipments
-              WHERE creado_en >= NOW() - make_interval(days => :days2)
-                AND creado_en <  NOW() - make_interval(days => :days))
-        )
-    """, p2) or 0)
-    delta_desp = ((desp - desp_prev) / desp_prev * 100) if desp_prev > 0 else None
+    # ---------- KPI 2: en preparacion (snapshot) ----------
+    en_prep = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'preparacion'
+    """) or 0)
 
-    # Lead time avg OCA
-    lead_oca = scalar(eng, """
-        SELECT AVG(EXTRACT(EPOCH FROM (fecha_entrega - created_at))/86400.0)::float
-        FROM public.oca_shipments
-        WHERE created_at >= NOW() - make_interval(days => :days)
-          AND fecha_entrega IS NOT NULL
+    # ---------- KPI 3: completados en periodo + delta vs periodo previo ----------
+    completados = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'completo'
+          AND "Fecha" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    completados_prev = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'completo'
+          AND "Fecha" >= NOW() - make_interval(days => :days2)
+          AND "Fecha" <  NOW() - make_interval(days => :days)
+    """, p2) or 0)
+    delta_comp = ((completados - completados_prev) / completados_prev * 100) if completados_prev > 0 else None
+
+    # ---------- KPI 4: eliminados en periodo (tasa de cancelacion) ----------
+    eliminados = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'eliminado'
+          AND "Fecha" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    # tasa = eliminados / (completados + eliminados) sobre el periodo (excluye
+    # los que aun estan en vuelo - mide solo decisiones terminales)
+    total_terminales = completados + eliminados
+    tasa_cancel = (eliminados / total_terminales * 100) if total_terminales > 0 else None
+
+    # ---------- KPI 5: atascados (en pendiente/preparacion > 5d) ----------
+    atascados = int(scalar(eng, f"""
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "PedidoEstado" IN ('pendiente','preparacion')
+          AND "Fecha" < NOW() - INTERVAL '{ATASCO_DIAS} days'
+    """) or 0)
+
+    # ---------- KPI 6: lead time avg (Fecha -> FechaEstimadaEntrega en completos) ----------
+    lead_avg = scalar(eng, """
+        SELECT AVG(EXTRACT(EPOCH FROM ("FechaEstimadaEntrega" - "Fecha"))/86400.0)::float
+        FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'completo'
+          AND "Fecha" >= NOW() - make_interval(days => :days)
+          AND "FechaEstimadaEntrega" IS NOT NULL
+          AND "FechaEstimadaEntrega" >= "Fecha"
     """, p)
 
-    # Pedidos atascados (paid sin etiqueta descargada hace > 5d)
-    stuck = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE payment_status::text='paid'
-          AND label_downloaded IS NOT TRUE
-          AND created_at < NOW() - INTERVAL '5 days'
-          AND status::text != 'cancelled'
-    """) or 0)
+    cards.append({"label": "Pedidos pendientes", "value": pendientes,
+                  "hint": "DigiP: estado=pendiente"})
+    cards.append({"label": "En preparacion", "value": en_prep,
+                  "hint": "DigiP: estado=preparacion"})
+    cards.append({"label": f"Completados ({period})", "value": completados,
+                  "delta": round(delta_comp, 1) if delta_comp is not None else None,
+                  "hint": "DigiP: estado=completo en periodo"})
+    cards.append({"label": f"Eliminados ({period})", "value": eliminados,
+                  "hint": f"Tasa cancelacion: {round(tasa_cancel,1)}%" if tasa_cancel is not None else "Sin terminales"})
+    cards.append({"label": "Atascados", "value": atascados,
+                  "hint": f">{ATASCO_DIAS}d en pendiente/preparacion"})
+    cards.append({"label": "Lead time avg", "value": round(float(lead_avg), 1) if lead_avg else 0,
+                  "suffix": " dias", "hint": "Pedido -> entrega estimada (completos)"})
 
-    # ML missing SKU
-    missing_sku = int(scalar(eng, """
-        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre"
-        WHERE missing_sku IS NOT NULL
-          AND array_length(missing_sku, 1) > 0
-    """) or 0)
-
-    # Costo total envios periodo
-    cost_total = float(scalar(eng, """
-        SELECT (
-            (SELECT COALESCE(SUM(costo_envio),0)::float FROM public.oca_shipments
-              WHERE created_at >= NOW() - make_interval(days => :days)) +
-            (SELECT COALESCE(SUM(costo_envio_ars),0)::float FROM public.lightdata_shipments
-              WHERE creado_en >= NOW() - make_interval(days => :days))
-        )
+    # ---------- Funnel: happy path 3 pasos ----------
+    # Total iniciados en periodo = todos los pedidos creados en el periodo
+    # (pendiente + preparacion + completo + eliminado; los eliminados quedan fuera del funnel)
+    iniciados = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "Fecha" >= NOW() - make_interval(days => :days)
+          AND "PedidoEstado" != 'eliminado'
     """, p) or 0)
-
-    cards.append({"label": "Pedidos pendientes", "value": pendientes, "hint": "Open + paid sin despacho"})
-    cards.append({"label": f"Despachos ({period})", "value": desp,
-                  "delta": round(delta_desp, 1) if delta_desp is not None else None,
-                  "hint": "OCA + LightData"})
-    cards.append({"label": "Lead time avg OCA", "value": round(float(lead_oca), 1) if lead_oca else 0,
-                  "suffix": " dias", "hint": "Solo entregados con fecha"})
-    cards.append({"label": "Pedidos atascados", "value": stuck,
-                  "hint": "Pagados sin etiqueta descargada >5d"})
-    cards.append({"label": "ML con missing SKU", "value": missing_sku,
-                  "hint": "Ordenes ML donde falta el SKU mapeado"})
-    cards.append({"label": f"Costo envios ({period})", "value": round(cost_total, 0),
-                  "prefix": "$ ", "hint": "Suma OCA + LightData"})
-
-    # Funnel: TN order paid -> con etiqueta -> despacho OCA o LD -> entregado
-    f1 = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
-          AND payment_status::text = 'paid'
+    en_prep_p = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "Fecha" >= NOW() - make_interval(days => :days)
+          AND "PedidoEstado" IN ('preparacion','completo')
     """, p) or 0)
-    f2 = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
-          AND payment_status::text='paid'
-          AND label_downloaded = TRUE
-    """, p) or 0)
-    f3 = int(scalar(eng, """
-        SELECT (
-            (SELECT COUNT(DISTINCT order_tienda_nube_id) FROM public.oca_shipments
-              WHERE created_at >= NOW() - make_interval(days => :days)) +
-            (SELECT COUNT(DISTINCT orden_tn_id) FROM public.lightdata_shipments
-              WHERE creado_en >= NOW() - make_interval(days => :days))
-        )
-    """, p) or 0)
-    f4_oca = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.oca_shipments
-        WHERE created_at >= NOW() - make_interval(days => :days)
-          AND (status::text ILIKE '%entregado%' OR ultimo_estado_oca ILIKE '%entregado%')
-    """, p) or 0)
-    f4_ld = int(scalar(eng, """
-        SELECT COUNT(*) FROM public.lightdata_shipments
-        WHERE creado_en >= NOW() - make_interval(days => :days)
-          AND estado ILIKE '%entregado%'
+    completo_p = int(scalar(eng, """
+        SELECT COUNT(*) FROM digip_dev.pedidos
+        WHERE "Fecha" >= NOW() - make_interval(days => :days)
+          AND "PedidoEstado" = 'completo'
     """, p) or 0)
 
     funnel = [
-        {"category": "1. Order paga", "value": float(f1)},
-        {"category": "2. Etiqueta lista", "value": float(f2)},
-        {"category": "3. Despachada", "value": float(f3)},
-        {"category": "4. Entregada", "value": float(f4_oca + f4_ld)},
+        {"category": "1. Pedido recibido", "value": float(iniciados)},
+        {"category": "2. En preparacion", "value": float(en_prep_p)},
+        {"category": "3. Completo", "value": float(completo_p)},
     ]
 
-    # Daily despachos 60d
+    # ---------- Daily dispatch: completados por dia 60d ----------
     rows = q(eng, """
-        SELECT day::date, COALESCE(SUM(n),0)::float FROM (
-            SELECT date_trunc('day', created_at) AS day, 1 AS n
-            FROM public.oca_shipments
-            WHERE created_at >= NOW() - INTERVAL '60 days'
-            UNION ALL
-            SELECT date_trunc('day', creado_en) AS day, 1
-            FROM public.lightdata_shipments
-            WHERE creado_en >= NOW() - INTERVAL '60 days'
-        ) x GROUP BY 1 ORDER BY 1
+        SELECT date_trunc('day', "Fecha")::date AS d,
+               COUNT(*)::int AS n
+        FROM digip_dev.pedidos
+        WHERE "PedidoEstado" = 'completo'
+          AND "Fecha" >= NOW() - INTERVAL '60 days'
+        GROUP BY 1 ORDER BY 1
     """) or []
-    daily = [{"date": r[0].strftime("%Y-%m-%d") if r[0] else "", "value": float(r[1] or 0)} for r in rows]
+    daily_dispatch = [{"date": r[0].strftime("%Y-%m-%d") if r[0] else "",
+                       "value": float(r[1] or 0)} for r in rows]
 
-    # Provincias con mas envios OCA
+    # ---------- Top provincias (join clientes_ubicaciones por CodigoClienteUbicacion) ----------
+    # NOTA: linkage es pedidos."CodigoClienteUbicacion" -> clientes_ubicaciones."Codigo"
     rows = q(eng, """
-        SELECT COALESCE(NULLIF(TRIM(destinatario_provincia),''),'(sin)'),
-               COUNT(*)::int, COALESCE(SUM(costo_envio),0)::float
-        FROM public.oca_shipments
-        WHERE created_at >= NOW() - make_interval(days => :days)
-        GROUP BY 1 ORDER BY 2 DESC LIMIT 10
+        SELECT COALESCE(NULLIF(TRIM(cu."Provincia"),''),'(sin)') AS prov,
+               COUNT(*)::int AS n,
+               COALESCE(SUM(pd."Importe"),0)::float AS importe_total
+        FROM digip_dev.pedidos pd
+        LEFT JOIN digip_dev.clientes_ubicaciones cu
+               ON cu."Codigo" = pd."CodigoClienteUbicacion"
+        WHERE pd."Fecha" >= NOW() - make_interval(days => :days)
+          AND pd."PedidoEstado" != 'eliminado'
+        GROUP BY 1
+        ORDER BY n DESC
+        LIMIT 10
     """, p) or []
     top_provinces = [{
         "category": r[0],
         "value": float(r[1] or 0),
-        "extra": {"costo": float(r[2] or 0)},
+        "extra": {"importe": float(r[2] or 0)},
     } for r in rows]
 
-    # Stuck orders detalle
-    rows = q(eng, """
-        SELECT tienda_nube_id, order_number, total::float,
-               payment_status::text, status::text, created_at::text,
-               EXTRACT(DAY FROM (NOW() - created_at))::int AS dias
-        FROM public.tienda_nube_orders
-        WHERE payment_status::text='paid'
-          AND label_downloaded IS NOT TRUE
-          AND created_at < NOW() - INTERVAL '5 days'
-          AND status::text != 'cancelled'
-        ORDER BY created_at ASC LIMIT 20
+    # ---------- Stuck orders (detalle) enriquecidos con OML ----------
+    rows = q(eng, f"""
+        SELECT pd."Codigo",
+               pd."PedidoEstado",
+               pd."Importe"::float,
+               pd."Fecha"::text,
+               EXTRACT(DAY FROM (NOW() - pd."Fecha"))::int AS dias,
+               oml.status AS ml_status,
+               oml."totalAmount"::float AS ml_total,
+               cu."Provincia"
+        FROM digip_dev.pedidos pd
+        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" oml
+               ON oml.number = pd."Codigo"
+        LEFT JOIN digip_dev.clientes_ubicaciones cu
+               ON cu."Codigo" = pd."CodigoClienteUbicacion"
+        WHERE pd."PedidoEstado" IN ('pendiente','preparacion')
+          AND pd."Fecha" < NOW() - INTERVAL '{ATASCO_DIAS} days'
+        ORDER BY pd."Fecha" ASC
+        LIMIT 20
     """) or []
     stuck_orders = [{
-        "category": str(r[1] or r[0]),
+        "category": str(r[0] or ""),
+        "value": float(r[2] or r[6] or 0),  # importe DigiP, fallback OML
+        "extra": {
+            "id": str(r[0] or ""),  # Codigo como id - el frontend lo usa para abrir modal
+            "estado": r[1] or "",
+            "fecha": (r[3] or "")[:10],
+            "dias_atrasado": int(r[4] or 0),
+            "ml_status": r[5] or "",
+            "provincia": r[7] or "",
+            "payment": "ml",  # placeholder para que el frontend mantenga la col
+            "status": r[1] or "",
+        },
+    } for r in rows]
+
+    # ---------- Distribucion por estado (donut friendly) ----------
+    rows = q(eng, """
+        SELECT "PedidoEstado", COUNT(*)::int
+        FROM digip_dev.pedidos
+        WHERE "Fecha" >= NOW() - make_interval(days => :days)
+        GROUP BY 1
+        ORDER BY 2 DESC
+    """, p) or []
+    by_estado = [{"category": r[0] or "(sin)", "value": float(r[1] or 0)} for r in rows]
+
+    # ---------- Top SKUs preparados (join pedidos_detalles) ----------
+    rows = q(eng, """
+        SELECT pdd."CodigoArticulo",
+               MAX(pdd."DescripcionArticulo") AS desc,
+               SUM(pdd."Unidades")::int AS uds,
+               SUM(pdd."UnidadesSatisfecha")::int AS uds_ok,
+               COUNT(DISTINCT pd."Codigo")::int AS pedidos
+        FROM digip_dev.pedidos_detalles pdd
+        JOIN digip_dev.pedidos pd ON pd.id = pdd."pedidoId"
+        WHERE pd."Fecha" >= NOW() - make_interval(days => :days)
+          AND pd."PedidoEstado" != 'eliminado'
+        GROUP BY 1
+        ORDER BY uds DESC
+        LIMIT 15
+    """, p) or []
+    top_skus = [{
+        "category": r[0] or "(sin)",
         "value": float(r[2] or 0),
         "extra": {
-            "id": int(r[0]),
-            "payment": r[3] or "", "status": r[4] or "",
-            "fecha": r[5][:10] if r[5] else None,
-            "dias_atrasado": int(r[6] or 0),
+            "desc": r[1] or "",
+            "uds_satisfechas": int(r[3] or 0),
+            "pedidos": int(r[4] or 0),
         },
     } for r in rows]
 
     return {
         "unit": "unidrop",
         "period": period,
+        "source": "digip_dev",
         "cards": cards,
         "funnel": funnel,
-        "daily_dispatch": daily,
+        "daily_dispatch": daily_dispatch,
         "top_provinces": top_provinces,
         "stuck_orders": stuck_orders,
+        "by_estado": by_estado,
+        "top_skus": top_skus,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }

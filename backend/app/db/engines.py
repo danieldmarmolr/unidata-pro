@@ -21,6 +21,11 @@ UNIDROP (engine "unidrop" -> RDS unidrop_api):
                         PaymentTransactionSubscription)
   - contabillium_dev  : ERP Unidrop (ContabilliumInvoice,
                         ContabiliumSalesOrder)
+  - digip_dev         : WMS Unidrop (solo pedidos MELI) - subset chico:
+                        clientes, clientes_ubicaciones, pedidos,
+                        pedidos_detalles. Estado del pedido en
+                        pedidos."PedidoEstado". Linkage: pedidos."Codigo" =
+                        OrderMercadoLibre.number (88% cobertura).
   - cresium
 
 REGLA: cada query usa get_engine("unistore") o get_engine("unidrop") segun
