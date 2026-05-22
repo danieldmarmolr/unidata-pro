@@ -10,6 +10,7 @@ import { useGlobalFilters, type Period } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { SkuSearchBox } from "@/components/sku-search-box";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { NotificationBell as PeopleNotificationBell } from "@/components/people/notification-bell";
 import { todayArIso } from "@/lib/dates";
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
@@ -236,6 +237,7 @@ export function Topbar({
             <RefreshCcw size={15} />
           </button>
           <NotificationBell />
+          <PeopleNotificationBell />
           <div className="ml-1 sm:ml-2 flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-soft border border-border">
             <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-primary text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
               {initial}

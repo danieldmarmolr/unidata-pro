@@ -1,42 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Award, Users, Network, ChevronRight, Cake, Trophy } from "lucide-react";
+import {
+  Award, Users, Network, ChevronRight, Cake, Trophy, Hash, Inbox,
+  MessageSquare, Megaphone,
+} from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { PostCard } from "@/components/people/post-card";
 import { PostComposer } from "@/components/people/post-composer";
 import { Avatar } from "@/components/people/avatar";
-import type { FeedPost, FeedResponse, LeaderboardResponse } from "@/components/people/types";
+import { cn } from "@/lib/utils";
+import type {
+  FeedPost, FeedResponse, LeaderboardResponse, Space,
+} from "@/components/people/types";
 
 type Story = {
-  user_id: number;
-  name: string;
-  day: number;
-  month: number;
+  user_id: number; name: string; day: number; month: number;
   age_turning: number | null;
-  area_slug: string | null;
-  area_name: string | null;
-  area_color: string;
+  area_slug: string | null; area_name: string | null; area_color: string;
 };
 type Aniv = {
-  user_id: number;
-  name: string;
-  joined_day: number;
-  joined_month: number;
+  user_id: number; name: string; joined_day: number; joined_month: number;
   years: number;
-  area_slug: string | null;
-  area_name: string | null;
-  area_color: string;
+  area_slug: string | null; area_name: string | null; area_color: string;
 };
 type StoriesResp = {
-  month: number;
-  today: string;
-  cumples_hoy: Story[];
-  cumples_mes: Story[];
-  aniversarios_mes: Aniv[];
+  month: number; today: string;
+  cumples_hoy: Story[]; cumples_mes: Story[]; aniversarios_mes: Aniv[];
 };
 
 const MESES = [
@@ -52,12 +45,23 @@ export default function PeopleFeedPage() {
     me?.role === "gerencia" ||
     me?.area_slug === "people";
 
+  // null = "Toda la actividad" (sin filtrar por space)
+  const [activeSpaceId, setActiveSpaceId] = useState<number | null>(null);
+
+  const { data: spacesData } = useQuery<{ items: Space[] }>({
+    queryKey: ["people-spaces"],
+    queryFn: () => api("/api/people/spaces"),
+    staleTime: 60_000,
+  });
+
   const feedQ = useInfiniteQuery<FeedResponse>({
-    queryKey: ["people-feed"],
-    queryFn: ({ pageParam }) =>
-      api<FeedResponse>(
-        `/api/people/feed?limit=20${pageParam ? `&before_id=${pageParam}` : ""}`,
-      ),
+    queryKey: ["people-feed", activeSpaceId],
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: "20" });
+      if (pageParam) params.set("before_id", String(pageParam));
+      if (activeSpaceId) params.set("space_id", String(activeSpaceId));
+      return api<FeedResponse>(`/api/people/feed?${params}`);
+    },
     getNextPageParam: (last) => last.next_before_id ?? undefined,
     initialPageParam: undefined as number | undefined,
     staleTime: 20_000,
@@ -77,14 +81,145 @@ export default function PeopleFeedPage() {
 
   const posts: FeedPost[] = feedQ.data?.pages.flatMap((p) => p.items) ?? [];
 
+  const activeSpace = useMemo(
+    () => spacesData?.items.find((s) => s.id === activeSpaceId) ?? null,
+    [spacesData, activeSpaceId],
+  );
+
+  const spaceGroups = useMemo(() => {
+    const all = spacesData?.items ?? [];
+    return {
+      globales: all.filter((s) => s.kind === "global"),
+      mias: all.filter((s) => s.kind === "area" && s.is_default_for_viewer),
+      otras: all.filter((s) => s.kind === "area" && !s.is_default_for_viewer),
+    };
+  }, [spacesData]);
+
   return (
     <>
-      <Topbar title="People" subtitle="El feed de Unistore · novedades, cumples, kudos" />
-      <div className="flex-1 px-6 lg:px-8 py-6 overflow-y-auto">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 max-w-6xl mx-auto">
-          {/* Main column */}
+      <Topbar
+        title="People"
+        subtitle={
+          activeSpace
+            ? `Espacio ${activeSpace.emoji} ${activeSpace.name}`
+            : "El feed completo del equipo · novedades, cumples, kudos"
+        }
+      />
+      <div className="flex-1 px-4 lg:px-6 py-4 overflow-y-auto">
+        <div className="grid grid-cols-1 lg:grid-cols-[240px_1fr_300px] gap-4 max-w-7xl mx-auto">
+          {/* LEFT: Spaces sidebar */}
+          <aside className="space-y-3">
+            <div className="bg-surface border border-border rounded-xl p-3 sticky top-4">
+              {/* Actions */}
+              <div className="space-y-0.5 mb-2 pb-2 border-b border-border">
+                <NavBtn
+                  href="/dashboard/people"
+                  icon={<Hash size={14} />}
+                  label="Toda la actividad"
+                  active={activeSpaceId === null}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setActiveSpaceId(null);
+                  }}
+                />
+                <Link
+                  href="/dashboard/people/inbox"
+                  className="flex items-center gap-2 text-sm px-2 py-1.5 rounded-lg hover:bg-bg-muted transition"
+                >
+                  <Inbox size={14} className="text-text-muted" />
+                  <span className="text-text">Inbox</span>
+                </Link>
+                <Link
+                  href="/dashboard/people/dms"
+                  className="flex items-center gap-2 text-sm px-2 py-1.5 rounded-lg hover:bg-bg-muted transition"
+                >
+                  <MessageSquare size={14} className="text-text-muted" />
+                  <span className="text-text">Mensajes directos</span>
+                </Link>
+              </div>
+
+              {spaceGroups.globales.length > 0 && (
+                <SpaceGroup
+                  title="Globales"
+                  spaces={spaceGroups.globales}
+                  activeId={activeSpaceId}
+                  onPick={setActiveSpaceId}
+                />
+              )}
+              {spaceGroups.mias.length > 0 && (
+                <SpaceGroup
+                  title="Mis areas"
+                  spaces={spaceGroups.mias}
+                  activeId={activeSpaceId}
+                  onPick={setActiveSpaceId}
+                />
+              )}
+              {spaceGroups.otras.length > 0 && (
+                <SpaceGroup
+                  title="Otras areas"
+                  spaces={spaceGroups.otras}
+                  activeId={activeSpaceId}
+                  onPick={setActiveSpaceId}
+                />
+              )}
+
+              <div className="mt-3 pt-3 border-t border-border space-y-0.5">
+                <Link
+                  href="/dashboard/people/directory"
+                  className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg hover:bg-bg-muted transition text-text-muted"
+                >
+                  <Users size={12} /> Directorio
+                </Link>
+                <Link
+                  href="/dashboard/people/org-chart"
+                  className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg hover:bg-bg-muted transition text-text-muted"
+                >
+                  <Network size={12} /> Org Chart
+                </Link>
+                <Link
+                  href="/dashboard/people/kudos"
+                  className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg hover:bg-bg-muted transition text-text-muted"
+                >
+                  <Award size={12} /> Muro de Kudos
+                </Link>
+                {canManage && (
+                  <Link
+                    href="/dashboard/people/admin/values"
+                    className="flex items-center gap-2 text-xs px-2 py-1.5 rounded-lg hover:bg-bg-muted transition text-text-muted"
+                  >
+                    <Trophy size={12} /> Valores (admin)
+                  </Link>
+                )}
+              </div>
+            </div>
+          </aside>
+
+          {/* CENTER: Feed */}
           <div className="space-y-4 min-w-0">
-            <PostComposer canPin={canManage} />
+            {activeSpace && (
+              <div
+                className="rounded-xl px-5 py-4 border"
+                style={{
+                  background: `linear-gradient(135deg, ${activeSpace.color}15, ${activeSpace.color}05)`,
+                  borderColor: `${activeSpace.color}40`,
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="text-3xl">{activeSpace.emoji}</div>
+                  <div>
+                    <div className="text-base font-bold text-text">{activeSpace.name}</div>
+                    <div className="text-xs text-text-muted">{activeSpace.description}</div>
+                  </div>
+                  {activeSpace.posting_policy === "admins_only" && (
+                    <span className="ml-auto text-[10px] font-bold uppercase text-violet-700 bg-violet-100 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                      <Megaphone size={10} /> Solo admins postean
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <PostComposer canPin={canManage} forceSpaceId={activeSpaceId ?? undefined} />
 
             {feedQ.isLoading && (
               <div className="text-center py-16 text-text-muted text-sm">Cargando feed...</div>
@@ -93,9 +228,13 @@ export default function PeopleFeedPage() {
             {!feedQ.isLoading && posts.length === 0 && (
               <div className="bg-surface border border-border rounded-xl py-16 text-center">
                 <div className="text-4xl mb-2">📭</div>
-                <div className="text-sm font-semibold">Todavia no hay posts</div>
+                <div className="text-sm font-semibold">
+                  {activeSpace ? `Sin posts en ${activeSpace.name} todavia` : "Todavia no hay posts"}
+                </div>
                 <div className="text-xs text-text-muted mt-1">
-                  Se el primero en escribir o dar kudos a un companero
+                  {activeSpace?.posting_policy === "admins_only"
+                    ? "Esperando comunicaciones oficiales"
+                    : "Se el primero en escribir"}
                 </div>
               </div>
             )}
@@ -117,33 +256,12 @@ export default function PeopleFeedPage() {
             )}
           </div>
 
-          {/* Sidebar */}
+          {/* RIGHT: Stories + leaderboard */}
           <aside className="space-y-4">
-            {/* Quick nav */}
-            <div className="bg-surface border border-border rounded-xl p-4">
-              <div className="text-[11px] uppercase tracking-wider font-bold text-text-muted mb-3">
-                Modulos
-              </div>
-              <div className="space-y-1">
-                <SideLink href="/dashboard/people/directory" icon={<Users size={14} />} label="Directorio" />
-                <SideLink href="/dashboard/people/org-chart" icon={<Network size={14} />} label="Org Chart" />
-                <SideLink href="/dashboard/people/kudos" icon={<Award size={14} />} label="Kudos" />
-                {canManage && (
-                  <SideLink
-                    href="/dashboard/people/admin/values"
-                    icon={<Trophy size={14} />}
-                    label="Valores (admin)"
-                  />
-                )}
-              </div>
-            </div>
-
-            {/* Stories */}
             {storiesQ.data && (storiesQ.data.cumples_hoy.length + storiesQ.data.cumples_mes.length + storiesQ.data.aniversarios_mes.length) > 0 && (
               <StoriesCard data={storiesQ.data} />
             )}
 
-            {/* Leaderboard */}
             {leaderQ.data && leaderQ.data.top_receivers.length > 0 && (
               <div className="bg-surface border border-border rounded-xl p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -190,16 +308,67 @@ export default function PeopleFeedPage() {
   );
 }
 
-function SideLink({ href, icon, label }: { href: string; icon: React.ReactNode; label: string }) {
+function NavBtn({
+  href, icon, label, active, onClick,
+}: {
+  href: string;
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  onClick?: (e: React.MouseEvent) => void;
+}) {
   return (
     <Link
       href={href}
-      className="flex items-center gap-2 text-sm px-2 py-1.5 rounded-lg hover:bg-bg-muted transition"
+      onClick={onClick}
+      className={cn(
+        "flex items-center gap-2 text-sm px-2 py-1.5 rounded-lg transition",
+        active
+          ? "bg-primary/10 text-primary font-semibold"
+          : "hover:bg-bg-muted text-text",
+      )}
     >
-      <span className="text-text-muted">{icon}</span>
-      <span className="text-text">{label}</span>
-      <ChevronRight size={12} className="ml-auto text-text-muted" />
+      <span className={active ? "text-primary" : "text-text-muted"}>{icon}</span>
+      <span>{label}</span>
     </Link>
+  );
+}
+
+function SpaceGroup({
+  title, spaces, activeId, onPick,
+}: {
+  title: string;
+  spaces: Space[];
+  activeId: number | null;
+  onPick: (id: number | null) => void;
+}) {
+  return (
+    <div className="mt-3">
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted px-2 mb-1">
+        {title}
+      </div>
+      <div className="space-y-0.5">
+        {spaces.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() => onPick(s.id)}
+            className={cn(
+              "w-full text-left flex items-center gap-2 text-sm px-2 py-1.5 rounded-lg transition",
+              activeId === s.id
+                ? "bg-primary/10 text-primary font-semibold"
+                : "hover:bg-bg-muted text-text",
+            )}
+          >
+            <span>{s.emoji}</span>
+            <span className="flex-1 truncate">{s.name}</span>
+            {s.posts_count > 0 && (
+              <span className="text-[10px] text-text-muted/70 tabular-nums">{s.posts_count}</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

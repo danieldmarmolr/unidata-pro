@@ -81,6 +81,12 @@ export type FeedPost = {
   author_area_slug: string | null;
   author_area_name: string | null;
   author_area_color: string | null;
+  space_id: number | null;
+  space_slug: string | null;
+  space_name: string | null;
+  space_emoji: string | null;
+  space_color: string | null;
+  space_kind: "area" | "global" | "custom" | null;
   content: string;
   image_url: string | null;
   is_announcement: boolean;
@@ -195,4 +201,95 @@ export type FeedComment = {
   author_area_color: string | null;
   content: string;
   created_at: string;
+};
+
+// ============================================================
+// Spaces, DMs, Notifications, Mentions
+// ============================================================
+
+export type Space = {
+  id: number;
+  slug: string;
+  name: string;
+  kind: "area" | "global" | "custom";
+  area_id: number | null;
+  emoji: string;
+  color: string;
+  description: string;
+  posting_policy: "everyone" | "admins_only" | "area_members";
+  sort_order: number;
+  is_active: boolean;
+  last_post_at: string | null;
+  posts_count: number;
+  is_default_for_viewer: boolean;
+  created_at: string;
+};
+
+export type MentionUser = {
+  id: number;
+  name: string;
+  email: string;
+  avatar_url: string | null;
+  job_title: string | null;
+  area_slug: string | null;
+  area_color: string | null;
+  area_name: string | null;
+};
+
+export type ConversationMember = {
+  id: number;
+  name: string;
+  email: string;
+  avatar_url: string | null;
+  job_title: string | null;
+  area_color: string | null;
+  area_name: string | null;
+};
+
+export type Conversation = {
+  id: number;
+  kind: "dm" | "group";
+  name: string | null;
+  created_by: number;
+  last_message_at: string;
+  created_at: string;
+  last_read_at: string;
+  last_preview: string | null;
+  last_author_id: number | null;
+  unread_count: number;
+  members: ConversationMember[];
+};
+
+export type DMMessage = {
+  id: number;
+  conversation_id: number;
+  author_id: number;
+  author_name: string;
+  author_avatar: string | null;
+  author_area_color: string | null;
+  content: string;
+  image_url: string | null;
+  created_at: string;
+};
+
+export type NotificationItem = {
+  id: number;
+  user_id: number;
+  kind: "mention" | "kudo" | "comment" | "dm" | "announcement" | string;
+  actor_user_id: number | null;
+  actor_name: string | null;
+  actor_avatar: string | null;
+  actor_area_color: string | null;
+  source_kind: string | null;
+  source_id: number | null;
+  preview: string | null;
+  link: string | null;
+  read_at: string | null;
+  created_at: string;
+};
+
+export type NotificationBadge = {
+  notifications_unread: number;
+  dms_unread: number;
+  total: number;
 };

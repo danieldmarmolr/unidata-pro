@@ -109,6 +109,8 @@ def get_stories(
 class CreatePostBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=8000)
     image_url: str | None = None
+    space_id: int | None = None
+    mention_user_ids: list[int] | None = None
 
 
 class UpdatePostBody(BaseModel):
@@ -127,6 +129,7 @@ class ReactBody(BaseModel):
 
 class CommentBody(BaseModel):
     content: str = Field(..., min_length=1, max_length=4000)
+    mention_user_ids: list[int] | None = None
 
 
 @router.get("/feed")
@@ -134,8 +137,11 @@ def list_feed(
     user: Annotated[dict, Depends(current_user)],
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
     before_id: int | None = None,
+    space_id: int | None = None,
 ) -> dict:
-    items = people_db.list_feed(viewer_id=user["id"], limit=limit, before_id=before_id)
+    items = people_db.list_feed(
+        viewer_id=user["id"], limit=limit, before_id=before_id, space_id=space_id,
+    )
     next_cursor = items[-1]["id"] if items and len(items) >= limit else None
     return {"items": items, "next_before_id": next_cursor}
 
@@ -147,11 +153,22 @@ def create_post(
     body: CreatePostBody,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
+    # Verificar policy del espacio si viene
+    if body.space_id is not None:
+        sp = people_db.get_space(body.space_id)
+        if not sp:
+            raise HTTPException(404, "Espacio no encontrado")
+        if not people_db.can_post_in_space(
+            sp, is_privileged=_is_privileged(user), in_people=_can_manage_people(user),
+        ):
+            raise HTTPException(403, f"No podes postear en {sp['name']}")
     try:
         post = people_db.create_post(
             author_id=user["id"],
             content=body.content,
             image_url=body.image_url,
+            space_id=body.space_id,
+            mention_user_ids=body.mention_user_ids,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -294,7 +311,10 @@ def create_comment(
     if not existing or existing.get("deleted_at"):
         raise HTTPException(404, "Post no encontrado")
     try:
-        return people_db.create_comment(post_id, user["id"], body.content)
+        return people_db.create_comment(
+            post_id, user["id"], body.content,
+            mention_user_ids=body.mention_user_ids,
+        )
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -440,3 +460,165 @@ def delete_value(
     if not ok:
         raise HTTPException(404, "Valor no encontrado")
     return {"ok": True}
+
+
+# ============================================================
+# Spaces (canales)
+# ============================================================
+
+@router.get("/spaces")
+def list_spaces(user: Annotated[dict, Depends(current_user)]) -> dict:
+    items = people_db.list_spaces(viewer_id=user["id"])
+    return {"items": items, "count": len(items)}
+
+
+# ============================================================
+# Mentions search (autocompletar @)
+# ============================================================
+
+@router.get("/users/search")
+def search_users(
+    _: Annotated[dict, Depends(current_user)],
+    q: str = "",
+    limit: Annotated[int, Query(ge=1, le=20)] = 8,
+) -> dict:
+    items = people_db.search_users_for_mention(q, limit=limit)
+    return {"items": items, "count": len(items)}
+
+
+# ============================================================
+# DMs (conversations + messages)
+# ============================================================
+
+class CreateDMBody(BaseModel):
+    user_id: int
+
+
+class CreateGroupBody(BaseModel):
+    name: str = Field(default="", max_length=120)
+    member_ids: list[int] = Field(..., min_length=1)
+
+
+class MessageBody(BaseModel):
+    content: str = Field(..., min_length=1, max_length=4000)
+    image_url: str | None = None
+
+
+@router.get("/conversations")
+def list_conversations(user: Annotated[dict, Depends(current_user)]) -> dict:
+    items = people_db.list_my_conversations(user_id=user["id"])
+    return {"items": items, "count": len(items)}
+
+
+@router.post("/conversations/dm", status_code=201)
+def create_dm(
+    body: CreateDMBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        cid = people_db.get_or_create_dm(user_a=user["id"], user_b=body.user_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"conversation_id": cid}
+
+
+@router.post("/conversations/group", status_code=201)
+def create_group(
+    body: CreateGroupBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        cid = people_db.create_group_conversation(
+            name=body.name, created_by=user["id"], member_ids=body.member_ids,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"conversation_id": cid}
+
+
+@router.get("/conversations/{conversation_id}/messages")
+def list_messages(
+    conversation_id: int,
+    user: Annotated[dict, Depends(current_user)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    before_id: int | None = None,
+) -> dict:
+    try:
+        items = people_db.list_messages(
+            conversation_id=conversation_id,
+            viewer_id=user["id"],
+            limit=limit,
+            before_id=before_id,
+        )
+    except PermissionError:
+        raise HTTPException(403, "No sos miembro de esta conversation")
+    next_cursor = items[0]["id"] if items and len(items) >= limit else None
+    return {"items": items, "next_before_id": next_cursor}
+
+
+@router.post("/conversations/{conversation_id}/messages", status_code=201)
+@limiter.limit("120/minute")
+def send_message(
+    request: Request,
+    conversation_id: int,
+    body: MessageBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    try:
+        return people_db.post_message(
+            conversation_id=conversation_id,
+            author_id=user["id"],
+            content=body.content,
+            image_url=body.image_url,
+        )
+    except PermissionError:
+        raise HTTPException(403, "No sos miembro de esta conversation")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/conversations/{conversation_id}/read")
+def mark_conv_read(
+    conversation_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    people_db.mark_conversation_read(conversation_id=conversation_id, user_id=user["id"])
+    return {"ok": True}
+
+
+# ============================================================
+# Notifications / Inbox
+# ============================================================
+
+@router.get("/notifications")
+def list_notifications(
+    user: Annotated[dict, Depends(current_user)],
+    unread_only: bool = False,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+) -> dict:
+    items = people_db.list_notifications(
+        user_id=user["id"], unread_only=unread_only, limit=limit,
+    )
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/notifications/badge")
+def notifications_badge(user: Annotated[dict, Depends(current_user)]) -> dict:
+    return people_db.unread_badge(user_id=user["id"])
+
+
+@router.post("/notifications/{notification_id}/read")
+def mark_notif_read(
+    notification_id: int,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    ok = people_db.mark_notification_read(
+        notification_id=notification_id, user_id=user["id"],
+    )
+    return {"ok": ok}
+
+
+@router.post("/notifications/read-all")
+def mark_all_read(user: Annotated[dict, Depends(current_user)]) -> dict:
+    n = people_db.mark_all_notifications_read(user_id=user["id"])
+    return {"marked": n}

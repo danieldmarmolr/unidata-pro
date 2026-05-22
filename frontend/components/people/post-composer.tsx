@@ -1,33 +1,68 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Image as ImageIcon, Award, Megaphone, Send, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Image as ImageIcon, Award, Send, X, ChevronDown } from "lucide-react";
 import { api, getUser } from "@/lib/api";
 import { Avatar } from "./avatar";
 import { KudoModal } from "./kudo-modal";
+import { MentionTextarea } from "./mention-textarea";
+import { cn } from "@/lib/utils";
+import type { Space } from "./types";
 
-export function PostComposer({ canPin }: { canPin: boolean }) {
+export function PostComposer({
+  canPin,
+  forceSpaceId,
+}: {
+  canPin: boolean;
+  forceSpaceId?: number;
+}) {
   const qc = useQueryClient();
   const me = getUser();
   const [text, setText] = useState("");
+  const [mentions, setMentions] = useState<number[]>([]);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [showImageInput, setShowImageInput] = useState(false);
   const [kudoOpen, setKudoOpen] = useState(false);
+  const [spaceId, setSpaceId] = useState<number | null>(forceSpaceId ?? null);
+  const [spacePickerOpen, setSpacePickerOpen] = useState(false);
+
+  const { data: spaces } = useQuery<{ items: Space[] }>({
+    queryKey: ["people-spaces"],
+    queryFn: () => api("/api/people/spaces"),
+    staleTime: 5 * 60_000,
+  });
+
+  // Por defecto, primer espacio del viewer (random suele ser el primero)
+  const effectiveSpaceId = spaceId ??
+    spaces?.items?.find((s) => s.slug === "random")?.id ??
+    spaces?.items?.[0]?.id ??
+    null;
+  const effectiveSpace = spaces?.items?.find((s) => s.id === effectiveSpaceId);
 
   const mut = useMutation({
     mutationFn: () =>
       api("/api/people/feed", {
         method: "POST",
-        body: JSON.stringify({ content: text, image_url: imageUrl }),
+        body: JSON.stringify({
+          content: text,
+          image_url: imageUrl,
+          space_id: effectiveSpaceId,
+          mention_user_ids: mentions,
+        }),
       }),
     onSuccess: () => {
       setText("");
+      setMentions([]);
       setImageUrl(null);
       setShowImageInput(false);
       qc.invalidateQueries({ queryKey: ["people-feed"] });
+      qc.invalidateQueries({ queryKey: ["people-spaces"] });
     },
   });
+
+  const isAdminPolicySpace = effectiveSpace?.posting_policy === "admins_only";
+  const blockedByPolicy = isAdminPolicySpace && !canPin;
 
   return (
     <>
@@ -35,12 +70,44 @@ export function PostComposer({ canPin }: { canPin: boolean }) {
         <div className="flex gap-3">
           <Avatar name={me?.name ?? "?"} size="md" />
           <div className="flex-1">
-            <textarea
+            {/* Space picker chip */}
+            {!forceSpaceId && spaces?.items && spaces.items.length > 0 && (
+              <div className="mb-2 relative">
+                <button
+                  type="button"
+                  onClick={() => setSpacePickerOpen((v) => !v)}
+                  className="inline-flex items-center gap-1.5 text-xs bg-bg-muted hover:bg-border border border-border rounded-full px-2.5 py-1 transition"
+                >
+                  <span>{effectiveSpace?.emoji ?? "💬"}</span>
+                  <span className="font-semibold">{effectiveSpace?.name ?? "Espacio"}</span>
+                  <ChevronDown size={12} className="text-text-muted" />
+                </button>
+                {spacePickerOpen && (
+                  <SpacePicker
+                    spaces={spaces.items}
+                    currentId={effectiveSpaceId}
+                    onPick={(id) => {
+                      setSpaceId(id);
+                      setSpacePickerOpen(false);
+                    }}
+                    onClose={() => setSpacePickerOpen(false)}
+                  />
+                )}
+              </div>
+            )}
+
+            <MentionTextarea
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={`Que esta pasando, ${me?.name?.split(" ")[0] ?? "vos"}?`}
+              onChange={(v, ids) => {
+                setText(v);
+                setMentions(ids);
+              }}
+              placeholder={
+                blockedByPolicy
+                  ? `Solo admin/People puede postear en ${effectiveSpace?.name}`
+                  : `Que esta pasando, ${me?.name?.split(" ")[0] ?? "vos"}? Usa @ para mencionar.`
+              }
               rows={2}
-              className="w-full bg-bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none"
             />
 
             {showImageInput && (
@@ -76,7 +143,7 @@ export function PostComposer({ canPin }: { canPin: boolean }) {
               </div>
             )}
 
-            <div className="flex items-center justify-between mt-3">
+            <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
               <div className="flex items-center gap-1 text-xs text-text-muted">
                 <button
                   type="button"
@@ -92,16 +159,16 @@ export function PostComposer({ canPin }: { canPin: boolean }) {
                 >
                   <Award size={14} /> Dar kudos
                 </button>
-                {canPin && text.trim() && (
-                  <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-violet-700">
-                    <Megaphone size={11} /> Despues de publicar lo pineas con el menu
+                {mentions.length > 0 && (
+                  <span className="ml-1 text-[10px] text-primary font-semibold">
+                    {mentions.length} {mentions.length === 1 ? "mencion" : "menciones"}
                   </span>
                 )}
               </div>
 
               <button
                 onClick={() => text.trim() && mut.mutate()}
-                disabled={!text.trim() || mut.isPending}
+                disabled={!text.trim() || mut.isPending || blockedByPolicy}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-primary text-white text-sm font-semibold rounded-full hover:opacity-90 disabled:opacity-40 transition"
               >
                 <Send size={14} />
@@ -114,5 +181,72 @@ export function PostComposer({ canPin }: { canPin: boolean }) {
 
       {kudoOpen && <KudoModal onClose={() => setKudoOpen(false)} />}
     </>
+  );
+}
+
+function SpacePicker({
+  spaces,
+  currentId,
+  onPick,
+  onClose,
+}: {
+  spaces: Space[];
+  currentId: number | null;
+  onPick: (id: number) => void;
+  onClose: () => void;
+}) {
+  const globals = spaces.filter((s) => s.kind === "global");
+  const areas = spaces.filter((s) => s.kind === "area");
+  const customs = spaces.filter((s) => s.kind === "custom");
+
+  return (
+    <div
+      className="absolute left-0 top-full mt-1 bg-surface border border-border rounded-lg shadow-lg z-30 w-72 max-h-80 overflow-y-auto py-1"
+      onMouseLeave={onClose}
+    >
+      <PickerGroup title="Globales" spaces={globals} currentId={currentId} onPick={onPick} />
+      <PickerGroup title="Areas" spaces={areas} currentId={currentId} onPick={onPick} />
+      {customs.length > 0 && (
+        <PickerGroup title="Otros" spaces={customs} currentId={currentId} onPick={onPick} />
+      )}
+    </div>
+  );
+}
+
+function PickerGroup({
+  title,
+  spaces,
+  currentId,
+  onPick,
+}: {
+  title: string;
+  spaces: Space[];
+  currentId: number | null;
+  onPick: (id: number) => void;
+}) {
+  if (spaces.length === 0) return null;
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted px-3 pt-2 pb-1">
+        {title}
+      </div>
+      {spaces.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          onClick={() => onPick(s.id)}
+          className={cn(
+            "w-full text-left flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-bg-muted transition",
+            currentId === s.id && "bg-primary/10 text-primary font-semibold",
+          )}
+        >
+          <span>{s.emoji}</span>
+          <span className="flex-1 truncate">{s.name}</span>
+          {s.posting_policy === "admins_only" && (
+            <span className="text-[9px] text-text-muted/70 uppercase">solo admin</span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }

@@ -2,18 +2,40 @@
 People — modulo social interno (Humand-like).
 
 Tablas:
+  people_spaces         -> canales/espacios (1 por area + globales fijos)
   people_posts          -> feed (posts, anuncios pinneados, soft-delete)
-  people_post_reactions -> emoji reactions sobre posts y comentarios
+  people_post_reactions -> emoji reactions sobre posts
   people_post_comments  -> comentarios sobre un post
   people_post_reads     -> confirmacion de lectura de anuncios
+  people_post_mentions  -> @menciones en posts/comments
   people_kudos          -> reconocimientos peer-to-peer (linkeados a un value)
   people_values         -> valores de empresa (configurables por admin/People)
+  people_conversations  -> DMs 1:1 y grupos ad-hoc
+  people_conv_members   -> miembros + last_read_at por conversation
+  people_messages       -> mensajes en DM
+  people_notifications  -> inbox unificada
 
 Reglas:
-- Cualquier user activo puede crear posts y comentar.
-- Solo el autor o un admin/People puede editar/borrar su post o comentario.
+- Cualquier user activo crea posts, comenta, reacciona, da kudos, DMea.
+- Solo el autor o admin/People puede editar/borrar su post o comentario.
 - Solo gerencia/admin/People puede pinear/despinear anuncios.
-- Cada kudo crea automaticamente un post anclado al feed para visibilidad.
+- Cada kudo crea automaticamente un post anclado al feed.
+
+Espacios:
+- 10 espacios kind='area' seedeados (1 por area operativa)
+- 3 espacios kind='global' seedeados (anuncios, random, cumples)
+- Politica de posteo por espacio:
+    - anuncios  -> solo admin/gerencia/People (todos leen)
+    - random    -> todos
+    - cumples   -> todos (auto-post de cumples/aniv del dia)
+    - area      -> todos (politica abierta para colaboracion cross-area)
+
+Notificaciones disparadas:
+- @mention en post o comment   -> notif a cada mencionado (kind=mention)
+- kudo recibido                -> notif al destinatario (kind=kudo)
+- comment en un post propio    -> notif al autor del post (kind=comment)
+- nuevo DM message             -> notif a los demas miembros (kind=dm)
+- post pineado con read_ack    -> notif a todos los users activos (kind=announcement)
 """
 from __future__ import annotations
 
@@ -27,6 +49,15 @@ log = logging.getLogger("unidata.people")
 
 _LOCK = threading.RLock()
 _INITIALIZED = False
+
+
+# Espacios globales fijos (kind='global'). Las areas se generan dinamicamente.
+GLOBAL_SPACES_SEED: list[tuple[str, str, str, str, str, str]] = [
+    # (slug, name, emoji, color, description, posting_policy)
+    ("anuncios", "Anuncios",  "📣", "#7a3eae", "Comunicaciones oficiales y posts pineables", "admins_only"),
+    ("random",   "Random",    "🌀", "#0ea5e9", "Charla libre, memes, watercooler", "everyone"),
+    ("cumples",  "Cumples",   "🎂", "#f59e0b", "Cumpleanos y aniversarios del equipo", "everyone"),
+]
 
 
 # Valores default sembrados si la tabla esta vacia
@@ -49,6 +80,26 @@ def init() -> None:
         if _INITIALIZED:
             return
         with get_conn() as c, c.cursor() as cur:
+            # --- people_spaces (canales / espacios)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_spaces (
+                    id              BIGSERIAL PRIMARY KEY,
+                    slug            TEXT NOT NULL UNIQUE,
+                    name            TEXT NOT NULL,
+                    kind            TEXT NOT NULL CHECK (kind IN ('area','global','custom')),
+                    area_id         BIGINT REFERENCES areas(id) ON DELETE CASCADE,
+                    emoji           TEXT NOT NULL DEFAULT '💬',
+                    color           TEXT NOT NULL DEFAULT '#7a3eae',
+                    description     TEXT NOT NULL DEFAULT '',
+                    posting_policy  TEXT NOT NULL DEFAULT 'everyone'
+                                    CHECK (posting_policy IN ('everyone','admins_only','area_members')),
+                    sort_order      INT NOT NULL DEFAULT 0,
+                    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_people_spaces_kind ON people_spaces(kind, sort_order)")
+
             # --- people_values
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS people_values (
@@ -69,6 +120,7 @@ def init() -> None:
                 CREATE TABLE IF NOT EXISTS people_posts (
                     id                BIGSERIAL PRIMARY KEY,
                     author_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    space_id          BIGINT REFERENCES people_spaces(id) ON DELETE SET NULL,
                     content           TEXT NOT NULL,
                     image_url         TEXT,
                     is_announcement   BOOLEAN NOT NULL DEFAULT FALSE,
@@ -82,9 +134,18 @@ def init() -> None:
                     deleted_at        TIMESTAMPTZ
                 )
             """)
+            # Migracion idempotente: agregar space_id a tablas existentes
+            cur.execute(
+                "ALTER TABLE people_posts "
+                "ADD COLUMN IF NOT EXISTS space_id BIGINT REFERENCES people_spaces(id) ON DELETE SET NULL"
+            )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_people_posts_feed "
                 "ON people_posts (created_at DESC) WHERE deleted_at IS NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_posts_space "
+                "ON people_posts (space_id, created_at DESC) WHERE deleted_at IS NULL"
             )
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_people_posts_pinned "
@@ -149,6 +210,95 @@ def init() -> None:
                 "ON people_kudos (from_user_id, created_at DESC)"
             )
 
+            # --- people_post_mentions (menciones en posts/comments)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_post_mentions (
+                    id                  BIGSERIAL PRIMARY KEY,
+                    post_id             BIGINT REFERENCES people_posts(id) ON DELETE CASCADE,
+                    comment_id          BIGINT REFERENCES people_post_comments(id) ON DELETE CASCADE,
+                    mentioned_user_id   BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    mentioner_user_id   BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CHECK ((post_id IS NULL) <> (comment_id IS NULL))
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_mentions_user "
+                "ON people_post_mentions (mentioned_user_id, created_at DESC)"
+            )
+
+            # --- people_conversations (DMs 1:1 + grupos)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_conversations (
+                    id              BIGSERIAL PRIMARY KEY,
+                    kind            TEXT NOT NULL CHECK (kind IN ('dm','group')),
+                    name            TEXT,
+                    created_by      BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_conv_last "
+                "ON people_conversations (last_message_at DESC)"
+            )
+
+            # --- people_conversation_members
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_conversation_members (
+                    conversation_id BIGINT NOT NULL REFERENCES people_conversations(id) ON DELETE CASCADE,
+                    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    joined_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    last_read_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (conversation_id, user_id)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_conv_members_user "
+                "ON people_conversation_members (user_id, conversation_id)"
+            )
+
+            # --- people_messages
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_messages (
+                    id              BIGSERIAL PRIMARY KEY,
+                    conversation_id BIGINT NOT NULL REFERENCES people_conversations(id) ON DELETE CASCADE,
+                    author_id       BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    content         TEXT NOT NULL,
+                    image_url       TEXT,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    deleted_at      TIMESTAMPTZ
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_messages_conv "
+                "ON people_messages (conversation_id, created_at DESC) WHERE deleted_at IS NULL"
+            )
+
+            # --- people_notifications (inbox unificado)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS people_notifications (
+                    id              BIGSERIAL PRIMARY KEY,
+                    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    kind            TEXT NOT NULL,
+                    actor_user_id   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+                    source_kind     TEXT,
+                    source_id       BIGINT,
+                    preview         TEXT,
+                    link            TEXT,
+                    read_at         TIMESTAMPTZ,
+                    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_notif_unread "
+                "ON people_notifications (user_id, created_at DESC) WHERE read_at IS NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_people_notif_all "
+                "ON people_notifications (user_id, created_at DESC)"
+            )
+
             # Seed valores si vacio
             cur.execute("SELECT COUNT(*) AS n FROM people_values")
             n = cur.fetchone()["n"]
@@ -162,6 +312,50 @@ def init() -> None:
                         (slug, name, emoji, color, desc, i),
                     )
                 log.info("people_values seedeados: %d", len(VALUES_SEED))
+
+            # Seed espacios: 3 globales + 1 por cada area existente.
+            # Idempotente: solo inserta los slugs que faltan.
+            for i, (slug, name, emoji, color, desc, policy) in enumerate(GLOBAL_SPACES_SEED):
+                cur.execute("SELECT 1 FROM people_spaces WHERE slug = %s", (slug,))
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """
+                        INSERT INTO people_spaces (slug, name, kind, emoji, color, description, posting_policy, sort_order)
+                        VALUES (%s, %s, 'global', %s, %s, %s, %s, %s)
+                        """,
+                        (slug, name, emoji, color, desc, policy, i),
+                    )
+
+            # Espacios kind='area' (1 por area operativa). Slug = 'area-<slug-area>'.
+            cur.execute("SELECT id, slug, name, color, sort_order FROM areas ORDER BY sort_order")
+            area_rows = cur.fetchall()
+            base_order = 100  # despues de los globales
+            for ar in area_rows:
+                space_slug = f"area-{ar['slug']}"
+                cur.execute("SELECT 1 FROM people_spaces WHERE slug = %s", (space_slug,))
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """
+                        INSERT INTO people_spaces (slug, name, kind, area_id, emoji, color, description, posting_policy, sort_order)
+                        VALUES (%s, %s, 'area', %s, %s, %s, %s, 'everyone', %s)
+                        """,
+                        (space_slug, ar["name"], ar["id"], "💬", ar["color"],
+                         f"Espacio del area {ar['name']}", base_order + ar["sort_order"]),
+                    )
+            log.info("people_spaces seedeados (idempotente): %d globales + %d areas",
+                     len(GLOBAL_SPACES_SEED), len(area_rows))
+
+            # Backfill: posts existentes sin space_id van a 'random'
+            cur.execute("SELECT id FROM people_spaces WHERE slug = 'random'")
+            random_row = cur.fetchone()
+            if random_row:
+                cur.execute(
+                    "UPDATE people_posts SET space_id = %s WHERE space_id IS NULL",
+                    (random_row["id"],),
+                )
+                # log opcional de cuantos posts se movieron
+                if cur.rowcount > 0:
+                    log.info("backfill posts->random: %d posts", cur.rowcount)
 
         _INITIALIZED = True
 
@@ -320,15 +514,11 @@ def list_feed(
     viewer_id: int,
     limit: int = 30,
     before_id: int | None = None,
+    space_id: int | None = None,
 ) -> list[dict]:
     """Lista de posts (pinned arriba siempre + resto por fecha desc).
 
-    Trae info denormalizada para evitar N+1 en el cliente:
-    - autor (id/name/avatar/area)
-    - reaction summary (lista de [emoji, count, has_reacted])
-    - comment_count
-    - has_read (para anuncios)
-    - kudo info si el post fue creado por un kudo
+    Si space_id viene, filtra al espacio. Sin filtro = todos los espacios.
     """
     init()
     with get_conn() as c, c.cursor() as cur:
@@ -337,18 +527,27 @@ def list_feed(
         if before_id is not None:
             cursor_clause = "AND p.id < %s"
             params.append(before_id)
+        space_clause = ""
+        if space_id is not None:
+            space_clause = "AND p.space_id = %s"
+            params.append(int(space_id))
 
-        # Estrategia: primero pinned activos, despues por id desc.
-        # Devolvemos en dos queries por simplicidad de orden / paginacion.
-        # En pagina 1 (sin before_id) trae pinned + ultimos N.
-        # En siguientes paginas solo trae no-pinned mas viejos.
+        # Para los pinned usamos params separados (no incluyen cursor)
+        pinned_params: list = [viewer_id]
+        pinned_space_clause = ""
+        if space_id is not None:
+            pinned_space_clause = "AND p.space_id = %s"
+            pinned_params.append(int(space_id))
+
         pinned_rows: list[dict] = []
         if before_id is None:
             cur.execute(
-                """
+                f"""
                 SELECT p.*, u.name AS author_name, u.avatar_url AS author_avatar,
                        u.job_title AS author_job, a.slug AS author_area_slug,
                        a.name AS author_area_name, a.color AS author_area_color,
+                       sp.slug AS space_slug, sp.name AS space_name,
+                       sp.emoji AS space_emoji, sp.color AS space_color, sp.kind AS space_kind,
                        (SELECT COUNT(*) FROM people_post_comments c
                           WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comment_count,
                        EXISTS(SELECT 1 FROM people_post_reads pr
@@ -356,12 +555,14 @@ def list_feed(
                   FROM people_posts p
                   JOIN users u ON u.id = p.author_id
                   LEFT JOIN areas a ON a.id = u.area_id
+                  LEFT JOIN people_spaces sp ON sp.id = p.space_id
                  WHERE p.deleted_at IS NULL
                    AND p.pinned = TRUE
                    AND (p.pinned_until IS NULL OR p.pinned_until > NOW())
+                   {pinned_space_clause}
                  ORDER BY p.created_at DESC
                 """,
-                [viewer_id],
+                pinned_params,
             )
             pinned_rows = [dict(r) for r in cur.fetchall()]
 
@@ -370,6 +571,8 @@ def list_feed(
             SELECT p.*, u.name AS author_name, u.avatar_url AS author_avatar,
                    u.job_title AS author_job, a.slug AS author_area_slug,
                    a.name AS author_area_name, a.color AS author_area_color,
+                   sp.slug AS space_slug, sp.name AS space_name,
+                   sp.emoji AS space_emoji, sp.color AS space_color, sp.kind AS space_kind,
                    (SELECT COUNT(*) FROM people_post_comments c
                       WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comment_count,
                    EXISTS(SELECT 1 FROM people_post_reads pr
@@ -377,9 +580,11 @@ def list_feed(
               FROM people_posts p
               JOIN users u ON u.id = p.author_id
               LEFT JOIN areas a ON a.id = u.area_id
+              LEFT JOIN people_spaces sp ON sp.id = p.space_id
              WHERE p.deleted_at IS NULL
                AND (p.pinned = FALSE OR p.pinned_until <= NOW())
                {cursor_clause}
+               {space_clause}
              ORDER BY p.id DESC
              LIMIT %s
             """,
@@ -469,26 +674,60 @@ def create_post(
     pinned_by: int | None = None,
     requires_read_ack: bool = False,
     kudo_id: int | None = None,
+    space_id: int | None = None,
+    mention_user_ids: list[int] | None = None,
+    author_name: str | None = None,
 ) -> dict:
     init()
     if not content or not content.strip():
         raise ValueError("content vacio")
+    # Default space si no viene: random (creado en seed)
+    if space_id is None:
+        space_id = _get_space_id_by_slug("random")
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
             """
             INSERT INTO people_posts
-              (author_id, content, image_url, is_announcement, pinned, pinned_until,
+              (author_id, space_id, content, image_url, is_announcement, pinned, pinned_until,
                pinned_by, requires_read_ack, kudo_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (
-                author_id, content.strip(), image_url,
+                author_id, space_id, content.strip(), image_url,
                 is_announcement, pinned, pinned_until,
                 pinned_by, requires_read_ack, kudo_id,
             ),
         )
-        return _post_to_dict(cur.fetchone())
+        post = _post_to_dict(cur.fetchone())
+
+        # Registrar menciones + disparar notifs
+        if mention_user_ids:
+            preview = content.strip()[:140]
+            link = f"/dashboard/people?post_id={post['id']}"
+            for mid in set(mention_user_ids):
+                if mid == author_id:
+                    continue  # no self-mention notif
+                cur.execute(
+                    "INSERT INTO people_post_mentions (post_id, mentioned_user_id, mentioner_user_id) "
+                    "VALUES (%s, %s, %s)",
+                    (post["id"], mid, author_id),
+                )
+                cur.execute(
+                    """INSERT INTO people_notifications
+                       (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+                       VALUES (%s, 'mention', %s, 'post', %s, %s, %s)""",
+                    (mid, author_id, post["id"], preview, link),
+                )
+    return post
+
+
+def _get_space_id_by_slug(slug: str) -> int | None:
+    """Cache-free lookup. Llamado pocas veces (creacion de posts)."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT id FROM people_spaces WHERE slug = %s", (slug,))
+        r = cur.fetchone()
+    return r["id"] if r else None
 
 
 def get_post(post_id: int) -> dict | None:
@@ -552,6 +791,20 @@ def pin_post(post_id: int, *, by_user_id: int, pinned_until: str | None = None, 
             (pinned_until, by_user_id, requires_read_ack, post_id),
         )
         row = cur.fetchone()
+        if row and requires_read_ack:
+            # Notifica a todos los users activos (excepto el que pinea)
+            preview = (row["content"] or "")[:140]
+            link = f"/dashboard/people?post_id={post_id}"
+            cur.execute(
+                """
+                INSERT INTO people_notifications
+                   (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+                SELECT u.id, 'announcement', %s, 'post', %s, %s, %s
+                  FROM users u
+                 WHERE u.is_active = TRUE AND u.id <> %s
+                """,
+                (by_user_id, post_id, preview, link, by_user_id),
+            )
     return _post_to_dict(row) if row else None
 
 
@@ -670,7 +923,13 @@ def list_comments(post_id: int) -> list[dict]:
         ]
 
 
-def create_comment(post_id: int, author_id: int, content: str) -> dict:
+def create_comment(
+    post_id: int,
+    author_id: int,
+    content: str,
+    *,
+    mention_user_ids: list[int] | None = None,
+) -> dict:
     init()
     if not content or not content.strip():
         raise ValueError("content vacio")
@@ -682,7 +941,42 @@ def create_comment(post_id: int, author_id: int, content: str) -> dict:
         )
         row = dict(cur.fetchone())
         row["created_at"] = _iso(row.get("created_at"))
-        return row
+        cid = row["id"]
+        preview = content.strip()[:140]
+        link = f"/dashboard/people?post_id={post_id}"
+
+        # Notif al autor del post (si no es el mismo que comenta)
+        cur.execute(
+            "SELECT author_id FROM people_posts WHERE id = %s AND deleted_at IS NULL",
+            (post_id,),
+        )
+        post_row = cur.fetchone()
+        if post_row and post_row["author_id"] != author_id:
+            cur.execute(
+                """INSERT INTO people_notifications
+                   (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+                   VALUES (%s, 'comment', %s, 'comment', %s, %s, %s)""",
+                (post_row["author_id"], author_id, cid, preview, link),
+            )
+
+        # Menciones en el comment
+        if mention_user_ids:
+            for mid in set(mention_user_ids):
+                if mid == author_id:
+                    continue
+                cur.execute(
+                    "INSERT INTO people_post_mentions (comment_id, mentioned_user_id, mentioner_user_id) "
+                    "VALUES (%s, %s, %s)",
+                    (cid, mid, author_id),
+                )
+                cur.execute(
+                    """INSERT INTO people_notifications
+                       (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+                       VALUES (%s, 'mention', %s, 'comment', %s, %s, %s)""",
+                    (mid, author_id, cid, preview, link),
+                )
+
+    return row
 
 
 def get_comment(comment_id: int) -> dict | None:
@@ -816,16 +1110,17 @@ def create_kudo(
 
         post_id = None
         if auto_post:
+            random_space = _get_space_id_by_slug_inline(cur, "random")
             content = f"reconocio a @{to_user['name']} por #{value_slug}"
             if message and message.strip():
                 content = content + "\n\n" + message.strip()
             cur.execute(
                 """
-                INSERT INTO people_posts (author_id, content, kudo_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO people_posts (author_id, content, kudo_id, space_id)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (from_user_id, content, kudo["id"]),
+                (from_user_id, content, kudo["id"], random_space),
             )
             post_id = cur.fetchone()["id"]
             cur.execute(
@@ -834,7 +1129,23 @@ def create_kudo(
             )
             kudo["post_id"] = post_id
 
+        # Notif al destinatario del kudo
+        preview = (message or "").strip()[:140] or f"#{value_slug}"
+        link = f"/dashboard/people/{to_user_id}"
+        cur.execute(
+            """INSERT INTO people_notifications
+               (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+               VALUES (%s, 'kudo', %s, 'kudo', %s, %s, %s)""",
+            (to_user_id, from_user_id, kudo["id"], preview, link),
+        )
+
     return kudo
+
+
+def _get_space_id_by_slug_inline(cur, slug: str) -> int | None:
+    cur.execute("SELECT id FROM people_spaces WHERE slug = %s", (slug,))
+    r = cur.fetchone()
+    return r["id"] if r else None
 
 
 def list_kudos(
@@ -936,3 +1247,409 @@ def _kudo_to_dict(row: dict) -> dict:
     if "created_at" in d:
         d["created_at"] = _iso(d.get("created_at"))
     return d
+
+
+# ============================================================
+# Spaces (canales)
+# ============================================================
+
+def list_spaces(*, viewer_id: int) -> list[dict]:
+    """Lista todos los espacios activos enriquecidos con:
+    - last_post_at: timestamp del ultimo post no borrado
+    - posts_count: total de posts no borrados
+    - is_default_for_viewer: True si el viewer pertenece al area del espacio
+    El cliente decide cuales mostrar como 'mios' vs 'otros'.
+    """
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        # Areas a las que pertenece el viewer (primaria + secundarias)
+        cur.execute("""
+            SELECT u.area_id AS primary_area
+              FROM users u WHERE u.id = %s
+        """, (viewer_id,))
+        urow = cur.fetchone()
+        primary_area = urow["primary_area"] if urow else None
+        cur.execute(
+            "SELECT area_id FROM user_areas WHERE user_id = %s",
+            (viewer_id,),
+        )
+        viewer_areas = set(r["area_id"] for r in cur.fetchall())
+        if primary_area:
+            viewer_areas.add(primary_area)
+
+        cur.execute("""
+            SELECT s.*,
+                   (SELECT MAX(p.created_at) FROM people_posts p
+                     WHERE p.space_id = s.id AND p.deleted_at IS NULL) AS last_post_at,
+                   (SELECT COUNT(*) FROM people_posts p
+                     WHERE p.space_id = s.id AND p.deleted_at IS NULL) AS posts_count
+              FROM people_spaces s
+             WHERE s.is_active = TRUE
+             ORDER BY s.kind, s.sort_order, s.name
+        """)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    out = []
+    for r in rows:
+        r["last_post_at"] = _iso(r.get("last_post_at"))
+        r["created_at"] = _iso(r.get("created_at"))
+        r["is_default_for_viewer"] = bool(
+            r.get("kind") == "global" or
+            (r.get("area_id") and r["area_id"] in viewer_areas)
+        )
+        out.append(r)
+    return out
+
+
+def get_space(space_id: int) -> dict | None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("SELECT * FROM people_spaces WHERE id = %s", (space_id,))
+        r = cur.fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["created_at"] = _iso(d.get("created_at"))
+    return d
+
+
+def can_post_in_space(space: dict, *, is_privileged: bool, in_people: bool) -> bool:
+    """Devuelve True si el viewer puede postear en el espacio dado."""
+    policy = space.get("posting_policy", "everyone")
+    if policy == "everyone":
+        return True
+    if policy == "admins_only":
+        return is_privileged or in_people
+    if policy == "area_members":
+        # Politica futura para spaces custom de equipos
+        return True
+    return False
+
+
+# ============================================================
+# Mentions search (autocompletar)
+# ============================================================
+
+def search_users_for_mention(query: str, *, limit: int = 8) -> list[dict]:
+    """Devuelve users activos cuyo nombre/email matchea con la query.
+
+    Pensado para el autocompletar de @ en composer.
+    """
+    init()
+    q = (query or "").strip()
+    if not q:
+        # Fallback: primeros N alfabeticos
+        with get_conn() as c, c.cursor() as cur:
+            cur.execute("""
+                SELECT u.id, u.name, u.email, u.avatar_url, u.job_title,
+                       a.slug AS area_slug, a.color AS area_color, a.name AS area_name
+                  FROM users u
+                  LEFT JOIN areas a ON a.id = u.area_id
+                 WHERE u.is_active = TRUE
+                 ORDER BY u.name ASC
+                 LIMIT %s
+            """, (limit,))
+            return [dict(r) for r in cur.fetchall()]
+    pat = f"%{q.lower()}%"
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT u.id, u.name, u.email, u.avatar_url, u.job_title,
+                   a.slug AS area_slug, a.color AS area_color, a.name AS area_name
+              FROM users u
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE u.is_active = TRUE
+               AND (LOWER(u.name) LIKE %s OR LOWER(u.email) LIKE %s)
+             ORDER BY
+               CASE WHEN LOWER(u.name) LIKE %s THEN 0 ELSE 1 END,
+               u.name ASC
+             LIMIT %s
+        """, (pat, pat, pat, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+
+# ============================================================
+# DMs (conversations + messages)
+# ============================================================
+
+def list_my_conversations(*, user_id: int) -> list[dict]:
+    """Conversations del user con preview del ultimo mensaje + unread count."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT c.id, c.kind, c.name, c.last_message_at, c.created_at, c.created_by,
+                   cm.last_read_at,
+                   (SELECT m.content FROM people_messages m
+                     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                     ORDER BY m.created_at DESC LIMIT 1) AS last_preview,
+                   (SELECT m.author_id FROM people_messages m
+                     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                     ORDER BY m.created_at DESC LIMIT 1) AS last_author_id,
+                   (SELECT COUNT(*) FROM people_messages m
+                     WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                       AND m.created_at > cm.last_read_at
+                       AND m.author_id <> %s) AS unread_count
+              FROM people_conversations c
+              JOIN people_conversation_members cm ON cm.conversation_id = c.id
+             WHERE cm.user_id = %s
+             ORDER BY c.last_message_at DESC
+        """, (user_id, user_id))
+        convs = [dict(r) for r in cur.fetchall()]
+        if not convs:
+            return []
+        ids = [c["id"] for c in convs]
+        cur.execute("""
+            SELECT cm.conversation_id, u.id, u.name, u.email, u.avatar_url, u.job_title,
+                   a.color AS area_color, a.name AS area_name
+              FROM people_conversation_members cm
+              JOIN users u ON u.id = cm.user_id
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE cm.conversation_id = ANY(%s)
+        """, (ids,))
+        members_by_conv: dict[int, list[dict]] = {}
+        for r in cur.fetchall():
+            d = dict(r)
+            cid = d.pop("conversation_id")
+            members_by_conv.setdefault(cid, []).append(d)
+
+    out = []
+    for c in convs:
+        c["last_message_at"] = _iso(c.get("last_message_at"))
+        c["created_at"] = _iso(c.get("created_at"))
+        c["last_read_at"] = _iso(c.get("last_read_at"))
+        c["members"] = members_by_conv.get(c["id"], [])
+        out.append(c)
+    return out
+
+
+def get_or_create_dm(*, user_a: int, user_b: int) -> int:
+    """DM 1:1: si ya existe, devuelve el id; si no, lo crea con ambos miembros."""
+    init()
+    if user_a == user_b:
+        raise ValueError("no podes DMearte a vos mismo")
+    with get_conn() as c, c.cursor() as cur:
+        # Buscar DM existente entre ambos
+        cur.execute("""
+            SELECT c.id FROM people_conversations c
+             WHERE c.kind = 'dm'
+               AND EXISTS(SELECT 1 FROM people_conversation_members
+                          WHERE conversation_id = c.id AND user_id = %s)
+               AND EXISTS(SELECT 1 FROM people_conversation_members
+                          WHERE conversation_id = c.id AND user_id = %s)
+               AND (SELECT COUNT(*) FROM people_conversation_members
+                     WHERE conversation_id = c.id) = 2
+             LIMIT 1
+        """, (user_a, user_b))
+        existing = cur.fetchone()
+        if existing:
+            return existing["id"]
+        cur.execute(
+            "INSERT INTO people_conversations (kind, created_by) VALUES ('dm', %s) RETURNING id",
+            (user_a,),
+        )
+        cid = cur.fetchone()["id"]
+        for uid in (user_a, user_b):
+            cur.execute(
+                "INSERT INTO people_conversation_members (conversation_id, user_id) "
+                "VALUES (%s, %s)",
+                (cid, uid),
+            )
+    return cid
+
+
+def create_group_conversation(*, name: str, created_by: int, member_ids: list[int]) -> int:
+    init()
+    if not member_ids:
+        raise ValueError("member_ids vacio")
+    members = set(int(x) for x in member_ids)
+    members.add(created_by)
+    if len(members) < 2:
+        raise ValueError("un grupo necesita al menos 2 miembros")
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO people_conversations (kind, name, created_by) VALUES ('group', %s, %s) RETURNING id",
+            ((name or "").strip() or None, created_by),
+        )
+        cid = cur.fetchone()["id"]
+        for uid in members:
+            cur.execute(
+                "INSERT INTO people_conversation_members (conversation_id, user_id) "
+                "VALUES (%s, %s)",
+                (cid, uid),
+            )
+    return cid
+
+
+def is_member_of_conversation(conversation_id: int, user_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM people_conversation_members "
+            "WHERE conversation_id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        )
+        return cur.fetchone() is not None
+
+
+def list_messages(*, conversation_id: int, viewer_id: int, limit: int = 50, before_id: int | None = None) -> list[dict]:
+    """Mensajes de una conversation (mas nuevos primero invertidos -> mas viejos arriba)."""
+    init()
+    if not is_member_of_conversation(conversation_id, viewer_id):
+        raise PermissionError("no sos miembro de esta conversation")
+    params: list = [conversation_id]
+    extra = ""
+    if before_id is not None:
+        extra = "AND m.id < %s"
+        params.append(int(before_id))
+    params.append(int(limit))
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT m.*, u.name AS author_name, u.avatar_url AS author_avatar,
+                   a.color AS author_area_color
+              FROM people_messages m
+              JOIN users u ON u.id = m.author_id
+              LEFT JOIN areas a ON a.id = u.area_id
+             WHERE m.conversation_id = %s
+               AND m.deleted_at IS NULL
+               {extra}
+             ORDER BY m.id DESC
+             LIMIT %s
+            """,
+            params,
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["created_at"] = _iso(r.get("created_at"))
+    rows.reverse()  # ascending para el render
+    return rows
+
+
+def post_message(*, conversation_id: int, author_id: int, content: str, image_url: str | None = None) -> dict:
+    init()
+    if not is_member_of_conversation(conversation_id, author_id):
+        raise PermissionError("no sos miembro de esta conversation")
+    if not content or not content.strip():
+        raise ValueError("content vacio")
+    preview = content.strip()[:140]
+    link = f"/dashboard/people/dms?conversation_id={conversation_id}"
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "INSERT INTO people_messages (conversation_id, author_id, content, image_url) "
+            "VALUES (%s, %s, %s, %s) RETURNING *",
+            (conversation_id, author_id, content.strip(), image_url),
+        )
+        msg = dict(cur.fetchone())
+        msg["created_at"] = _iso(msg.get("created_at"))
+        # bump last_message_at + author's own last_read_at
+        cur.execute(
+            "UPDATE people_conversations SET last_message_at = NOW() WHERE id = %s",
+            (conversation_id,),
+        )
+        cur.execute(
+            "UPDATE people_conversation_members SET last_read_at = NOW() "
+            "WHERE conversation_id = %s AND user_id = %s",
+            (conversation_id, author_id),
+        )
+        # Notificar a los demas miembros
+        cur.execute(
+            """
+            INSERT INTO people_notifications
+               (user_id, kind, actor_user_id, source_kind, source_id, preview, link)
+            SELECT cm.user_id, 'dm', %s, 'message', %s, %s, %s
+              FROM people_conversation_members cm
+             WHERE cm.conversation_id = %s AND cm.user_id <> %s
+            """,
+            (author_id, msg["id"], preview, link, conversation_id, author_id),
+        )
+    return msg
+
+
+def mark_conversation_read(*, conversation_id: int, user_id: int) -> None:
+    init()
+    if not is_member_of_conversation(conversation_id, user_id):
+        return
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE people_conversation_members SET last_read_at = NOW() "
+            "WHERE conversation_id = %s AND user_id = %s",
+            (conversation_id, user_id),
+        )
+
+
+# ============================================================
+# Notifications
+# ============================================================
+
+def list_notifications(*, user_id: int, unread_only: bool = False, limit: int = 50) -> list[dict]:
+    init()
+    sql = """
+        SELECT n.*, u.name AS actor_name, u.avatar_url AS actor_avatar,
+               a.color AS actor_area_color
+          FROM people_notifications n
+          LEFT JOIN users u ON u.id = n.actor_user_id
+          LEFT JOIN areas a ON a.id = u.area_id
+         WHERE n.user_id = %s
+    """
+    params: list = [user_id]
+    if unread_only:
+        sql += " AND n.read_at IS NULL"
+    sql += " ORDER BY n.created_at DESC LIMIT %s"
+    params.append(int(limit))
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["created_at"] = _iso(r.get("created_at"))
+        r["read_at"] = _iso(r.get("read_at"))
+    return rows
+
+
+def unread_badge(*, user_id: int) -> dict:
+    """Solo el count, rapido para polling. Tambien devuelve count de DMs unread."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM people_notifications "
+            "WHERE user_id = %s AND read_at IS NULL",
+            (user_id,),
+        )
+        notif = cur.fetchone()["n"]
+        cur.execute(
+            """
+            SELECT COUNT(*) AS n
+              FROM people_conversation_members cm
+              JOIN people_conversations c ON c.id = cm.conversation_id
+             WHERE cm.user_id = %s
+               AND c.last_message_at > cm.last_read_at
+               AND EXISTS(SELECT 1 FROM people_messages m
+                          WHERE m.conversation_id = c.id
+                            AND m.author_id <> %s
+                            AND m.deleted_at IS NULL
+                            AND m.created_at > cm.last_read_at)
+            """,
+            (user_id, user_id),
+        )
+        dms = cur.fetchone()["n"]
+    return {"notifications_unread": int(notif), "dms_unread": int(dms), "total": int(notif) + int(dms)}
+
+
+def mark_notification_read(*, notification_id: int, user_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE people_notifications SET read_at = NOW() "
+            "WHERE id = %s AND user_id = %s AND read_at IS NULL RETURNING id",
+            (notification_id, user_id),
+        )
+        return cur.fetchone() is not None
+
+
+def mark_all_notifications_read(*, user_id: int) -> int:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE people_notifications SET read_at = NOW() "
+            "WHERE user_id = %s AND read_at IS NULL",
+            (user_id,),
+        )
+        return cur.rowcount or 0

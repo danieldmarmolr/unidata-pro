@@ -10,6 +10,7 @@ import {
 import { api, getUser } from "@/lib/api";
 import { Avatar } from "./avatar";
 import { cn } from "@/lib/utils";
+import { MentionTextarea, renderContentWithMentions } from "./mention-textarea";
 import type { FeedPost, FeedComment } from "./types";
 
 const QUICK_REACTIONS = ["👍", "❤️", "🎉", "🚀", "👏", "🔥"];
@@ -90,7 +91,20 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
             >
               {post.author_name}
             </Link>
-            {post.author_area_name && (
+            {post.space_name && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                style={{
+                  background: `${post.space_color}15`,
+                  color: post.space_color ?? "#666",
+                }}
+                title={`Espacio: ${post.space_name}`}
+              >
+                <span className="text-[10px]">{post.space_emoji}</span>
+                {post.space_name}
+              </span>
+            )}
+            {post.author_area_name && post.space_kind !== "area" && (
               <span
                 className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full"
                 style={{
@@ -195,7 +209,7 @@ export function PostCard({ post, canManage }: { post: FeedPost; canManage: boole
       {/* Content */}
       {(!post.kudo || post.kudo.message !== post.content.split("\n\n").pop()) && (
         <div className="mt-3 text-sm text-text whitespace-pre-wrap break-words">
-          {post.content}
+          {renderContentWithMentions(post.content)}
         </div>
       )}
 
@@ -308,6 +322,7 @@ function CommentSection({
 }) {
   const qc = useQueryClient();
   const me = getUser();
+  const [mentions, setMentions] = useState<number[]>([]);
   const { data } = useQuery<{ items: FeedComment[]; count: number }>({
     queryKey: ["people-feed-comments", postId],
     queryFn: () => api(`/api/people/feed/${postId}/comments`),
@@ -315,13 +330,14 @@ function CommentSection({
   });
 
   const createMut = useMutation({
-    mutationFn: (content: string) =>
+    mutationFn: () =>
       api<FeedComment>(`/api/people/feed/${postId}/comments`, {
         method: "POST",
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: commentText, mention_user_ids: mentions }),
       }),
     onSuccess: (c) => {
       setCommentText("");
+      setMentions([]);
       qc.invalidateQueries({ queryKey: ["people-feed-comments", postId] });
       onAdded(c);
     },
@@ -354,7 +370,9 @@ function CommentSection({
                 </Link>
                 <span className="text-[10px] text-text-muted">{timeAgo(c.created_at)}</span>
               </div>
-              <div className="text-xs text-text whitespace-pre-wrap break-words">{c.content}</div>
+              <div className="text-xs text-text whitespace-pre-wrap break-words">
+                {renderContentWithMentions(c.content)}
+              </div>
             </div>
             {(me?.id === c.author_id || me?.is_admin) && (
               <button
@@ -370,29 +388,34 @@ function CommentSection({
         </div>
       ))}
 
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (commentText.trim()) createMut.mutate(commentText);
-        }}
-        className="flex gap-2"
-      >
+      <div className="flex gap-2">
         <Avatar name={me?.name ?? "?"} size="sm" />
-        <input
-          type="text"
-          value={commentText}
-          onChange={(e) => setCommentText(e.target.value)}
-          placeholder="Escribi un comentario..."
-          className="flex-1 text-xs bg-bg-muted border border-border rounded-full px-3 py-2 focus:outline-none focus:border-primary"
-        />
+        <div className="flex-1">
+          <MentionTextarea
+            value={commentText}
+            onChange={(v, ids) => {
+              setCommentText(v);
+              setMentions(ids);
+            }}
+            placeholder="Comentar... Usa @ para mencionar"
+            rows={1}
+            className="text-xs"
+            onSubmit={() => {
+              if (commentText.trim()) createMut.mutate();
+            }}
+          />
+        </div>
         <button
-          type="submit"
+          type="button"
+          onClick={() => {
+            if (commentText.trim()) createMut.mutate();
+          }}
           disabled={!commentText.trim() || createMut.isPending}
-          className="px-3 py-2 bg-primary text-white rounded-full hover:opacity-90 disabled:opacity-40 transition"
+          className="px-3 py-2 bg-primary text-white rounded-full hover:opacity-90 disabled:opacity-40 transition self-end h-9"
         >
           <Send size={14} />
         </button>
-      </form>
+      </div>
     </div>
   );
 }
