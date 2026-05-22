@@ -427,6 +427,53 @@ def get_dropshipper_unified_orders(
     return result
 
 
+# Pool dedicado para queries paralelas del endpoint /full. 2 workers = detail
+# + unified-orders en paralelo. Module-level para no recrear el pool en cada
+# request.
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
+_FULL_POOL = _ThreadPoolExecutor(max_workers=2, thread_name_prefix="drop-full")
+
+
+@router.get("/dropshippers/{user_id}/full")
+def get_dropshipper_full(
+    user_id: int,
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+    orders_limit: Annotated[int, Query(ge=1, le=2000)] = 2000,
+) -> dict:
+    """Consolidado del Dropshipper 360: detail + unified_orders en paralelo.
+
+    Antes el frontend hacia 2 queries en cascada (detail luego unified-orders,
+    enabled: !!data) para llenar el Dropshipper 360 - sumaba ~1-1.5s de
+    latencia extra. Este endpoint corre las dos en paralelo y devuelve el
+    bundle completo, ahorrando un roundtrip.
+    """
+    require_area(user, ["ventas", "cs"])
+    cache_key = f"drop-full:{user_id}:{period}:{from_iso or ''}:{to_iso or ''}:{orders_limit}"
+    cached_val = _drop_unified_cache.get(cache_key)
+    if cached_val is not None:
+        return cached_val
+
+    f_detail = _FULL_POOL.submit(
+        dropshippers_svc.dropshipper_detail,
+        user_id, period=period, from_iso=from_iso, to_iso=to_iso,
+    )
+    f_orders = _FULL_POOL.submit(
+        dropshippers_svc.dropshipper_unified_orders,
+        user_id, limit=orders_limit, intent_id=None,
+    )
+    detail = f_detail.result()
+    orders = f_orders.result()
+    result = {
+        "detail": detail,
+        "orders": {"items": orders, "total": len(orders), "intent_id": None},
+    }
+    _drop_unified_cache[cache_key] = result
+    return result
+
+
 # ============================================================
 # Descarga de etiquetas de envio (PDF)
 # ============================================================

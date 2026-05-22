@@ -202,14 +202,20 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
 
-  const { data, isLoading, error } = useQuery<DropshipperDetail>({
-    queryKey: ["dropshipper", id, period, customFrom, customTo],
-    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}?${periodToQuery(period, customFrom, customTo)}`),
+  // Endpoint consolidado /full: detail + todas las ordenes en una sola request.
+  // El backend corre las 2 queries en paralelo (antes era cascada de 2 reqs HTTP).
+  const fullQuery = useQuery<{
+    detail: DropshipperDetail;
+    orders: { items: UnifiedOrder[]; total: number; intent_id: number | null };
+  }>({
+    queryKey: ["dropshipper-full", id, period, customFrom, customTo],
+    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/full?${periodToQuery(period, customFrom, customTo)}`),
     staleTime: 60_000,
   });
+  const data = fullQuery.data?.detail;
+  const isLoading = fullQuery.isLoading;
+  const error = fullQuery.error;
 
-  // Siempre cargamos TODAS las órdenes del dropshipper desde el endpoint dedicado
-  // (no usamos data?.unified_orders que viene con límite del detail).
   const [selectedIntent, setSelectedIntent] = useState<number | null>(null);
   const [channelFilter, setChannelFilter] = useState<"all" | "ml" | "tn">("all");
   const [comboFilter, setComboFilter] = useState<"all" | "combo" | "individual">("all");
@@ -221,13 +227,12 @@ export default function DropshipperPage({ params }: { params: Promise<{ id: stri
   const toggleExpand = (key: string) =>
     setExpandedOrders((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
-  // Query principal: todas las órdenes (sin filtro de intent)
-  const allOrdersQuery = useQuery<{ items: UnifiedOrder[]; total: number }>({
-    queryKey: ["dropshipper-unified-all", id],
-    queryFn: () => api(`/api/dashboards/dropshippers/${encodeURIComponent(id)}/unified-orders`),
-    enabled: !!data,
-    staleTime: 120_000,
-  });
+  const allOrdersQuery = {
+    data: fullQuery.data?.orders,
+    isLoading: fullQuery.isLoading,
+    isFetching: fullQuery.isFetching,
+    error: fullQuery.error,
+  };
 
   // Query para filtro por PaymentIntent específico
   const filteredQuery = useQuery<{ items: UnifiedOrder[]; total: number; intent_id: number }>({
