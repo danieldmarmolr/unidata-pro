@@ -5,6 +5,7 @@ import Link from "next/link";
 import { X, Download, ExternalLink } from "lucide-react";
 import { api } from "@/lib/api";
 import { ExportButtons } from "@/components/export-buttons";
+import { ActionableFooter } from "@/components/actionable-footer";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { WhatsAppPhone } from "@/components/whatsapp-phone";
 
@@ -68,6 +69,41 @@ export function CohortInlineTable({
       ? `/dashboard/dropshipper/${id}`
       : `/dashboard/customer/${id}`;
 
+  const targetIds = items
+    .map((r) => Number(r.customer_id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  const csvColumns = unit === "unidrop"
+    ? ["ID", "Dropshipper", "Email", "Telefono", "Ventas ML", "Ventas TN", "Revenue periodo", "Ult. venta", "Dias desde ult."]
+    : ["ID", "Cliente", "Email", "Telefono", "Ordenes (total)", "Ordenes (periodo)", "Revenue periodo", "Ult. compra", "Dias desde ult."];
+
+  const csvRows = items.map((r) =>
+    unit === "unidrop"
+      ? [r.customer_id, r.nombre, r.email || "", r.phone || "", r.ml_total ?? 0, r.tn_total ?? 0, r.revenue_periodo ?? 0, r.ultima_compra || "", r.dias_desde_ultima ?? ""]
+      : [r.customer_id, r.nombre, r.email || "", r.phone || "", r.ordenes_total ?? 0, r.ordenes_periodo ?? 0, r.revenue_periodo ?? 0, r.ultima_compra || "", r.dias_desde_ultima ?? ""]
+  );
+
+  const suggestedAction = (() => {
+    switch (state) {
+      case "posible_churn":
+        return "Contactar por WhatsApp para reactivar. Recordar producto / ofrecer cupon / preguntar feedback. Plazo: 7 dias.";
+      case "perdidos":
+        return "Campania de winback. Asunto: 'Te extranamos' + descuento agresivo. Si no responde en 14 dias, marcar como churn confirmado.";
+      case "nuevo":
+        return "Onboarding: agradecer la compra, asegurar buena experiencia, pedir review.";
+      case "segunda_compra":
+        return "Reforzar relacion - 2da compra es el momento clave para convertir a recurrente. Programa de fidelidad / discount en 3ra compra.";
+      case "conv_recurrente":
+        return "Cliente que se esta volviendo recurrente. Confirmar producto, ofrecer cross-sell, pedir testimonio.";
+      case "recurrente":
+        return "Top del funnel. Reconocer, premiar (envio gratis / acceso anticipado).";
+      case "recuperado":
+        return "Volvio despues de >180d. Entender por que se fue - encuesta corta + onboarding tipo cliente nuevo.";
+      default:
+        return "Accionar manualmente segun contexto.";
+    }
+  })();
+
   return (
     <div
       className="bg-surface border-2 rounded-xl overflow-hidden mb-6 shadow-lg animate-in fade-in slide-in-from-top-2 duration-200"
@@ -100,36 +136,8 @@ export function CohortInlineTable({
           {items.length > 0 && (
             <ExportButtons
               filename={`cohort_${state}_${unit}`}
-              columns={
-                unit === "unidrop"
-                  ? ["ID", "Dropshipper", "Email", "Telefono", "Ventas ML", "Ventas TN", "Revenue periodo", "Ult. venta", "Dias desde ult."]
-                  : ["ID", "Cliente", "Email", "Telefono", "Ordenes (total)", "Ordenes (periodo)", "Revenue periodo", "Ult. compra", "Dias desde ult."]
-              }
-              rows={items.map((r) =>
-                unit === "unidrop"
-                  ? [
-                      r.customer_id,
-                      r.nombre,
-                      r.email || "",
-                      r.phone || "",
-                      r.ml_total ?? 0,
-                      r.tn_total ?? 0,
-                      r.revenue_periodo ?? 0,
-                      r.ultima_compra || "",
-                      r.dias_desde_ultima ?? "",
-                    ]
-                  : [
-                      r.customer_id,
-                      r.nombre,
-                      r.email || "",
-                      r.phone || "",
-                      r.ordenes_total ?? 0,
-                      r.ordenes_periodo ?? 0,
-                      r.revenue_periodo ?? 0,
-                      r.ultima_compra || "",
-                      r.dias_desde_ultima ?? "",
-                    ]
-              )}
+              columns={csvColumns}
+              rows={csvRows}
             />
           )}
           <button
@@ -235,6 +243,23 @@ export function CohortInlineTable({
           </table>
         )}
       </div>
+
+      {/* Footer accionable: crea cs_action con los target_ids del estado actual */}
+      {!isLoading && items.length > 0 && (
+        <ActionableFooter
+          sourceType="manual"
+          sourceKey={`cohort_${state}`}
+          unit={unit}
+          title={`Cohorte ${stateLabel} (${unit}) · ${items.length} ${labelEntidadPlural}`}
+          suggestedAction={suggestedAction}
+          targetIds={targetIds}
+          csvFilename={`cohort_${state}_${unit}`}
+          csvHeaders={csvColumns}
+          csvRows={csvRows}
+          accentColor={color}
+          actionLabel="Generar accion CS"
+        />
+      )}
     </div>
   );
 }
