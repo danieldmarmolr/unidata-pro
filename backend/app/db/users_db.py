@@ -345,19 +345,30 @@ def needs_password_setup(email: str) -> bool:
 # ----- 2FA TOTP -----
 
 def get_totp_secret(user_id: int) -> str | None:
+    """Devuelve el secret TOTP en plaintext (lo descifra si esta cifrado en DB).
+    Backwards-compat: si el secret en DB esta en plaintext legacy, lo devuelve
+    as-is. Si esta cifrado y no tenemos key, devuelve None."""
+    from app.auth import totp_cipher
     init()
     with get_conn() as c, c.cursor() as cur:
         cur.execute("SELECT totp_secret FROM users WHERE id = %s", (user_id,))
         row = cur.fetchone()
-    return row["totp_secret"] if row else None
+    if not row:
+        return None
+    return totp_cipher.decrypt(row["totp_secret"])
 
 
 def set_totp_secret(user_id: int, secret: str | None, enabled: bool) -> None:
+    """Cifra el secret antes de guardarlo. Si TOTP_CIPHER_KEY no esta seteada
+    queda en plaintext (con warning en log). Cuando se setea la env y el user
+    vuelve a tocar 2FA, automaticamente queda cifrado."""
+    from app.auth import totp_cipher
     init()
+    encrypted = totp_cipher.encrypt(secret) if secret else None
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
             "UPDATE users SET totp_secret = %s, totp_enabled = %s, updated_at = NOW() WHERE id = %s",
-            (secret, enabled, user_id),
+            (encrypted, enabled, user_id),
         )
 
 
