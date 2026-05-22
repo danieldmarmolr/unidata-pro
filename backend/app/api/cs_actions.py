@@ -262,15 +262,14 @@ def list_targets(
     if unit == "unidrop":
         eng = get_engine("unidrop")
         with eng.connect() as conn:
-            # Stage 1: basic
+            # Stage 1: basic (User no tiene city/province direct, usamos solo dni)
             rows = conn.execute(
                 text("""
                     SELECT u.id,
                            COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
                            COALESCE(u.email,'') AS email,
                            COALESCE(u.phone,'') AS phone,
-                           COALESCE(u.dni::text,'') AS dni,
-                           COALESCE(u.city,'') AS ciudad
+                           COALESCE(u.dni::text,'') AS dni
                     FROM public."User" u
                     WHERE u.id = ANY(:ids)
                 """),
@@ -279,7 +278,7 @@ def list_targets(
             for r in rows:
                 enriched[int(r[0])] = {
                     "nombre": r[1], "email": r[2], "phone": r[3], "dni": r[4],
-                    "ciudad": r[5],
+                    "ciudad": "",
                     "lifetime_total": 0.0, "ultima_compra": None,
                     "dias_desde_ultima": None, "ordenes_total": 0,
                     "ticket_promedio": 0.0, "monto_ultima": 0.0,
@@ -315,14 +314,14 @@ def list_targets(
     else:
         eng = get_engine("unistore")
         with eng.connect() as conn:
-            # Stage 1: basic
+            # Stage 1: basic. Customer tiene billingProvince (no city/province directos).
             rows = conn.execute(
                 text("""
                     SELECT c.id,
                            COALESCE(c.name, c.email, 'Customer '||c.id::text) AS nombre,
                            COALESCE(c.email,'') AS email,
                            COALESCE(c.phone,'') AS phone,
-                           COALESCE(c.city, c.province, '') AS ciudad
+                           COALESCE(NULLIF(TRIM(c."billingProvince"),''), '') AS ciudad
                     FROM tienda_nube."Customer" c
                     WHERE c.id = ANY(:ids)
                 """),
