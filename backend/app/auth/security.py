@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import uuid
 from typing import Annotated
 
 import jwt
@@ -10,6 +12,8 @@ from fastapi.security import OAuth2PasswordBearer
 
 from app.config import Settings, get_settings
 from app.db import users_db, areas_db
+
+log = logging.getLogger("unidata.auth")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
@@ -22,6 +26,7 @@ def issue_token(
     is_admin: bool = False,
     expires_hours: int | None = None,
     scope: str | None = None,
+    jti: str | None = None,
 ) -> str:
     s = settings or get_settings()
     now = dt.datetime.now(dt.timezone.utc)
@@ -36,7 +41,14 @@ def issue_token(
     }
     if scope:
         payload["scope"] = scope
+    if jti:
+        payload["jti"] = jti
     return jwt.encode(payload, s.jwt_secret, algorithm=s.jwt_algorithm)
+
+
+def new_jti() -> str:
+    """JTI = JWT ID. UUID v4. Permite trackear y revocar tokens."""
+    return str(uuid.uuid4())
 
 
 def decode_token(token: str, settings: Settings | None = None) -> dict:
@@ -61,6 +73,22 @@ async def current_user(
         user_id = int(sub)
     except (TypeError, ValueError):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token invalido")
+    # Revocacion para tokens MCP de larga duracion. Solo aplica si tiene jti
+    # (tokens emitidos antes de este cambio no lo tienen - pasan por backwards-compat).
+    jti = payload.get("jti")
+    if jti and payload.get("scope") == "mcp":
+        from app.db import mcp_tokens_db
+        try:
+            if mcp_tokens_db.is_revoked(jti):
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token revocado")
+            mcp_tokens_db.touch_last_used(jti)
+        except HTTPException:
+            raise
+        except Exception as e:
+            # Si la DB de tracking esta caida, no bloqueamos al user (fail-open).
+            # Es preferible que el MCP siga funcionando a meter una dependencia
+            # critica adicional. La revocacion completa requiere mcp_tokens up.
+            log.warning("mcp_tokens lookup fallo para jti=%s: %s", jti, e)
     row = users_db.find_by_id(user_id)
     if not row or not row["is_active"]:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Usuario inactivo")

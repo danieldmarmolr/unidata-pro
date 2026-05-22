@@ -8,9 +8,9 @@ from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from app.auth.security import current_user, issue_token
+from app.auth.security import current_user, issue_token, new_jti
 from app.config import Settings, get_settings
-from app.db import users_db
+from app.db import mcp_tokens_db, users_db
 
 # Limiter compartido (configurado en main.py) - lo usamos solo para decorar endpoints
 limiter = Limiter(key_func=get_remote_address)
@@ -197,20 +197,26 @@ def totp_disable(
     return {"ok": True, "totp_enabled": False}
 
 
+class IssueMcpTokenBody(BaseModel):
+    label: str | None = None
+
+
 @router.post("/mcp-token")
 def issue_mcp_token(
     user: Annotated[dict, Depends(current_user)],
     settings: Annotated[Settings, Depends(get_settings)],
+    body: IssueMcpTokenBody | None = None,
 ) -> dict:
-    """Emite un JWT de larga vida (90 días) para usar en el MCP server.
+    """Emite un JWT de larga vida (90 dias) para usar en el MCP server.
 
-    El usuario se loguea normalmente en la web, llama a este endpoint, y
-    obtiene un token que puede pegar en el config de Claude Desktop sin
-    tener que renovarlo todos los días.
+    Cada token tiene un jti unico que se trackea en mcp_tokens. El user puede
+    listarlos en GET /api/auth/mcp-tokens y revocarlos con DELETE.
 
-    El token tiene los mismos claims (role, is_admin) que el JWT normal —
+    El token tiene los mismos claims (role, is_admin) que el JWT normal -
     el RBAC sigue aplicando exactamente igual.
     """
+    jti = new_jti()
+    label = (body.label.strip()[:120] if body and body.label else None)
     token = issue_token(
         user_id=user["id"],
         email=user["email"],
@@ -219,13 +225,49 @@ def issue_mcp_token(
         is_admin=user.get("is_admin", False),
         expires_hours=24 * 90,
         scope="mcp",
+        jti=jti,
     )
+    try:
+        mcp_tokens_db.register(jti=jti, user_id=user["id"], label=label)
+    except Exception as e:
+        # Si el tracking falla, no abortamos la emision - el user igual recibe
+        # un token funcional. Pero queda sin posibilidad de revocacion.
+        import logging
+        logging.getLogger("unidata.auth").warning("mcp_tokens.register fallo: %s", e)
     return {
         "access_token": token,
         "token_type": "bearer",
         "expires_in_days": 90,
         "scope": "mcp",
+        "jti": jti,
     }
+
+
+@router.get("/mcp-tokens")
+def list_mcp_tokens(
+    user: Annotated[dict, Depends(current_user)],
+    include_revoked: bool = False,
+) -> dict:
+    """Lista los tokens MCP del user (activos y, opcionalmente, revocados)."""
+    items = mcp_tokens_db.list_for_user(user["id"], include_revoked=include_revoked)
+    return {"items": items, "count": len(items)}
+
+
+@router.delete("/mcp-tokens/{jti}")
+def revoke_mcp_token(
+    jti: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Revoca un token MCP propio. Admin puede revocar tokens de otros users."""
+    token = mcp_tokens_db.get_token(jti)
+    if not token:
+        raise HTTPException(404, "Token no encontrado")
+    if token["user_id"] != user["id"] and not user.get("is_admin"):
+        raise HTTPException(403, "Solo el dueno del token (o un admin) puede revocarlo")
+    ok = mcp_tokens_db.revoke(jti=jti, revoked_by_user_id=user["id"])
+    if not ok:
+        raise HTTPException(409, "Token ya estaba revocado")
+    return {"ok": True, "jti": jti}
 
 
 @router.post("/check")

@@ -139,6 +139,11 @@ def _startup() -> None:
         _jira_flow_db.init()
     except Exception as e:
         logging.warning("jira_flow_db init: %s", e)
+    from app.db import mcp_tokens_db as _mcp_tokens_db
+    try:
+        _mcp_tokens_db.init()
+    except Exception as e:
+        logging.warning("mcp_tokens_db init: %s", e)
 
 app.include_router(auth_api.router)
 app.include_router(admin_api.router)

@@ -11,11 +11,15 @@ from __future__ import annotations
 import datetime as dt
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.auth.security import current_user
 from app.db import reminders_db
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api/reminders", tags=["reminders"])
 
@@ -47,7 +51,9 @@ def list_my(
 
 
 @router.post("", status_code=201)
+@limiter.limit("60/minute")
 def create(
+    request: Request,
     body: CreateBody,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:

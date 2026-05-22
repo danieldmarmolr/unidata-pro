@@ -13,11 +13,15 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.auth.security import current_user, require_area
 from app.db import cs_actions_db
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(prefix="/api/cs-actions", tags=["cs-actions"])
 
@@ -69,7 +73,9 @@ def count(
 
 
 @router.post("")
+@limiter.limit("60/minute")
 def create(
+    request: Request,
     body: CreateActionBody,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
