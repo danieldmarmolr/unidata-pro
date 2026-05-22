@@ -171,17 +171,138 @@ def _meta_ads_spend_unidrop(period: str) -> float:
         return 0.0
 
 
-def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None) -> dict:
+def _ganancia_mayorista_unidrop(days: int, cost_idx: dict) -> dict:
+    """Ganancia mayorista de Unidrop = SUM por SKU vendido a un dropshipper
+    de (precio_mayorista_unidrop - costo_lote_unistore) × qty.
+
+    - TN Unidrop: tienda_nube_order_items.cost = lo que el dropshipper le paga
+                  a Unidrop por unidad (precio mayorista).
+    - ML Unidrop: OrderItemMercadoLibre.unitCost = igual.
+    - Costo del lote: cost_idx (cost_index_unistore) que toma el ULTIMO lote
+                      por SKU (costo_con_iva_unit_ars).
+
+    Returns:
+        precio_mayorista_total, costo_lote_total, ganancia_bruta,
+        desglose tn/ml, skus_con_costo, skus_sin_costo, revenue_sin_costo,
+        error.
+    """
+    try:
+        eng = get_engine("unidrop")
+        p = {"days": days}
+
+        # Agregar por SKU en Unidrop TN
+        tn_rows = q(eng, """
+            SELECT tnoi.sku,
+                   SUM(tnoi.quantity)::int AS qty,
+                   SUM(tnoi.cost * tnoi.quantity)::float AS precio_mayorista_total
+            FROM public.tienda_nube_orders tno
+            INNER JOIN public.tienda_nube_order_items tnoi
+              ON tnoi.tienda_nube_order_id = tno.tienda_nube_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+              AND tnoi.sku IS NOT NULL AND TRIM(tnoi.sku) <> ''
+              AND tnoi.cost IS NOT NULL AND tnoi.cost > 0
+            GROUP BY tnoi.sku
+        """, p) or []
+
+        # Agregar por SKU en Unidrop ML
+        ml_rows = q(eng, """
+            SELECT oi."sellerSku" AS sku,
+                   SUM(oi.quantity)::int AS qty,
+                   SUM(oi."unitCost" * oi.quantity)::float AS precio_mayorista_total
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            INNER JOIN mercado_libre_dev."OrderMercadoLibre" oml
+              ON oml.id::text = oi."orderId"::text
+            WHERE oml.status IN ('paid','confirmed','shipped','delivered')
+              AND oml."dateCreated" >= NOW() - make_interval(days => :days)
+              AND oi."sellerSku" IS NOT NULL AND TRIM(oi."sellerSku") <> ''
+              AND oi."unitCost" IS NOT NULL AND oi."unitCost" > 0
+            GROUP BY oi."sellerSku"
+        """, p) or []
+
+        def _process(rows, label: str):
+            precio_total = 0.0
+            costo_total = 0.0
+            sin_costo_revenue = 0.0
+            skus_con = 0
+            skus_sin = 0
+            for sku, qty, precio in rows:
+                precio = float(precio or 0)
+                qty = int(qty or 0)
+                if qty <= 0 or precio <= 0:
+                    continue
+                precio_total += precio
+                rec = cost_idx.get((sku or "").strip().lower())
+                if rec and rec.get("costo_con_iva"):
+                    costo_unit = float(rec["costo_con_iva"])
+                    costo_total += costo_unit * qty
+                    skus_con += 1
+                else:
+                    sin_costo_revenue += precio
+                    skus_sin += 1
+            return {
+                "precio_mayorista": round(precio_total, 0),
+                "costo_lote": round(costo_total, 0),
+                "ganancia_bruta": round(precio_total - costo_total, 0),
+                "revenue_sin_costo": round(sin_costo_revenue, 0),
+                "skus_con_costo": skus_con,
+                "skus_sin_costo": skus_sin,
+            }
+
+        tn = _process(tn_rows, "tn")
+        ml = _process(ml_rows, "ml")
+
+        precio_total = tn["precio_mayorista"] + ml["precio_mayorista"]
+        costo_total = tn["costo_lote"] + ml["costo_lote"]
+        ganancia = precio_total - costo_total
+        sin_costo_total = tn["revenue_sin_costo"] + ml["revenue_sin_costo"]
+        cobertura_pct = ((precio_total - sin_costo_total) / precio_total * 100) if precio_total > 0 else 0
+
+        return {
+            "precio_mayorista_total": round(precio_total, 0),
+            "costo_lote_total": round(costo_total, 0),
+            "ganancia_bruta": round(ganancia, 0),
+            "ganancia_tn": tn["ganancia_bruta"],
+            "ganancia_ml": ml["ganancia_bruta"],
+            "precio_mayorista_tn": tn["precio_mayorista"],
+            "precio_mayorista_ml": ml["precio_mayorista"],
+            "costo_tn": tn["costo_lote"],
+            "costo_ml": ml["costo_lote"],
+            "skus_con_costo": tn["skus_con_costo"] + ml["skus_con_costo"],
+            "skus_sin_costo": tn["skus_sin_costo"] + ml["skus_sin_costo"],
+            "revenue_sin_costo": round(sin_costo_total, 0),
+            "cobertura_pct": round(cobertura_pct, 1),
+            "error": None,
+        }
+    except Exception as exc:
+        log.warning("_ganancia_mayorista_unidrop: %s", exc)
+        return {
+            "precio_mayorista_total": 0, "costo_lote_total": 0, "ganancia_bruta": 0,
+            "ganancia_tn": 0, "ganancia_ml": 0,
+            "precio_mayorista_tn": 0, "precio_mayorista_ml": 0,
+            "costo_tn": 0, "costo_ml": 0,
+            "skus_con_costo": 0, "skus_sin_costo": 0,
+            "revenue_sin_costo": 0, "cobertura_pct": 0,
+            "error": str(exc),
+        }
+
+
+def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None,
+                     *, cost_idx: dict | None = None) -> dict:
     """Modelo mixto: volumen plataforma (informativo) + retencion neta de Unidrop.
 
     Volumen plataforma (NO entra en ganancia Unidrop, es solo referencia):
       - Facturacion operativa = TN paid + ML paid (volumen omnicanal)
-      - Costo mercaderia      = SUM(unitCost*qty) en TN + merchandise_cost en ML
+      - Costo mercaderia      = SUM(items.cost*qty) en TN + merchandise_cost en ML
+        = lo que el DROPSHIPPER le pagó a Unidrop por la mercadería (precio mayorista)
 
     Retencion neta de Unidrop:
       Ingresos:
         + Comisiones Talo (PaymentTransaction.commission + subs)
         + Suscripciones MELI cobradas (PaymentIntentSubscription PROCESSED.paidAmount)
+        + Ganancia mayorista mercadería:
+            SUM por SKU vendido de (precio_mayorista_unidrop − costo_lote_unistore) × qty
+            usando el ULTIMO lote cargado en cost_index_unistore.
       Egresos:
         - Meta Ads spend asignado a unit='unidrop'
         - Egresos operativos del flujo-fondos asignados a empresa Unidrop
@@ -240,7 +361,14 @@ def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None) -> d
           AND "createdAt" >= NOW() - make_interval(days => :days)
     """, p) or 0)
 
-    ingresos_unidrop = comisiones + suscripciones_cobradas
+    # Ganancia mayorista por mercaderia vendida a dropshippers.
+    # cost_idx puede venir precomputado del overview (evita doble carga).
+    if cost_idx is None:
+        cost_idx = cost_index_unistore()
+    mayorista = _ganancia_mayorista_unidrop(days, cost_idx)
+    ganancia_mayorista = float(mayorista["ganancia_bruta"])
+
+    ingresos_unidrop = comisiones + suscripciones_cobradas + ganancia_mayorista
 
     # ---------- EGRESOS UNIDROP ----------
     meta_ads_spend = _meta_ads_spend_unidrop(period)
@@ -270,7 +398,24 @@ def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None) -> d
         # Ingresos Unidrop (retencion real)
         "comisiones": round(comisiones, 0),
         "suscripciones_cobradas": round(suscripciones_cobradas, 0),
+        "ganancia_mayorista": round(ganancia_mayorista, 0),
         "ingresos_unidrop": round(ingresos_unidrop, 0),
+        # Desglose ganancia mayorista (precio mayorista vs costo lote del ultimo)
+        "mayorista_breakdown": {
+            "precio_mayorista_total": mayorista["precio_mayorista_total"],
+            "costo_lote_total": mayorista["costo_lote_total"],
+            "ganancia_tn": mayorista["ganancia_tn"],
+            "ganancia_ml": mayorista["ganancia_ml"],
+            "precio_mayorista_tn": mayorista["precio_mayorista_tn"],
+            "precio_mayorista_ml": mayorista["precio_mayorista_ml"],
+            "costo_tn": mayorista["costo_tn"],
+            "costo_ml": mayorista["costo_ml"],
+            "skus_con_costo": mayorista["skus_con_costo"],
+            "skus_sin_costo": mayorista["skus_sin_costo"],
+            "revenue_sin_costo": mayorista["revenue_sin_costo"],
+            "cobertura_pct": mayorista["cobertura_pct"],
+            "error": mayorista.get("error"),
+        },
         # Egresos Unidrop
         "meta_ads_spend": round(meta_ads_spend, 0),
         "egresos_operativos": round(egresos, 0),
@@ -532,7 +677,18 @@ _UNIDROP_EMPTY = {
     "volumen_plataforma": 0, "volumen_tn": 0, "volumen_ml": 0,
     "costo_mercaderia": 0, "costo_tn": 0, "costo_ml": 0,
     "ordenes_pagadas": 0, "margen_bruto_plataforma": 0,
-    "comisiones": 0, "suscripciones_cobradas": 0, "ingresos_unidrop": 0,
+    "comisiones": 0, "suscripciones_cobradas": 0,
+    "ganancia_mayorista": 0,
+    "ingresos_unidrop": 0,
+    "mayorista_breakdown": {
+        "precio_mayorista_total": 0, "costo_lote_total": 0,
+        "ganancia_tn": 0, "ganancia_ml": 0,
+        "precio_mayorista_tn": 0, "precio_mayorista_ml": 0,
+        "costo_tn": 0, "costo_ml": 0,
+        "skus_con_costo": 0, "skus_sin_costo": 0,
+        "revenue_sin_costo": 0, "cobertura_pct": 0,
+        "error": None,
+    },
     "meta_ads_spend": 0, "egresos_operativos": 0,
     "ganancia_neta": 0, "margen_pct": 0,
     "facturacion": 0, "facturacion_contabilium": 0,
@@ -565,7 +721,7 @@ def gerencia_profit_overview(period: str = "30d", from_iso: str | None = None,
         errors["unistore"] = str(exc)
 
     try:
-        drop = ganancia_unidrop(period, from_iso, to_iso)
+        drop = ganancia_unidrop(period, from_iso, to_iso, cost_idx=cost_idx)
     except Exception as exc:
         log.warning("ganancia_unidrop: %s", exc)
         drop = dict(_UNIDROP_EMPTY)

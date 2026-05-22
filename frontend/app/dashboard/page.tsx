@@ -107,6 +107,22 @@ type UnistoreProfit = {
   bottom_skus_low_margin: SkuProfitRow[];
 };
 
+type MayoristaBreakdown = {
+  precio_mayorista_total: number;
+  costo_lote_total: number;
+  ganancia_tn: number;
+  ganancia_ml: number;
+  precio_mayorista_tn: number;
+  precio_mayorista_ml: number;
+  costo_tn: number;
+  costo_ml: number;
+  skus_con_costo: number;
+  skus_sin_costo: number;
+  revenue_sin_costo: number;
+  cobertura_pct: number;
+  error: string | null;
+};
+
 type UnidropProfit = {
   unit: "unidrop";
   volumen_plataforma: number;
@@ -119,6 +135,8 @@ type UnidropProfit = {
   margen_bruto_plataforma: number;
   comisiones: number;
   suscripciones_cobradas: number;
+  ganancia_mayorista: number;
+  mayorista_breakdown: MayoristaBreakdown;
   ingresos_unidrop: number;
   meta_ads_spend: number;
   egresos_operativos: number;
@@ -750,6 +768,107 @@ function VipKpiSection() {
   );
 }
 
+function MayoristaDetailBlock({ breakdown, totalGanancia }: { breakdown: MayoristaBreakdown; totalGanancia: number }) {
+  const [open, setOpen] = useState(false);
+  const marginPct = breakdown.precio_mayorista_total > 0
+    ? (totalGanancia / breakdown.precio_mayorista_total) * 100
+    : 0;
+  return (
+    <div className="bg-gradient-to-br from-purple-50 to-fuchsia-50 border border-purple-200 rounded-xl mb-6">
+      <button onClick={() => setOpen((o) => !o)}
+              className="w-full px-5 py-3 flex items-center justify-between text-left hover:bg-purple-100/40 transition rounded-xl">
+        <div className="flex items-center gap-2">
+          <Boxes size={14} className="text-purple-700" />
+          <span className="text-sm font-bold text-purple-900">Ganancia mayorista mercadería · Unidrop</span>
+          <span className="text-[10px] font-normal text-purple-700">
+            (precio que paga el dropshipper − costo último lote)
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-base font-extrabold text-purple-900 tabular-nums">{formatCurrency(totalGanancia)}</span>
+          <span className="text-[10px] bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full font-bold">
+            {marginPct.toFixed(1)}% margen
+          </span>
+          {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </div>
+      </button>
+      {open && (
+        <div className="px-5 pb-5 space-y-4">
+          {/* Resumen total */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div className="bg-white/70 rounded-lg p-3 border border-purple-100">
+              <div className="text-[10px] uppercase tracking-wider text-purple-700 font-bold">Precio mayorista total</div>
+              <div className="text-xl font-extrabold text-text mt-1 tabular-nums">{formatCurrency(breakdown.precio_mayorista_total)}</div>
+              <div className="text-[10px] text-text-muted mt-0.5">lo que pagaron los dropshippers a Unidrop</div>
+            </div>
+            <div className="bg-white/70 rounded-lg p-3 border border-purple-100">
+              <div className="text-[10px] uppercase tracking-wider text-purple-700 font-bold">− Costo último lote</div>
+              <div className="text-xl font-extrabold text-text mt-1 tabular-nums">{formatCurrency(breakdown.costo_lote_total)}</div>
+              <div className="text-[10px] text-text-muted mt-0.5">costo con IVA del último lote importado por SKU</div>
+            </div>
+            <div className="bg-white/70 rounded-lg p-3 border-2 border-purple-300">
+              <div className="text-[10px] uppercase tracking-wider text-purple-700 font-bold">Ganancia bruta</div>
+              <div className={cn("text-xl font-extrabold mt-1 tabular-nums", totalGanancia >= 0 ? "text-success" : "text-error")}>
+                {formatCurrency(totalGanancia)}
+              </div>
+              <div className="text-[10px] text-text-muted mt-0.5">margen {marginPct.toFixed(1)}% sobre precio mayorista</div>
+            </div>
+          </div>
+
+          {/* Desglose por canal */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="bg-white/70 rounded-lg p-3 border border-purple-100">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Unidrop · Tienda Nube</div>
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between"><span className="text-text-muted">Precio mayorista</span><span className="tabular-nums font-semibold">{formatCurrency(breakdown.precio_mayorista_tn)}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">− Costo lote</span><span className="tabular-nums text-text-muted">{formatCurrency(breakdown.costo_tn)}</span></div>
+                <div className="flex justify-between border-t border-border pt-1 mt-1"><span className="font-bold">Ganancia TN</span><span className={cn("tabular-nums font-bold", breakdown.ganancia_tn >= 0 ? "text-success" : "text-error")}>{formatCurrency(breakdown.ganancia_tn)}</span></div>
+              </div>
+            </div>
+            <div className="bg-white/70 rounded-lg p-3 border border-purple-100">
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">Unidrop · Mercado Libre</div>
+              <div className="space-y-1 text-xs">
+                <div className="flex justify-between"><span className="text-text-muted">Precio mayorista</span><span className="tabular-nums font-semibold">{formatCurrency(breakdown.precio_mayorista_ml)}</span></div>
+                <div className="flex justify-between"><span className="text-text-muted">− Costo lote</span><span className="tabular-nums text-text-muted">{formatCurrency(breakdown.costo_ml)}</span></div>
+                <div className="flex justify-between border-t border-border pt-1 mt-1"><span className="font-bold">Ganancia ML</span><span className={cn("tabular-nums font-bold", breakdown.ganancia_ml >= 0 ? "text-success" : "text-error")}>{formatCurrency(breakdown.ganancia_ml)}</span></div>
+              </div>
+            </div>
+          </div>
+
+          {/* Cobertura y warnings */}
+          <div className="flex items-center justify-between flex-wrap gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <span className="text-text-muted">Cobertura de costos:</span>
+              <span className={cn("font-bold px-2 py-0.5 rounded-full",
+                breakdown.cobertura_pct >= 75 ? "bg-emerald-100 text-emerald-800" :
+                breakdown.cobertura_pct >= 50 ? "bg-amber-100 text-amber-800" :
+                "bg-rose-100 text-rose-800",
+              )}>
+                {breakdown.cobertura_pct.toFixed(1)}%
+              </span>
+              <span className="text-text-muted">
+                {breakdown.skus_con_costo} SKUs con costo · {breakdown.skus_sin_costo} sin cargar
+              </span>
+            </div>
+            {breakdown.revenue_sin_costo > 0 && (
+              <div className="text-amber-700 bg-amber-50 px-3 py-1 rounded-lg border border-amber-200 text-[11px]">
+                ⚠ {formatCurrency(breakdown.revenue_sin_costo)} sin atribución de costo —{" "}
+                <Link href="/dashboard/costos" className="underline font-semibold">Cargar lotes faltantes</Link>
+              </div>
+            )}
+          </div>
+
+          {breakdown.error && (
+            <div className="text-xs text-error bg-rose-50 border border-rose-200 rounded p-2">
+              Error calculando: {breakdown.error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // =============================================================================
 // MAIN PAGE — secciones tematicas
 // =============================================================================
@@ -949,6 +1068,7 @@ export default function GerenciaUnificadaPage() {
                   rows={[
                     { label: "Comisiones Talo cobradas", value: gerencia.unidrop.comisiones, prefix: "$ " },
                     { label: "Suscripciones MELI cobradas", value: gerencia.unidrop.suscripciones_cobradas, prefix: "$ " },
+                    { label: "Ganancia mayorista mercadería", value: gerencia.unidrop.ganancia_mayorista, prefix: "$ " },
                     { label: "Ingresos Unidrop", value: gerencia.unidrop.ingresos_unidrop, prefix: "$ " },
                     { label: "− Meta Ads Unidrop", value: gerencia.unidrop.meta_ads_spend, prefix: "$ ", muted: true },
                     { label: "− Egresos operativos", value: gerencia.unidrop.egresos_operativos, prefix: "$ ", muted: true },
@@ -959,6 +1079,11 @@ export default function GerenciaUnificadaPage() {
               </>
             )}
           </div>
+
+          {/* Detalle ganancia mayorista Unidrop */}
+          {gerencia && gerencia.unidrop.ganancia_mayorista !== 0 && (
+            <MayoristaDetailBlock breakdown={gerencia.unidrop.mayorista_breakdown} totalGanancia={gerencia.unidrop.ganancia_mayorista} />
+          )}
 
           {/* Chart consolidado con forecast multi-metodo */}
           {loadingConsolidated || !consolidated ? (
