@@ -43,10 +43,12 @@ export type OrgChartItem = {
   avatar_url: string | null;
   job_title: string | null;
   manager_user_id: number | null;
+  manager_name: string | null;
   area_slug: string | null;
   area_name: string | null;
   area_color: string | null;
   is_manager: boolean;
+  joined_at: string | null;
 };
 
 export type FeedReaction = {

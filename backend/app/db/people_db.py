@@ -224,10 +224,12 @@ def org_chart() -> list[dict]:
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""
             SELECT u.id, u.name, u.email, u.role, u.is_admin, u.avatar_url,
-                   u.job_title, u.manager_user_id,
-                   a.slug AS area_slug, a.name AS area_name, a.color AS area_color
+                   u.job_title, u.manager_user_id, u.joined_at,
+                   a.slug AS area_slug, a.name AS area_name, a.color AS area_color,
+                   m.name AS manager_name
               FROM users u
               LEFT JOIN areas a ON a.id = u.area_id
+              LEFT JOIN users m ON m.id = u.manager_user_id
              WHERE u.is_active = TRUE
              ORDER BY u.name ASC
         """)
@@ -241,6 +243,7 @@ def org_chart() -> list[dict]:
     for u in users:
         u["is_manager"] = u["id"] in has_reports
         u["is_admin"] = bool(u.get("is_admin"))
+        u["joined_at"] = _iso(u.get("joined_at"))
     return users
 
 
