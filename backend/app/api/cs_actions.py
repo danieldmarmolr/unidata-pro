@@ -230,8 +230,16 @@ def list_targets(
     action_id: int,
     user: Annotated[dict, Depends(current_user)],
 ) -> dict:
-    """Lista los targets de la accion enriquecidos con nombre + telefono + email.
-    Sirve para que la bandeja arme cards con WhatsApp y permita difusion."""
+    """Lista los targets de la accion enriquecidos con TODA la data util para
+    personalizar la difusion: nombre, telefono, email, dni, ciudad, ultima
+    compra, monto ultima, dias desde ultima, ticket promedio, lifetime spent,
+    cantidad de ordenes, top SKU.
+
+    Variables disponibles para el template: {{nombre}}, {{primer_nombre}},
+    {{email}}, {{dni}}, {{ciudad}}, {{ultima_compra}}, {{dias_desde_ultima}},
+    {{monto_ultima}}, {{ticket_promedio}}, {{lifetime_total}}, {{ordenes_total}},
+    {{top_sku}}, {{top_producto}}.
+    """
     require_area(user, ["cs", "marketing"])
     action = cs_actions_db.get_action(action_id)
     if not action:
@@ -248,43 +256,142 @@ def list_targets(
         with eng.connect() as conn:
             rows = conn.execute(
                 text("""
-                    SELECT u.id, COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
-                           COALESCE(u.email,'') AS email, COALESCE(u.phone,'') AS phone,
-                           COALESCE(u.dni::text,'') AS dni
+                    WITH user_stats AS (
+                        SELECT u.id AS user_id,
+                               COALESCE(SUM(pi."paidAmount") FILTER (WHERE pi."status" = 'PROCESSED'), 0)::float AS lifetime_total,
+                               MAX(pi."createdAt") FILTER (WHERE pi."status" = 'PROCESSED') AS ultima_venta,
+                               COUNT(*) FILTER (WHERE pi."status" = 'PROCESSED')::int AS pi_count,
+                               AVG(pi."paidAmount") FILTER (WHERE pi."status" = 'PROCESSED')::float AS ticket_avg
+                        FROM public."User" u
+                        LEFT JOIN public."CustomerPaymentAccount" cpa ON cpa."userId" = u.id
+                        LEFT JOIN public."PaymentIntent" pi ON pi."customerAccountId" = cpa.id
+                        WHERE u.id = ANY(:ids)
+                        GROUP BY u.id
+                    )
+                    SELECT u.id,
+                           COALESCE(NULLIF(u.fantasy_name,''), u.name, u.email, 'User '||u.id::text) AS nombre,
+                           COALESCE(u.email,'')                    AS email,
+                           COALESCE(u.phone,'')                    AS phone,
+                           COALESCE(u.dni::text,'')                AS dni,
+                           COALESCE(u.city,'')                     AS ciudad,
+                           COALESCE(us.lifetime_total, 0)::float   AS lifetime_total,
+                           us.ultima_venta::date                   AS ultima_compra,
+                           CASE WHEN us.ultima_venta IS NOT NULL
+                                THEN EXTRACT(DAY FROM (NOW() - us.ultima_venta))::int
+                                ELSE NULL END                      AS dias_desde_ultima,
+                           COALESCE(us.pi_count, 0)::int           AS ordenes_total,
+                           COALESCE(us.ticket_avg, 0)::float       AS ticket_promedio
                     FROM public."User" u
+                    LEFT JOIN user_stats us ON us.user_id = u.id
                     WHERE u.id = ANY(:ids)
                 """),
                 {"ids": target_ids},
             ).fetchall()
         for r in rows:
-            enriched[int(r[0])] = {"nombre": r[1], "email": r[2], "phone": r[3], "dni": r[4]}
+            enriched[int(r[0])] = {
+                "nombre": r[1], "email": r[2], "phone": r[3], "dni": r[4],
+                "ciudad": r[5],
+                "lifetime_total": float(r[6] or 0),
+                "ultima_compra": r[7].isoformat() if r[7] else None,
+                "dias_desde_ultima": r[8],
+                "ordenes_total": int(r[9] or 0),
+                "ticket_promedio": float(r[10] or 0),
+                "monto_ultima": 0.0,  # PaymentIntent es agregado, no se ata a una sola venta
+                "top_sku": "",
+                "top_producto": "",
+            }
     else:
         eng = get_engine("unistore")
         with eng.connect() as conn:
             rows = conn.execute(
                 text("""
-                    SELECT c.id, COALESCE(c.name, c.email, 'Customer '||c.id::text) AS nombre,
-                           COALESCE(c.email,'') AS email, COALESCE(c.phone,'') AS phone
+                    WITH cust_stats AS (
+                        SELECT c.id AS customer_id,
+                               COALESCE(SUM(o.total) FILTER (WHERE o."paymentStatus" = 'paid'), 0)::float AS lifetime_total,
+                               COUNT(*) FILTER (WHERE o."paymentStatus" = 'paid')::int  AS ordenes_total,
+                               AVG(o.total) FILTER (WHERE o."paymentStatus" = 'paid')::float AS ticket_avg,
+                               MAX(o."createdAt") FILTER (WHERE o."paymentStatus" = 'paid') AS ultima_compra_ts
+                        FROM tienda_nube."Customer" c
+                        LEFT JOIN tienda_nube."Order" o ON o."customerId" = c.id
+                        WHERE c.id = ANY(:ids)
+                        GROUP BY c.id
+                    ),
+                    last_order AS (
+                        SELECT DISTINCT ON (o."customerId")
+                               o."customerId" AS customer_id,
+                               o.total       AS monto_ultima,
+                               o.id          AS last_order_id
+                        FROM tienda_nube."Order" o
+                        WHERE o."customerId" = ANY(:ids) AND o."paymentStatus" = 'paid'
+                        ORDER BY o."customerId", o."createdAt" DESC
+                    ),
+                    top_sku_per_cust AS (
+                        SELECT customer_id, sku, name, total_qty
+                        FROM (
+                            SELECT o."customerId" AS customer_id,
+                                   oi.sku, oi.name,
+                                   SUM(oi.quantity)::int AS total_qty,
+                                   ROW_NUMBER() OVER (PARTITION BY o."customerId" ORDER BY SUM(oi.quantity) DESC) AS rn
+                            FROM tienda_nube."Order" o
+                            JOIN tienda_nube."OrderItem" oi ON oi."orderId" = o.id
+                            WHERE o."customerId" = ANY(:ids)
+                              AND o."paymentStatus" = 'paid'
+                              AND oi.sku IS NOT NULL AND oi.sku <> ''
+                            GROUP BY o."customerId", oi.sku, oi.name
+                        ) ranked
+                        WHERE rn = 1
+                    )
+                    SELECT c.id,
+                           COALESCE(c.name, c.email, 'Customer '||c.id::text) AS nombre,
+                           COALESCE(c.email,'')               AS email,
+                           COALESCE(c.phone,'')               AS phone,
+                           COALESCE(c.city, c.province, '')   AS ciudad,
+                           COALESCE(cs.lifetime_total, 0)::float AS lifetime_total,
+                           cs.ultima_compra_ts::date          AS ultima_compra,
+                           CASE WHEN cs.ultima_compra_ts IS NOT NULL
+                                THEN EXTRACT(DAY FROM (NOW() - cs.ultima_compra_ts))::int
+                                ELSE NULL END                 AS dias_desde_ultima,
+                           COALESCE(cs.ordenes_total, 0)::int AS ordenes_total,
+                           COALESCE(cs.ticket_avg, 0)::float  AS ticket_promedio,
+                           COALESCE(lo.monto_ultima, 0)::float AS monto_ultima,
+                           COALESCE(t.sku, '')                AS top_sku,
+                           COALESCE(t.name, '')               AS top_producto
                     FROM tienda_nube."Customer" c
+                    LEFT JOIN cust_stats cs   ON cs.customer_id = c.id
+                    LEFT JOIN last_order lo   ON lo.customer_id = c.id
+                    LEFT JOIN top_sku_per_cust t ON t.customer_id = c.id
                     WHERE c.id = ANY(:ids)
                 """),
                 {"ids": target_ids},
             ).fetchall()
         for r in rows:
-            enriched[int(r[0])] = {"nombre": r[1], "email": r[2], "phone": r[3], "dni": ""}
+            enriched[int(r[0])] = {
+                "nombre": r[1], "email": r[2], "phone": r[3], "dni": "",
+                "ciudad": r[4],
+                "lifetime_total": float(r[5] or 0),
+                "ultima_compra": r[6].isoformat() if r[6] else None,
+                "dias_desde_ultima": r[7],
+                "ordenes_total": int(r[8] or 0),
+                "ticket_promedio": float(r[9] or 0),
+                "monto_ultima": float(r[10] or 0),
+                "top_sku": r[11] or "",
+                "top_producto": r[12] or "",
+            }
 
     targets_status = {t["target_id"]: t for t in cs_actions_db.list_targets(action_id)}
 
     items = []
     for tid in target_ids:
-        info = enriched.get(tid) or {"nombre": f"#{tid}", "email": "", "phone": "", "dni": ""}
+        info = enriched.get(tid) or {
+            "nombre": f"#{tid}", "email": "", "phone": "", "dni": "",
+            "ciudad": "", "lifetime_total": 0.0, "ultima_compra": None,
+            "dias_desde_ultima": None, "ordenes_total": 0, "ticket_promedio": 0.0,
+            "monto_ultima": 0.0, "top_sku": "", "top_producto": "",
+        }
         st = targets_status.get(tid) or {}
         items.append({
             "target_id": tid,
-            "nombre": info["nombre"],
-            "email": info["email"],
-            "phone": info["phone"],
-            "dni": info.get("dni", ""),
+            **info,
             "contact_status": st.get("contact_status", "pending"),
             "contact_at": st.get("contact_at"),
             "response_at": st.get("response_at"),
@@ -309,6 +416,16 @@ def stats(
 ) -> dict:
     require_area(user, ["cs", "marketing"])
     return cs_actions_db.action_stats(action_id)
+
+
+@router.get("/performance/summary")
+def performance(
+    user: Annotated[dict, Depends(current_user)],
+    days: Annotated[int, Query(ge=1, le=365)] = 60,
+) -> dict:
+    """Funnel + ROI + breakdown por source_type, unit, status."""
+    require_area(user, ["cs", "marketing"])
+    return cs_actions_db.performance_summary(days=days)
 
 
 @router.post("/{action_id}/targets/{target_id}/status")

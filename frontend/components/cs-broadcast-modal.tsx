@@ -14,6 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   X, Send, Download, CheckCircle2, Phone, Loader2, AlertTriangle, ExternalLink,
+  Save, BookmarkPlus, Star,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { waLink } from "@/lib/whatsapp";
@@ -24,6 +25,15 @@ type Target = {
   email: string;
   phone: string;
   dni?: string;
+  ciudad?: string;
+  lifetime_total?: number;
+  ultima_compra?: string | null;
+  dias_desde_ultima?: number | null;
+  ordenes_total?: number;
+  ticket_promedio?: number;
+  monto_ultima?: number;
+  top_sku?: string;
+  top_producto?: string;
   contact_status: "pending" | "contacted" | "responded" | "converted" | "no_response" | "opt_out";
   contact_at?: string | null;
   response_at?: string | null;
@@ -48,6 +58,19 @@ type TargetsResp = {
   };
 };
 
+type CsTemplate = {
+  id: number;
+  name: string;
+  body: string;
+  source_type: string | null;
+  unit: "unistore" | "unidrop" | null;
+  times_used: number;
+  conversion_rate: number;
+  actions_count: number;
+  targets_count: number;
+  converted: number;
+};
+
 const STATUS_COLORS: Record<Target["contact_status"], string> = {
   pending:     "bg-zinc-100 text-zinc-700 border-zinc-300",
   contacted:   "bg-blue-50 text-blue-700 border-blue-300",
@@ -66,13 +89,29 @@ const STATUS_LABEL: Record<Target["contact_status"], string> = {
   opt_out:     "Opt-out",
 };
 
+function fmtMoney(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "";
+  return n.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
+}
+
 function renderTemplate(tpl: string, t: Target): string {
   const primer = (t.nombre || "").split(/\s+/)[0] || "";
+  const sub = (re: RegExp, val: string | number | null | undefined) =>
+    (m: string) => (val == null || val === "" ? "" : String(val));
   return tpl
     .replace(/\{\{\s*nombre\s*\}\}/gi, t.nombre || "")
     .replace(/\{\{\s*primer_nombre\s*\}\}/gi, primer)
     .replace(/\{\{\s*email\s*\}\}/gi, t.email || "")
-    .replace(/\{\{\s*dni\s*\}\}/gi, t.dni || "");
+    .replace(/\{\{\s*dni\s*\}\}/gi, t.dni || "")
+    .replace(/\{\{\s*ciudad\s*\}\}/gi, t.ciudad || "")
+    .replace(/\{\{\s*ultima_compra\s*\}\}/gi, t.ultima_compra || "")
+    .replace(/\{\{\s*dias_desde_ultima\s*\}\}/gi, t.dias_desde_ultima != null ? String(t.dias_desde_ultima) : "")
+    .replace(/\{\{\s*monto_ultima\s*\}\}/gi, t.monto_ultima ? fmtMoney(t.monto_ultima) : "")
+    .replace(/\{\{\s*ticket_promedio\s*\}\}/gi, t.ticket_promedio ? fmtMoney(t.ticket_promedio) : "")
+    .replace(/\{\{\s*lifetime_total\s*\}\}/gi, t.lifetime_total ? fmtMoney(t.lifetime_total) : "")
+    .replace(/\{\{\s*ordenes_total\s*\}\}/gi, t.ordenes_total != null ? String(t.ordenes_total) : "")
+    .replace(/\{\{\s*top_sku\s*\}\}/gi, t.top_sku || "")
+    .replace(/\{\{\s*top_producto\s*\}\}/gi, t.top_producto || "");
 }
 
 export function CsBroadcastModal({
@@ -95,6 +134,9 @@ export function CsBroadcastModal({
   const [err, setErr] = useState<string | null>(null);
   const [template, setTemplate] = useState<string>(() => defaultTemplate(suggestedAction, unit));
   const [openedSet, setOpenedSet] = useState<Set<number>>(new Set());
+  const [templates, setTemplates] = useState<CsTemplate[]>([]);
+  const [selectedTplId, setSelectedTplId] = useState<number | null>(null);
+  const [savingTpl, setSavingTpl] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -109,7 +151,16 @@ export function CsBroadcastModal({
     }
   };
 
-  useEffect(() => { load(); }, [actionId]);
+  const loadTemplates = async () => {
+    try {
+      const res = await api<{ items: CsTemplate[] }>(`/api/cs-templates?unit=${unit}`);
+      setTemplates(res.items || []);
+    } catch {
+      // silencioso
+    }
+  };
+
+  useEffect(() => { load(); loadTemplates(); }, [actionId]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -176,6 +227,41 @@ export function CsBroadcastModal({
     URL.revokeObjectURL(a.href);
   };
 
+  const applyTemplate = async (id: number) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
+    setTemplate(t.body);
+    setSelectedTplId(id);
+    try {
+      await api(`/api/cs-templates/attach/${actionId}`, {
+        method: "POST",
+        body: JSON.stringify({ template_id: id }),
+      });
+    } catch { /* silencioso */ }
+  };
+
+  const saveAsTemplate = async () => {
+    const name = window.prompt("Nombre del template:");
+    if (!name) return;
+    setSavingTpl(true);
+    try {
+      const res = await api<CsTemplate>(`/api/cs-templates`, {
+        method: "POST",
+        body: JSON.stringify({ name, body: template, unit }),
+      });
+      await loadTemplates();
+      setSelectedTplId(res.id);
+      await api(`/api/cs-templates/attach/${actionId}`, {
+        method: "POST",
+        body: JSON.stringify({ template_id: res.id }),
+      });
+    } catch (e: any) {
+      alert(e?.message || "Error guardando template");
+    } finally {
+      setSavingTpl(false);
+    }
+  };
+
   const markAllContacted = async () => {
     if (!data) return;
     const pendings = data.items.filter((t) => t.contact_status === "pending" && waLink(t.phone));
@@ -228,12 +314,46 @@ export function CsBroadcastModal({
           </div>
         )}
 
+        {/* Template selector */}
+        {templates.length > 0 && (
+          <div className="px-5 py-2 border-b border-border bg-soft/30 flex items-center gap-2 flex-wrap">
+            <label className="text-[10px] uppercase tracking-wider font-bold text-text-muted">Templates probados</label>
+            <select
+              value={selectedTplId ?? ""}
+              onChange={(e) => {
+                const v = e.target.value ? Number(e.target.value) : null;
+                if (v) applyTemplate(v); else setSelectedTplId(null);
+              }}
+              className="text-xs px-2 py-1 rounded-lg border border-border bg-surface flex-1 min-w-[260px]"
+            >
+              <option value="">— Usar template existente —</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.conversion_rate > 0 ? `${t.conversion_rate}% conv · ` : ""}
+                  {t.times_used > 0 ? `${t.times_used}x · ` : ""}
+                  {t.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={saveAsTemplate}
+              disabled={savingTpl || !template.trim()}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-primary/40 bg-primary/5 text-primary hover:bg-primary/10 disabled:opacity-40 transition"
+            >
+              <BookmarkPlus size={12} /> Guardar como template
+            </button>
+          </div>
+        )}
+
         {/* Template editor */}
         <div className="px-5 py-3 border-b border-border bg-surface space-y-2">
           <div className="flex items-baseline justify-between gap-3 flex-wrap">
             <label className="text-[10px] uppercase tracking-wider font-bold text-text-muted">Mensaje de difusion</label>
-            <div className="text-[10px] text-text-muted">
-              Variables: <code className="bg-soft px-1 rounded">{"{{primer_nombre}}"}</code> <code className="bg-soft px-1 rounded">{"{{nombre}}"}</code> <code className="bg-soft px-1 rounded">{"{{email}}"}</code> <code className="bg-soft px-1 rounded">{"{{dni}}"}</code>
+            <div className="text-[10px] text-text-muted max-w-[60%] text-right leading-relaxed">
+              <strong>Variables:</strong>{" "}
+              {["{{primer_nombre}}", "{{nombre}}", "{{ciudad}}", "{{ultima_compra}}", "{{dias_desde_ultima}}", "{{monto_ultima}}", "{{ticket_promedio}}", "{{lifetime_total}}", "{{ordenes_total}}", "{{top_producto}}", "{{top_sku}}", "{{email}}", "{{dni}}"].map((v, i) => (
+                <code key={i} className="bg-soft px-1 rounded mr-1 inline-block">{v}</code>
+              ))}
             </div>
           </div>
           <textarea

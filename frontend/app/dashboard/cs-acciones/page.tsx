@@ -1,14 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import {
   Target, Check, X, ChevronDown, ChevronRight, Inbox, Hand, Send, Flame, Clock,
-  AlertTriangle, Calendar, RotateCcw,
+  AlertTriangle, Calendar, RotateCcw, Zap, RefreshCw, BarChart3,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
-import { api } from "@/lib/api";
+import { api, getUser } from "@/lib/api";
 import { CsBroadcastModal } from "@/components/cs-broadcast-modal";
+
+// SLA por priority (en horas). Si supera, el chip de deadline se vuelve overdue.
+const SLA_HOURS: Record<"high" | "normal" | "low", number> = {
+  high: 24,
+  normal: 168,   // 7d
+  low: 336,      // 14d
+};
 
 type Priority = "low" | "normal" | "high";
 
@@ -67,7 +75,9 @@ const PRIORITY_META: Record<Priority, { label: string; chip: string; icon: strin
 export default function CsAccionesPage() {
   const [filter, setFilter] = useState<"open" | "pending" | "doing" | "done" | "all">("open");
   const [unit, setUnit] = useState<"all" | "unistore" | "unidrop">("all");
+  const [scope, setScope] = useState<"all" | "mine">("all");
   const [broadcastFor, setBroadcastFor] = useState<Action | null>(null);
+  const me = useMemo(() => getUser(), []);
   const qc = useQueryClient();
 
   const { data, isLoading } = useQuery<Resp>({
@@ -82,9 +92,11 @@ export default function CsAccionesPage() {
   });
 
   const items = (data?.items || []).filter((a) => {
-    if (filter === "open") return a.status === "pending" || a.status === "doing";
-    if (filter === "all") return true;
-    return a.status === filter;
+    if (filter === "open") {
+      if (!(a.status === "pending" || a.status === "doing")) return false;
+    } else if (filter !== "all" && a.status !== filter) return false;
+    if (scope === "mine" && me && a.assigned_to !== me.id) return false;
+    return true;
   });
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["cs-actions"] });
@@ -117,6 +129,10 @@ export default function CsAccionesPage() {
     mutationFn: (id: number) => api(`/api/cs-actions/${id}/reopen`, { method: "POST" }),
     onSuccess: invalidate,
   });
+  const cronMut = useMutation({
+    mutationFn: (endpoint: string) => api(`/api/cs-cron/${endpoint}`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
 
   return (
     <>
@@ -126,7 +142,42 @@ export default function CsAccionesPage() {
         hidePeriod
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
-        {/* Toolbar */}
+        {/* Toolbar autopilot + performance */}
+        <div className="bg-gradient-to-r from-violet-50 via-surface to-emerald-50 border border-border rounded-xl px-4 py-3 mb-4 flex items-center gap-2 flex-wrap">
+          <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mr-2">Autopilot</div>
+          <button
+            onClick={() => cronMut.mutate("weekly-rules")}
+            disabled={cronMut.isPending}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100 disabled:opacity-40 transition"
+            title="Crea acciones automaticas: posible churn semanal, VIP inactivo 30d, bienvenida 24h"
+          >
+            <Zap size={12} /> Ejecutar reglas semanales
+          </button>
+          <button
+            onClick={() => cronMut.mutate("detect-triggers")}
+            disabled={cronMut.isPending}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100 disabled:opacity-40 transition"
+            title="Detecta eventos urgentes: cancelaciones VIP recientes"
+          >
+            <AlertTriangle size={12} /> Detectar triggers
+          </button>
+          <button
+            onClick={() => cronMut.mutate("reconcile-conversions")}
+            disabled={cronMut.isPending}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 disabled:opacity-40 transition"
+            title="Atribuye conversiones: por cada target contactado, busca si compro post-contacto y marca converted"
+          >
+            <RefreshCw size={12} /> Reconciliar conversiones
+          </button>
+          <Link
+            href="/dashboard/cs-performance"
+            className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg border border-primary/30 bg-primary/5 text-primary hover:bg-primary/10 transition"
+          >
+            <BarChart3 size={12} /> Ver performance
+          </Link>
+        </div>
+
+        {/* Toolbar filtros */}
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
             <TabBtn active={filter === "open"} onClick={() => setFilter("open")} label={`Abiertas${data ? ` (${data.pending_count})` : ""}`} />
@@ -140,6 +191,12 @@ export default function CsAccionesPage() {
             <TabBtn active={unit === "unistore"} onClick={() => setUnit("unistore")} label="Unistore" />
             <TabBtn active={unit === "unidrop"} onClick={() => setUnit("unidrop")} label="Unidrop" />
           </div>
+          {me && (
+            <div className="inline-flex bg-soft rounded-xl p-1 border border-border">
+              <TabBtn active={scope === "all"} onClick={() => setScope("all")} label="Todos" />
+              <TabBtn active={scope === "mine"} onClick={() => setScope("mine")} label="Mis acciones" />
+            </div>
+          )}
         </div>
 
         {isLoading && (
@@ -222,6 +279,18 @@ function ActionCard({
 
   const overdue = a.deadline_at && new Date(a.deadline_at).getTime() < Date.now() && isOpen;
 
+  // SLA: ventana de tiempo por priority desde created_at
+  const slaInfo = (() => {
+    if (!isOpen) return null;
+    const slaH = SLA_HOURS[a.priority] ?? SLA_HOURS.normal;
+    const createdMs = new Date(a.created_at).getTime();
+    const deadlineMs = createdMs + slaH * 60 * 60 * 1000;
+    const remainingMs = deadlineMs - Date.now();
+    const overdueSla = remainingMs < 0;
+    const hours = Math.round(Math.abs(remainingMs) / (60 * 60 * 1000));
+    return { overdueSla, hours };
+  })();
+
   return (
     <div className={`border-2 rounded-xl ${a.status === "done" || a.status === "cancelled" ? "bg-surface border-border opacity-70" : meta.bg}`}>
       <div className="p-4 flex items-start gap-3">
@@ -239,10 +308,30 @@ function ActionCard({
             {a.target_count} {a.unit === "unidrop" ? "dropshippers" : "clientes"} · origen: {a.source_type} ({a.source_key})
           </div>
 
-          {/* Chips: priority + deadline + stats */}
+          {/* Chips: priority + deadline + SLA + stats + assigned */}
           <div className="mt-1.5 flex flex-wrap gap-1.5 items-center">
             <PriorityChip priority={a.priority} onChange={onPriority} />
             <DeadlineChip deadline={a.deadline_at} overdue={!!overdue} onChange={onDeadline} />
+            {slaInfo && (
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold ${
+                  slaInfo.overdueSla
+                    ? "bg-rose-100 text-rose-700 border-rose-300"
+                    : slaInfo.hours <= 6
+                    ? "bg-amber-100 text-amber-700 border-amber-300"
+                    : "bg-slate-50 text-slate-600 border-slate-200"
+                }`}
+                title={`SLA ${SLA_HOURS[a.priority]}h por priority ${a.priority}`}
+              >
+                <Clock size={9} />
+                {slaInfo.overdueSla ? `SLA vencido ${slaInfo.hours}h` : `SLA ${slaInfo.hours}h restantes`}
+              </span>
+            )}
+            {a.assigned_to && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold">
+                @user#{a.assigned_to}
+              </span>
+            )}
             {stats && stats.total > 0 && (
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface border border-border text-[10px]">
                 <span className="font-bold text-text">{stats.contacted + stats.responded + stats.converted}/{stats.total}</span>

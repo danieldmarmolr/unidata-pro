@@ -51,6 +51,8 @@ import {
   PiggyBank,
   ExternalLink,
   Coins,
+  UsersRound,
+  Award,
 } from "lucide-react";
 
 type Role = "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -107,6 +109,7 @@ const ITEMS: NavItem[] = [
     children: [
       { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
       { label: "Bandeja CS",          href: "/dashboard/cs-acciones",icon: Target         },
+      { label: "Performance",         href: "/dashboard/cs-performance", icon: TrendingUp },
       { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
       { label: "Segmentacion RFM",    href: "/dashboard/rfm",        icon: Target         },
       { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows", icon: Repeat        },
@@ -140,6 +143,19 @@ const ITEMS: NavItem[] = [
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ALL },
+  {
+    label: "People",
+    href: "/dashboard/people",
+    icon: UsersRound,
+    group: "Cross",
+    roles: ALL,
+    children: [
+      { label: "Feed",       href: "/dashboard/people",            icon: Megaphone },
+      { label: "Directorio", href: "/dashboard/people/directory",  icon: Users     },
+      { label: "Org Chart",  href: "/dashboard/people/org-chart",  icon: Network   },
+      { label: "Kudos",      href: "/dashboard/people/kudos",      icon: Award     },
+    ],
+  },
   {
     label: "IT / Data",
     href: "/dashboard/jira-flow",

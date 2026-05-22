@@ -144,6 +144,11 @@ def _startup() -> None:
         _mcp_tokens_db.init()
     except Exception as e:
         logging.warning("mcp_tokens_db init: %s", e)
+    from app.db import people_db as _people_db
+    try:
+        _people_db.init()
+    except Exception as e:
+        logging.warning("people_db init: %s", e)
     # NOTE: costs_db.init() se mantiene lazy (se inicializa en el primer request).
     # El deadlock que daba en local con --reload esta arreglado en costs_db.py
     # via information_schema check antes de ALTER TABLE. Meterlo en startup
@@ -175,6 +180,12 @@ app.include_router(notifications_api.router)
 from app.api import cs_actions as cs_actions_api
 app.include_router(cs_actions_api.router)
 
+from app.api import cs_templates as cs_templates_api
+app.include_router(cs_templates_api.router)
+
+from app.api import cs_cron as cs_cron_api
+app.include_router(cs_cron_api.router)
+
 from app.api import dropshipper_notes as dropshipper_notes_api
 app.include_router(dropshipper_notes_api.router)
 
@@ -204,6 +215,9 @@ app.include_router(catalog_metadata_api.router)
 
 from app.api import logistics_targets as logistics_targets_api
 app.include_router(logistics_targets_api.router)
+
+from app.api import people as people_api
+app.include_router(people_api.router)
 
 
 @app.get("/api/health")
