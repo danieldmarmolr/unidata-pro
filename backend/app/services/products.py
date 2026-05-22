@@ -83,12 +83,73 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
           AND o."paymentStatus" = 'paid'
     """, p) or 0)
 
+    ordenes_periodo = int(scalar(eng_uni, """
+        SELECT COUNT(DISTINCT o.id)
+        FROM tienda_nube."Order" o
+        WHERE o."createdAt" >= NOW() - make_interval(days => :days)
+          AND o."paymentStatus" = 'paid'
+    """, p) or 0)
+
+    skus_por_orden_avg = float(scalar(eng_uni, """
+        SELECT AVG(per_order.distinct_skus)::float
+        FROM tienda_nube."Order" o
+        JOIN LATERAL (
+          SELECT COUNT(DISTINCT oi.sku)::int AS distinct_skus
+          FROM tienda_nube."OrderItem" oi
+          WHERE oi."orderId" = o.id AND oi.sku IS NOT NULL
+        ) per_order ON TRUE
+        WHERE o."paymentStatus" = 'paid'
+          AND o."createdAt" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+
+    nuevos_7d = int(scalar(eng_uni, """
+        SELECT COUNT(*) FROM (
+          SELECT oi.sku, MIN(o."createdAt") AS primera_venta
+          FROM tienda_nube."OrderItem" oi
+          JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+          WHERE o."paymentStatus" = 'paid' AND oi.sku IS NOT NULL
+            AND oi.sku NOT ILIKE '%PVA%'
+          GROUP BY oi.sku
+          HAVING MIN(o."createdAt") >= NOW() - INTERVAL '7 days'
+        ) x
+    """) or 0)
+
+    stockout_14d = int(scalar(eng_uni, """
+        WITH ventas_30d AS (
+          SELECT oi.sku, SUM(oi.quantity)::float / 30.0 AS ventas_dia
+          FROM tienda_nube."OrderItem" oi
+          JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+          WHERE o."paymentStatus" = 'paid'
+            AND o."createdAt" >= NOW() - INTERVAL '30 days'
+            AND oi.sku IS NOT NULL
+          GROUP BY oi.sku
+        ),
+        stock_act AS (
+          SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock
+          FROM digip."StockDetalle" GROUP BY 1
+        )
+        SELECT COUNT(*)
+        FROM ventas_30d v
+        JOIN stock_act s ON s.sku = v.sku
+        WHERE v.ventas_dia > 0 AND s.stock > 0
+          AND (s.stock / v.ventas_dia) < 14
+    """) or 0)
+
+    ticket_unidades = (units_periodo / ordenes_periodo) if ordenes_periodo > 0 else 0.0
+    catalogo_activo_pct = (skus_vendidos / total_products * 100) if total_products > 0 else 0.0
+
     cards.append({"label": "Productos publicados", "value": total_products, "hint": "Tienda Nube · published=TRUE"})
     cards.append({"label": f"SKUs vendidos ({period})", "value": skus_vendidos, "hint": "Distintos en orders pagas"})
     cards.append({"label": "Unidades vendidas", "value": units_periodo, "hint": "TN orders pagas"})
+    cards.append({"label": "Ordenes pagas", "value": ordenes_periodo, "hint": "TN orders paid del periodo"})
+    cards.append({"label": "Ticket de unidades", "value": round(ticket_unidades, 2), "hint": "Unidades / ordenes paid"})
+    cards.append({"label": "SKUs por orden", "value": round(skus_por_orden_avg, 2), "hint": "Diversidad de carrito · promedio"})
+    cards.append({"label": "Catalogo activo", "value": round(catalogo_activo_pct, 1), "suffix": "%", "hint": "SKUs vendidos / publicados"})
+    cards.append({"label": "Nuevos 7d", "value": nuevos_7d, "hint": "SKUs con primera venta en ultimos 7 dias"})
     cards.append({"label": "Sin movimiento (>90d)", "value": sin_movimiento, "hint": "SKUs en catalogo sin venta hace 90+ dias"})
     cards.append({"label": "SKUs Digip", "value": skus_digip, "hint": "En el WMS"})
     cards.append({"label": "Stock critico", "value": sku_critico, "hint": "<= 5 unidades totales"})
+    cards.append({"label": "Stockout 14d", "value": stockout_14d, "hint": "SKUs que se agotan en menos de 14 dias al ritmo actual"})
 
     # Top SKUs por revenue (universo top 80 para luego derivar ganancia per SKU)
     top_revenue_raw = q(eng_uni, """

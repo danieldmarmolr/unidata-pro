@@ -70,7 +70,7 @@ export default function DevolucionesPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit="unistore" />
+        <TodayPanel unit="unistore" context="devoluciones" title="HOY · Devoluciones" />
 
         {modelo !== "all" && modelo !== "unistore" && (
           <div className="mb-6 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-4 py-3 text-sm">

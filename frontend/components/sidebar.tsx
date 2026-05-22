@@ -160,6 +160,7 @@ const ITEMS: NavItem[] = [
     areas: ["ventas", "compras"],
     children: [
       { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
+      { label: "Omnicanal mayorista", href: "/dashboard/productos/omnicanal", icon: Layers      },
       { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
       { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles    },
       { label: "Forecast demanda",    href: "/dashboard/forecast",            icon: TrendingUp  },

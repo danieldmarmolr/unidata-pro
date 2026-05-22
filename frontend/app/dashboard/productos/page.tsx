@@ -3,16 +3,16 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { ScanBarcode } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
-import { SkuSearchBox } from "@/components/sku-search-box";
 import { SmartSearch } from "@/components/smart-search";
-import { KpiCard } from "@/components/kpi-card";
+import { KpiChipStrip } from "@/components/kpi-chip-strip";
 import { getCardDrill } from "@/lib/kpi-drill";
 import { CategoryTable } from "@/components/generic-table";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
+import { SkuMasterTable, type SkuRow } from "@/components/sku-master-table";
+import { ProductsTrendCharts } from "@/components/products-trend-charts";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue } from "@/lib/types";
@@ -30,6 +30,26 @@ type ProductsResp = {
   generated_at: string;
 };
 
+type MasterTableResp = {
+  period: string;
+  channel: string;
+  skus: SkuRow[];
+  summary: {
+    total_skus: number;
+    total_revenue: number;
+    total_ganancia: number;
+    skus_clase_a: number;
+    skus_clase_b: number;
+    skus_clase_c: number;
+    skus_growth: number;
+    skus_declive: number;
+    skus_nuevos_7d: number;
+    skus_stockout_risk: number;
+    skus_con_costo: number;
+  };
+  generated_at: string;
+};
+
 export default function ProductosPage() {
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
@@ -44,6 +64,12 @@ export default function ProductosPage() {
     staleTime: 60_000,
   });
 
+  const { data: master, isLoading: masterLoading } = useQuery<MasterTableResp>({
+    queryKey: ["dashboards", "products-master", period, customFrom, customTo, channel],
+    queryFn: () => api(`/api/dashboards/products/master-table?${_qs}&channel=${channel}`),
+    staleTime: 60_000,
+  });
+
   const goSku = (r: CategoryValue) => {
     const sku = r.extra?.sku;
     if (typeof sku === "string" && sku) router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
@@ -53,9 +79,9 @@ export default function ProductosPage() {
     <>
       <Topbar
         title="Productos"
-        subtitle="Top SKUs cross-canal · stock · sin movimiento · drill por SKU"
+        subtitle="Catalogo · ABC × XYZ · lifecycle · DoI · ganancia · 17 dimensiones por SKU"
       />
-      
+
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <DashboardHeader
           generatedAt={data?.generated_at}
@@ -73,10 +99,9 @@ export default function ProductosPage() {
           }
         />
         <TodayPanel
-          compact={period !== "today"}
           unit="unistore"
           context="productos"
-          title="Comparador HOY · Productos"
+          title="HOY · Productos"
         />
 
         {/* Buscador SKU / EAN con autocomplete + dropdown de matches */}
@@ -90,41 +115,33 @@ export default function ProductosPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
-          {isLoading || !data
-            ? Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
-              ))
-            : data.cards.map((c) => <KpiCard key={c.label} data={c} drill={getCardDrill(c.label, { period, channel })} />)}
-        </div>
+        {/* Strip denso de KPIs */}
+        {isLoading || !data ? (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="bg-surface border border-border rounded-lg h-[68px] w-[140px] animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <KpiChipStrip
+            cards={data.cards}
+            getDrill={(label) => getCardDrill(label, { period, channel })}
+          />
+        )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
-          {isLoading || !data ? (
-            <>
-              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-            </>
+        {/* Graficos de tendencias */}
+        <ProductsTrendCharts />
+
+        {/* Tabla maestra por SKU (reemplaza el viejo Top 20) */}
+        <div className="mb-6">
+          {masterLoading || !master ? (
+            <div className="bg-surface border border-border rounded-xl h-[600px] animate-pulse" />
           ) : (
-            <>
-              <CategoryTable
-                caption="Top 20 productos por revenue"
-                subtitle="Click en una fila para ver el SKU 360"
-                data={data.top_products}
-                formatter="currency"
-                extraColumns={[
-                  { key: "sku", label: "SKU", format: "raw" },
-                  { key: "units", label: "Unid", format: "number" },
-                  { key: "orders", label: "Ord", format: "number" },
-                  { key: "customers", label: "Clientes", format: "number" },
-                ]}
-                onRowClick={goSku}
-              />
-              {/* Top 10 marcas oculto: la data esta rota (todas las filas vienen como '(sin marca)').
-                  Cuando se corrija el sourcing de marcas en TN/digip se vuelve a habilitar. */}
-            </>
+            <SkuMasterTable data={master.skus} summary={master.summary} />
           )}
         </div>
 
+        {/* Tablas operativas: stock critico + sin movimiento */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
           {isLoading || !data ? (
             <>

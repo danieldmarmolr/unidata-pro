@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { api, getUser } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
@@ -218,6 +219,7 @@ export default function MetaAdsPage() {
     <>
       <Topbar title="Meta Ads · Comando central" subtitle="Performance, audiencia, atribución y orquestación cross-area" />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="marketing" title="HOY · Meta Ads" />
         <Link href="/dashboard/marketing" className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-primary mb-4">
           <ArrowLeft size={14} /> Volver a Marketing
         </Link>

@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { TrendingUp, Package, AlertTriangle, Calendar } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
 import { formatNumber, formatCurrency } from "@/lib/utils";
@@ -53,6 +54,7 @@ export default function ForecastPage() {
         subtitle="Predicción por SKU + PO sugerida si stock no alcanza"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="productos" title="HOY · Forecast" />
         <div className="bg-gradient-to-r from-blue-50 to-cyan-50 border border-blue-200 rounded-xl p-5 mb-6">
           <div className="text-sm font-bold text-blue-900 mb-1">¿Cómo se calcula?</div>
           <div className="text-xs text-blue-800/90 leading-relaxed">

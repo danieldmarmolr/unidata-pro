@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { ArrowRight, TrendingUp, TrendingDown, Activity, Info, ExternalLink } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { ExportButtons } from "@/components/export-buttons";
 import { ActionableFooter } from "@/components/actionable-footer";
 import { api } from "@/lib/api";
@@ -55,6 +56,7 @@ export default function RfmFlowsPage() {
           : "Cómo se mueven los clientes Unistore entre segmentos · alertas de fuga y reactivación"}
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <TodayPanel context="clientes" title="HOY · RFM Flows" />
         {/* Toggle Unistore / Unidrop */}
         <div className={"mb-4 inline-flex bg-soft rounded-xl p-1 border border-border " + (unitLocked ? "opacity-60" : "")}
           title={unitLocked ? `Fijado a ${unit}` : undefined}>

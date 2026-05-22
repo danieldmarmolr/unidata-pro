@@ -93,6 +93,12 @@ def today_snapshot(unit: str | None = None, context: str | None = None) -> dict:
         return _today_snapshot_productos(unit)
     if context == "logistica":
         return _today_snapshot_logistica(unit)
+    if context == "finanzas":
+        return _today_snapshot_finanzas(unit)
+    if context == "devoluciones":
+        return _today_snapshot_devoluciones(unit)
+    if context == "dropshippers":
+        return _today_snapshot_dropshippers(unit)
 
     show_unistore = unit in (None, "unistore")
     show_unidrop = unit in (None, "unidrop")
@@ -328,70 +334,155 @@ def _today_snapshot_cs(unit: str | None = None) -> dict:
 
 
 def _today_snapshot_productos(unit: str | None = None) -> dict:
-    """HOY contextual para Productos: SKUs vendidos hoy, productos nuevos
-    activos, alertas de stock critico que dispararon."""
+    """HOY contextual para Productos: 8 bloques operativos + financieros.
+
+    Bloques: SKUs vendidos, Unidades, SKUs/Orden (basket diversity),
+    Variedad % (cobertura de catalogo), Ticket unidades, Ganancia neta,
+    Margen %, Stock critico (snapshot).
+    """
     blocks: list[dict] = []
     try:
+        from app.services._utils import q as _q
+        from app.services.profit_engine import cost_index_unistore, calc_profit
         uni = get_engine("unistore")
 
-        # Distintos SKUs vendidos hoy (paid)
-        def skus_vendidos(days_back: int) -> float:
+        # Total catalogo publicado (denominador para variedad %)
+        total_publicados = int(scalar(uni, """
+            SELECT COUNT(*) FROM tienda_nube."Product" WHERE published = TRUE
+        """) or 0) or 1
+
+        # Cache de costos para Ganancia/Margen (1 sola lectura)
+        cost_idx = cost_index_unistore()
+
+        def day_aggregates(days_back: int) -> dict:
+            """Calcula todos los agregados del dia en 2 queries (no 1 por metrica)."""
             from_ts, to_ts = _day_bounds(days_back)
-            return int(scalar(uni, """
-                SELECT COUNT(DISTINCT oi.sku) FROM tienda_nube."OrderItem" oi
+            agg = _q(uni, """
+                SELECT
+                  COUNT(DISTINCT oi.sku)                            AS skus,
+                  COALESCE(SUM(oi.quantity), 0)::int                AS unidades,
+                  COUNT(DISTINCT o.id)                              AS ordenes,
+                  AVG(per_order.distinct_skus)::float               AS skus_por_orden
+                FROM tienda_nube."OrderItem" oi
+                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+                JOIN LATERAL (
+                  SELECT COUNT(DISTINCT oi2.sku) AS distinct_skus
+                  FROM tienda_nube."OrderItem" oi2
+                  WHERE oi2."orderId" = o.id AND oi2.sku IS NOT NULL
+                ) per_order ON TRUE
+                WHERE o."paymentStatus" = 'paid'
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+                  AND oi.sku IS NOT NULL
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+            r = agg[0] if agg else (0, 0, 0, 0)
+            skus = int(r[0] or 0)
+            unidades = int(r[1] or 0)
+            ordenes = int(r[2] or 0)
+            sku_per_ord = float(r[3] or 0)
+
+            sku_rows = _q(uni, """
+                SELECT oi.sku,
+                       SUM(oi.quantity)::int AS units,
+                       SUM(oi.quantity * oi.price)::float AS revenue
+                FROM tienda_nube."OrderItem" oi
                 JOIN tienda_nube."Order" o ON o.id = oi."orderId"
                 WHERE o."paymentStatus" = 'paid'
                   AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
                   AND oi.sku IS NOT NULL
-            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+            ganancia = 0.0
+            rev_con_costo = 0.0
+            for sk, u, rev in sku_rows:
+                rec = cost_idx.get((sk or "").strip().lower())
+                u = int(u or 0); rev = float(rev or 0)
+                if not (rec and rec.get("costo_con_iva") and u > 0 and rev > 0):
+                    continue
+                sin_iva = float(rec.get("costo_sin_iva") or 0)
+                con_iva = float(rec.get("costo_con_iva") or sin_iva)
+                pb = calc_profit(
+                    ingreso_bruto=rev,
+                    costo_sin_iva=sin_iva * u,
+                    costo_con_iva=con_iva * u,
+                    is_cash=False,
+                    iva_aliquot_override=rec.get("iva_aliquot"),
+                )
+                ganancia += pb.ganancia_neta
+                rev_con_costo += rev
+
+            margen_pct = (ganancia / rev_con_costo * 100) if rev_con_costo > 0 else 0.0
+            ticket_unidades = (unidades / ordenes) if ordenes > 0 else 0.0
+            variedad_pct = (skus / total_publicados * 100) if total_publicados > 0 else 0.0
+            return {
+                "skus": skus,
+                "unidades": unidades,
+                "ordenes": ordenes,
+                "skus_por_orden": round(sku_per_ord, 2),
+                "variedad_pct": round(variedad_pct, 1),
+                "ticket_unidades": round(ticket_unidades, 2),
+                "ganancia": round(ganancia, 0),
+                "margen_pct": round(margen_pct, 1),
+            }
+
+        snaps = {k: day_aggregates(d) for k, d in ANCHORS_DAYS.items()}
 
         blocks.append(_kpi_block(
             "SKUs distintos vendidos",
-            {k: skus_vendidos(d) for k, d in ANCHORS_DAYS.items()},
+            {k: s["skus"] for k, s in snaps.items()},
             hint="Productos unicos con al menos una venta paid del dia",
         ))
-
-        # Unidades vendidas
-        def unidades(days_back: int) -> float:
-            from_ts, to_ts = _day_bounds(days_back)
-            return int(scalar(uni, """
-                SELECT COALESCE(SUM(oi.quantity),0) FROM tienda_nube."OrderItem" oi
-                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-                WHERE o."paymentStatus" = 'paid'
-                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
-            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
-
         blocks.append(_kpi_block(
             "Unidades vendidas",
-            {k: unidades(d) for k, d in ANCHORS_DAYS.items()},
+            {k: s["unidades"] for k, s in snaps.items()},
             hint="Suma de quantity de OrderItem paid del dia",
         ))
+        blocks.append(_kpi_block(
+            "SKUs por orden",
+            {k: s["skus_por_orden"] for k, s in snaps.items()},
+            hint="Promedio de SKUs distintos por orden paid (diversidad de carrito)",
+        ))
+        blocks.append(_kpi_block(
+            "Variedad de catalogo",
+            {k: s["variedad_pct"] for k, s in snaps.items()},
+            suffix="%",
+            hint=f"% del catalogo publicado ({total_publicados:,} SKUs) que tuvo venta",
+        ))
+        blocks.append(_kpi_block(
+            "Ticket de unidades",
+            {k: s["ticket_unidades"] for k, s in snaps.items()},
+            hint="Unidades vendidas / ordenes paid del dia",
+        ))
+        blocks.append(_kpi_block(
+            "Ganancia neta",
+            {k: s["ganancia"] for k, s in snaps.items()},
+            prefix="$ ",
+            hint="Solo SKUs con costo cargado en costs.db",
+        ))
+        blocks.append(_kpi_block(
+            "Margen %",
+            {k: s["margen_pct"] for k, s in snaps.items()},
+            suffix="%",
+            hint="Ganancia neta / revenue (solo SKUs con costo cargado)",
+        ))
 
-        # SKUs en stock critico (<= 5 unidades)
-        def stock_critico(days_back: int) -> float:
-            # No depende del dia - es estado actual
-            if days_back == 0:
-                return int(scalar(uni, """
-                    SELECT COUNT(DISTINCT "articuloCodigo")
-                    FROM digip."StockDetalle"
-                    GROUP BY "articuloCodigo"
-                    HAVING SUM(unidades) BETWEEN 1 AND 5
-                """) or 0)
-            return 0
-
-        # No mostramos comparativo - es snapshot actual
-        sc = stock_critico(0)
-        if sc:
+        # Stock critico: snapshot, no comparable temporalmente
+        stock_critico_now = int(scalar(uni, """
+            SELECT COUNT(*) FROM (
+                SELECT "articuloCodigo"
+                FROM digip."StockDetalle"
+                GROUP BY 1 HAVING SUM(unidades) BETWEEN 1 AND 5
+            ) x
+        """) or 0)
+        if stock_critico_now:
             blocks.append({
                 "label": "SKUs en stock critico",
                 "prefix": "",
                 "suffix": "",
                 "hint": "Stock entre 1 y 5 unidades · necesita reposicion",
-                "today": sc,
+                "today": stock_critico_now,
                 "anchors": [
-                    {"key": "w_ago", "label": "estado", "value": sc, "delta_pct": None},
-                    {"key": "m_ago", "label": "actual", "value": sc, "delta_pct": None},
-                    {"key": "y_ago", "label": "snapshot", "value": sc, "delta_pct": None},
+                    {"key": "w_ago", "label": "estado", "value": stock_critico_now, "delta_pct": None},
+                    {"key": "m_ago", "label": "actual", "value": stock_critico_now, "delta_pct": None},
+                    {"key": "y_ago", "label": "snapshot", "value": stock_critico_now, "delta_pct": None},
                 ],
             })
     except Exception as e:
@@ -472,6 +563,169 @@ def _today_snapshot_logistica(unit: str | None = None) -> dict:
     return {
         "level": "today",
         "context": "logistica",
+        "today_date": today_ar().isoformat(),
+        "until_time": now.strftime("%H:%M"),
+        "blocks": blocks,
+        "generated_at": now.isoformat(),
+    }
+
+
+def _today_snapshot_finanzas(unit: str | None = None) -> dict:
+    """HOY contextual para Finanzas: caja del dia (Unistore GMV + Unidrop Pagos Talo + Refunds)."""
+    show_uni = unit in (None, "unistore")
+    show_drp = unit in (None, "unidrop")
+    blocks: list[dict] = []
+
+    if show_uni:
+        try:
+            uni = get_engine("unistore")
+
+            def gmv_uni(days_back: int) -> float:
+                from_ts, to_ts = _day_bounds(days_back)
+                tn = float(scalar(uni, """
+                    SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END),0)
+                    FROM tienda_nube."Order"
+                    WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+                """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+                ml = float(scalar(uni, """
+                    SELECT COALESCE(SUM(COALESCE(total_amount,0)),0)
+                    FROM meli.meli_orders
+                    WHERE date_created >= :from_ts AND date_created < :to_ts
+                      AND status IN ('paid','confirmed','shipped','delivered')
+                """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+                return tn + ml
+
+            blocks.append(_kpi_block(
+                "Ingreso Unistore",
+                {k: gmv_uni(d) for k, d in ANCHORS_DAYS.items()},
+                prefix="$ ",
+                hint="GMV bruto TN + ML del dia",
+            ))
+
+            def refunds(days_back: int) -> float:
+                from_ts, to_ts = _day_bounds(days_back)
+                return float(scalar(uni, """
+                    SELECT COALESCE(SUM(total),0) FROM tienda_nube."Order"
+                    WHERE "paymentStatus" = 'refunded'
+                      AND COALESCE("cancelledAt", "createdAt") >= :from_ts
+                      AND COALESCE("cancelledAt", "createdAt") < :to_ts
+                """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+
+            blocks.append(_kpi_block(
+                "Refunds Unistore",
+                {k: refunds(d) for k, d in ANCHORS_DAYS.items()},
+                prefix="$ ",
+                hint="Suma de ordenes refunded del dia",
+            ))
+        except Exception as e:
+            log.warning("today finanzas uni fail: %s", e)
+
+    if show_drp:
+        try:
+            drop = get_engine("unidrop")
+
+            def talo(days_back: int) -> float:
+                from_ts, to_ts = _day_bounds(days_back)
+                return float(scalar(drop, """
+                    SELECT COALESCE(SUM(amount),0)
+                    FROM public."PaymentTransaction"
+                    WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+                      AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
+                """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+
+            blocks.append(_kpi_block(
+                "Pagos Talo (Unidrop)",
+                {k: talo(d) for k, d in ANCHORS_DAYS.items()},
+                prefix="$ ",
+                hint="Volumen procesado el dia",
+            ))
+        except Exception as e:
+            log.warning("today finanzas drop fail: %s", e)
+
+    now = now_ar()
+    return {
+        "level": "today",
+        "context": "finanzas",
+        "today_date": today_ar().isoformat(),
+        "until_time": now.strftime("%H:%M"),
+        "blocks": blocks,
+        "generated_at": now.isoformat(),
+    }
+
+
+def _today_snapshot_devoluciones(unit: str | None = None) -> dict:
+    """HOY contextual para Devoluciones: solo casos Unidev del dia."""
+    blocks: list[dict] = []
+    try:
+        dev = get_engine("unidev")
+
+        def dev_for_day(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
+            return int(scalar(dev, """
+                SELECT COUNT(*) FROM public.devoluciones
+                WHERE fecha_creacion >= :from_ts AND fecha_creacion < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+
+        blocks.append(_kpi_block(
+            "Devoluciones del dia",
+            {k: dev_for_day(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Casos abiertos en Unidev",
+        ))
+    except Exception as e:
+        log.warning("today devoluciones snap fail: %s", e)
+
+    now = now_ar()
+    return {
+        "level": "today",
+        "context": "devoluciones",
+        "today_date": today_ar().isoformat(),
+        "until_time": now.strftime("%H:%M"),
+        "blocks": blocks,
+        "generated_at": now.isoformat(),
+    }
+
+
+def _today_snapshot_dropshippers(unit: str | None = None) -> dict:
+    """HOY contextual para Dropshippers: altas del dia + pagos procesados."""
+    blocks: list[dict] = []
+    try:
+        drop = get_engine("unidrop")
+
+        def new_users(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
+            return int(scalar(drop, """
+                SELECT COUNT(*) FROM public."User"
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+
+        blocks.append(_kpi_block(
+            "Nuevos dropshippers",
+            {k: new_users(d) for k, d in ANCHORS_DAYS.items()},
+            hint="Altas en Unidrop del dia",
+        ))
+
+        def talo(days_back: int) -> float:
+            from_ts, to_ts = _day_bounds(days_back)
+            return float(scalar(drop, """
+                SELECT COALESCE(SUM(amount),0)
+                FROM public."PaymentTransaction"
+                WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
+                  AND status::text IN ('completed','succeeded','approved','paid','PROCESSED','processed')
+            """, {"from_ts": from_ts, "to_ts": to_ts}) or 0)
+
+        blocks.append(_kpi_block(
+            "Pagos Talo",
+            {k: talo(d) for k, d in ANCHORS_DAYS.items()},
+            prefix="$ ",
+            hint="Volumen procesado el dia",
+        ))
+    except Exception as e:
+        log.warning("today dropshippers snap fail: %s", e)
+
+    now = now_ar()
+    return {
+        "level": "today",
+        "context": "dropshippers",
         "today_date": today_ar().isoformat(),
         "until_time": now.strftime("%H:%M"),
         "blocks": blocks,

@@ -67,7 +67,7 @@ export default function PagosPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit="unidrop" />
+        <TodayPanel unit="unidrop" context="pagos" title="HOY · Pagos" />
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

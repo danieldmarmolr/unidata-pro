@@ -9,6 +9,7 @@ import {
   ImageOff, Info,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
@@ -82,6 +83,7 @@ export default function ProductAnalyticsPage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="productos" title="HOY · Productos Analytics" />
         {/* Filtros maestros: unidad de negocio + tipo de SKU */}
         <div className="mb-4 flex items-center gap-3 flex-wrap bg-surface border border-border rounded-xl px-4 py-3">
           <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Unidad</span>

@@ -71,7 +71,7 @@ export default function EnviosPage() {
                   { value: "lightdata", label: "LightData" },
                 ]}
               />
-        <TodayPanel compact={period !== "today"} unit="unidrop" />
+        <TodayPanel unit="unidrop" context="envios" title="HOY · Envios" />
             </>
           }
         />

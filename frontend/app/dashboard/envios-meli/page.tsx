@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Truck, Package, ShoppingBag, AlertCircle, Sparkles } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
@@ -61,6 +62,7 @@ export default function EnviosMeliPage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="envios" title="HOY · Envios MELI" />
         <DashboardHeader generatedAt={data?.generated_at} isFetching={isFetching} filters={null} />
 
         {data && !data.available && (

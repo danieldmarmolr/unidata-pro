@@ -11,6 +11,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { ActionableFooter } from "@/components/actionable-footer";
@@ -79,6 +80,7 @@ export default function RfmPage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit={unit} context="clientes" title="HOY · RFM" />
         <DashboardHeader
           generatedAt={data?.generated_at}
           isFetching={isFetching}

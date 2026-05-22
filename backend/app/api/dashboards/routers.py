@@ -594,6 +594,9 @@ from app.services import envios_meli_unidrop as envios_meli_svc
 from app.services import notifications as notif_svc
 from app.services import customer_vip as vip_svc
 from app.services import product_analytics as prod_analytics_svc
+from app.services import products_master as products_master_svc
+from app.services import products_timeseries as products_ts_svc
+from app.services import wholesale_elasticity as wholesale_svc
 from app.services import sku_optimizer as sku_opt_svc
 from app.services import rfm_flows as rfm_flows_svc
 from app.services import forecast_batch as forecast_svc
@@ -787,6 +790,82 @@ def get_products_returns_rate(
     """% de devoluciones por SKU sobre ventas (calidad / expectativa)."""
     require_area(user, ["ventas", "compras"])
     return prod_analytics_svc.returns_rate_by_sku(period_days)
+
+
+@router.get("/products/master-table")
+def get_products_master_table(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Tabla maestra por SKU: revenue, ganancia, ABC, XYZ, lifecycle, DoI,
+    returns%, growth 30d, stock. Union de todos los analisis en un dataset."""
+    require_area(user, ["ventas", "compras"])
+    key = f"products-master:{period}:{channel}:{from_iso}:{to_iso}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_master_svc.products_master_table(period, channel, from_iso, to_iso)
+    return _b()
+
+
+@router.get("/products/timeseries/profit-daily")
+def get_products_profit_daily(
+    user: Annotated[dict, Depends(current_user)],
+    days: Annotated[int, Query(ge=14, le=365)] = 90,
+) -> dict:
+    """Serie diaria: revenue, costo y ganancia neta + media movil 7d."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"products-profit-daily:{days}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_ts_svc.profit_daily(days)
+    return _b()
+
+
+@router.get("/products/timeseries/catalog-active")
+def get_products_catalog_active(
+    user: Annotated[dict, Depends(current_user)],
+    weeks: Annotated[int, Query(ge=8, le=104)] = 52,
+) -> dict:
+    """Serie semanal: % del catalogo publicado que tuvo venta esa semana."""
+    require_area(user, ["ventas", "compras"])
+    key = f"products-catalog-active:{weeks}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_ts_svc.catalog_active(weeks)
+    return _b()
+
+
+@router.get("/products/timeseries/abc-distribution")
+def get_products_abc_distribution(
+    user: Annotated[dict, Depends(current_user)],
+    months: Annotated[int, Query(ge=3, le=24)] = 12,
+) -> dict:
+    """Serie mensual: cuantos SKUs hay en clase A/B/C cada mes."""
+    require_area(user, ["ventas", "compras"])
+    key = f"products-abc-dist:{months}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_ts_svc.abc_distribution(months)
+    return _b()
+
+
+@router.get("/products/wholesale-table")
+def get_products_wholesale_table(
+    user: Annotated[dict, Depends(current_user)],
+    period_days: Annotated[int, Query(ge=7, le=365)] = 90,
+    limit: Annotated[int, Query(ge=10, le=500)] = 200,
+) -> dict:
+    """Tabla mayorista omnicanal: por SKU, precio + volumen en los 4 canales
+    (Unistore TN/ML, Unidrop TN/ML) + margen del dropshipper + spread retail."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"wholesale-table:{period_days}:{limit}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return wholesale_svc.wholesale_sku_table(period_days, limit)
+    return _b()
 
 
 @router.get("/products/abc-margen")
@@ -1049,24 +1128,44 @@ def get_lote_detail(
     return detail
 
 
+_TODAY_CTX_ALIAS = {
+    "envios": "logistica",
+    "clientes": "cs",
+    "marketing": "default",
+    "saas": "default",
+    "pagos": "default",
+    "subscriptions": "default",
+    "costos": "default",
+}
+
+
 @router.get("/today")
 def get_today(
     user: Annotated[dict, Depends(current_user)],
     unit: Annotated[Literal["unistore", "unidrop", "all"], Query()] = "all",
-    context: Annotated[Literal["default", "cs", "productos", "logistica"], Query()] = "default",
+    context: Annotated[
+        Literal[
+            "default", "cs", "productos", "logistica",
+            "finanzas", "marketing", "saas", "envios",
+            "devoluciones", "pagos", "subscriptions",
+            "dropshippers", "clientes", "costos",
+        ],
+        Query(),
+    ] = "default",
 ) -> dict:
     """Comparador HOY. Si unit=unistore o unidrop, muestra solo bloques de esa unidad.
     Default 'all' = vista cross-unidad (Gerencial).
 
-    context: cambia los bloques segun la pagina origen:
-    - 'default': GMV, ordenes, ticket promedio, devoluciones (vista ventas/gerencial)
-    - 'cs': customers nuevos, recurrentes, cancelaciones, refunds (Customer Success)
+    context: cambia los bloques segun la pagina origen. Contextos canonicos con bloques
+    propios: cs / productos / logistica / finanzas / devoluciones / dropshippers.
+    Los demas (envios, marketing, clientes, etc.) se mapean a un canonical via alias.
     """
     cache_key = f"today-snap-{unit}-{context}"
     @cached(_cache, key=lambda: cache_key)
     def _b() -> dict:
         scope = None if unit == "all" else unit
-        ctx = None if context == "default" else context
+        canonical = _TODAY_CTX_ALIAS.get(context, context)
+        ctx = None if canonical == "default" else canonical
         return today_svc.today_snapshot(unit=scope, context=ctx)
     return _b()
 

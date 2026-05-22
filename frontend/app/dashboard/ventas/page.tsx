@@ -72,7 +72,7 @@ export default function VentasPage() {
  : "Operadores Unidrop · TN + ML procesados a traves de la plataforma"
  }
  />
-      <div className="px-8 pt-4"><TodayPanel compact={period !== "today"} unit={unit === "unistore" ? "unistore" : "unidrop"} /></div>
+      <div className="px-8 pt-4"><TodayPanel unit={unit === "unistore" ? "unistore" : "unidrop"} title="HOY · Ventas" /></div>
       
  <div className="flex-1 px-8 py-6 overflow-y-auto">
  <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">

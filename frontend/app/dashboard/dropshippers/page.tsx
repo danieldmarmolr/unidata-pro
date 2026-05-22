@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
@@ -125,6 +126,7 @@ export default function DropshippersPage() {
         subtitle="Operadores por canal · solo MELI (con suscripcion) · solo TN (sin sub) · ambos · alertas y deuda"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unidrop" context="dropshippers" title="HOY · Dropshippers" />
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
           <Stat label="Dropshippers" value={formatNumber(data?.stats.total ?? 0)} hint="todos los que operan en MELI o TN" />

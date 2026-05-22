@@ -4,6 +4,7 @@ import { Fragment, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { Segmented } from "@/components/segmented";
 import { api, getToken, getUser } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -80,6 +81,7 @@ export default function CostosPage() {
         subtitle="Lotes · SKUs vigentes · Importacion CSV/XLSX desde la planilla SharePoint"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="costos" title="HOY · Costos" />
         <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
           <Segmented<Tab>
             value={tab}

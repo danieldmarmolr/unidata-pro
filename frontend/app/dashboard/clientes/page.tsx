@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Search, User, Mail, Phone, MapPin, Crown, IdCard, Calendar, TrendingUp, Filter } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { Segmented } from "@/components/segmented";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
@@ -93,6 +94,7 @@ export default function ClientesPage() {
         subtitle="Compradores finales Unistore (TN) o dropshippers Unidrop · cada pestana busca en la base correspondiente"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <TodayPanel unit={unit} context="clientes" title="HOY · Clientes" />
         <div className="mb-4 flex items-center gap-3 flex-wrap">
           <Segmented<Unit>
             value={unit}

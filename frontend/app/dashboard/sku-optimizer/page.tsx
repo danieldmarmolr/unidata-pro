@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { Zap, Package, AlertTriangle, TrendingDown, TrendingUp, DollarSign, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
@@ -61,6 +62,7 @@ export default function SkuOptimizerPage() {
         subtitle="Recomendaciones accionables · combos · reposición urgente · liquidar · subir precio"
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="productos" title="HOY · SKU Optimizer" />
         {/* Unit selector: Unistore (retail propio) vs Unidrop (red de dropshippers) */}
         <div className="mb-4 inline-flex bg-soft rounded-xl p-1 border border-border">
           <button

@@ -69,7 +69,7 @@ export default function SaaSPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit="unidrop" />
+        <TodayPanel unit="unidrop" context="saas" title="HOY · SaaS Unidrop" />
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

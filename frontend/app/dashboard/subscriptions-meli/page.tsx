@@ -139,7 +139,7 @@ export default function SubscriptionsMeliPage() {
                   { value: "crm", label: "CRM Suscriptores" },
                 ]}
               />
-        <TodayPanel compact={period !== "today"} />
+        <TodayPanel context="subscriptions" title="HOY · Suscripciones MELI" />
               <Segmented<Plan>
                 value={plan}
                 onChange={setPlan}

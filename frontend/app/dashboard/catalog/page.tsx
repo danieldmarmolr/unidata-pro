@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { Segmented } from "@/components/segmented";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { ERDiagram, type ERNode, type EREdge, type ERColumn } from "@/components/er-diagram";
@@ -155,6 +156,7 @@ export default function CatalogPage() {
         subtitle="Estructura de las 3 BBDD · ER navegable · cross-database"
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="productos" title="HOY · Catalogo" />
         <DashboardHeader
           generatedAt={null}
           filters={

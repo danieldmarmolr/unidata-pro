@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { FileDown } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { KpiCard } from "@/components/kpi-card";
 import { getCardDrill } from "@/lib/kpi-drill";
 import { RevenueChart, DONUT_COLORS, DONUT_TO_SERIES } from "@/components/revenue-chart";
@@ -18,66 +19,6 @@ import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { ExecutiveOverview, CategoryValue, KpiCard as KpiCardT } from "@/lib/types";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, todayArIso } from "@/lib/dates";
-
-type TodayAnchor = { key: string; label: string; value: number; delta_pct: number | null };
-type TodayBlock = { label: string; prefix?: string; suffix?: string; hint?: string; today: number; anchors: TodayAnchor[] };
-type TodaySnapshot = { today_date: string; blocks: TodayBlock[]; generated_at: string };
-
-function fmtVal(v: number, prefix?: string, suffix?: string): string {
-  return `${prefix ?? ""}${formatNumber(v)}${suffix ?? ""}`;
-}
-
-function TodayPanel({ data }: { data?: TodaySnapshot }) {
-  if (!data) {
-    return (
-      <div className="bg-surface border border-border rounded-xl p-6 mb-6 animate-pulse h-[260px]" />
-    );
-  }
-  return (
-    <div className="bg-gradient-to-br from-primary/8 to-accent/8 border border-primary/30 rounded-xl p-5 mb-6">
-      <div className="flex items-baseline justify-between mb-4">
-        <div>
-          <div className="text-sm font-bold text-text">
-            Comparador HOY ({(() => {
-              const [y, m, d] = data.today_date.split("-");
-              return `${d}/${m}/${y}`;
-            })()})
-          </div>
-          <div className="text-xs text-text-muted mt-0.5">vs mismo dia de la semana hace 7d / 28d / 336d (apples-to-apples)</div>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {data.blocks.map((b) => (
-          <div key={b.label} className="bg-surface border border-border rounded-xl p-4">
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{b.label}</div>
-            <div className="text-2xl font-extrabold text-text mt-1 tabular-nums">
-              {fmtVal(b.today, b.prefix, b.suffix)}
-            </div>
-            {b.hint && <div className="text-[10px] text-text-muted mt-0.5">{b.hint}</div>}
-            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-border">
-              {b.anchors.map((a) => (
-                <div key={a.key}>
-                  <div className="text-[9px] uppercase tracking-wider text-text-muted font-semibold">{a.label}</div>
-                  <div className="text-xs font-bold text-text-muted tabular-nums">
-                    {fmtVal(a.value, b.prefix, b.suffix)}
-                  </div>
-                  {a.delta_pct !== null && (
-                    <div className={"text-[10px] font-semibold " + (a.delta_pct >= 0 ? "text-emerald-600" : "text-error")}>
-                      {a.delta_pct >= 0 ? "+" : ""}{a.delta_pct.toFixed(0)}%
-                    </div>
-                  )}
-                  {a.delta_pct === null && a.value === 0 && (
-                    <div className="text-[10px] text-text-muted">sin datos</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 type UnitMetric = {
   label: string;
@@ -283,7 +224,6 @@ export default function ExecutiveDashboardPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
-  const isToday = period === "today";
   const periodLabel: string = ({
     today: "HOY",
     yesterday: "AYER",
@@ -298,13 +238,6 @@ export default function ExecutiveDashboardPage() {
     queryKey: ["dashboards", "executive", period, customFrom, customTo],
     queryFn: () => api<ExtendedExec>(`/api/dashboards/executive?${_qs}`),
     staleTime: 60_000,
-  });
-
-  const { data: today, isLoading: loadingToday } = useQuery<TodaySnapshot>({
-    queryKey: ["dashboards", "today"],
-    queryFn: () => api<TodaySnapshot>("/api/dashboards/today"),
-    staleTime: 60_000,
-    enabled: isToday,
   });
 
   async function downloadMonthlyPdf() {
@@ -367,8 +300,9 @@ export default function ExecutiveDashboardPage() {
           </div>
         )}
 
-        {/* HOY snapshot panel (only when period=today) */}
-        {isToday && (loadingToday ? <TodayPanel /> : <TodayPanel data={today} />)}
+        {/* HOY snapshot - barra compacta expandible (cross-app, Gerencia es la vista canonica) */}
+        <TodayPanel title="Comparador HOY" allowCrossToggle={false} />
+
 
         {/* Cards top */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-5 gap-4 mb-6">

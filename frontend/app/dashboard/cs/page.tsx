@@ -89,10 +89,9 @@ export default function CustomerSuccessPage() {
  ]}
  />
         <TodayPanel
-          compact={period !== "today"}
           unit={unit}
           context="cs"
-          title="Comparador HOY · Customer Success"
+          title="HOY · Customer Success"
         />
  <Segmented<Channel>
  value={channel}

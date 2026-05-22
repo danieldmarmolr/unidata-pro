@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Truck, Package, MapPin, Bike, Mail, ShoppingBag } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { api } from "@/lib/api";
@@ -65,6 +66,7 @@ export default function EnviosUnistorePage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit="unistore" context="envios" title="HOY · Envios Unistore" />
         <DashboardHeader generatedAt={data?.generated_at} isFetching={isFetching} filters={null} />
 
         {/* KPIs */}

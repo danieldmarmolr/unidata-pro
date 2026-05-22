@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { StoriesPanel } from "@/components/stories-panel";
 import { getUser, api, type AuthUser } from "@/lib/api";
@@ -178,6 +179,7 @@ export default function HomePage() {
     <>
       <Topbar title="Inicio" subtitle="Pantalla principal · navegacion rapida segun tu rol · el filtro de fechas aplica a todas las vistas" />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
+        <TodayPanel title="HOY · Inicio" allowCrossToggle={false} />
         {/* Stories - cumples + aniversarios del mes */}
         <StoriesPanel />
 

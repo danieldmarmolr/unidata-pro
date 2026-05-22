@@ -7,6 +7,7 @@ import {
   ChevronRight, Receipt, Star, AlertTriangle, Skull,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { TodayPanel } from "@/components/today-panel";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { CohortInlineTable } from "@/components/cohort-inline-table";
@@ -94,6 +95,7 @@ export default function CohortesPage() {
       />
 
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
+        <TodayPanel unit={unit} context="clientes" title="HOY · Cohortes" />
         <DashboardHeader
           generatedAt={data?.generated_at}
           isFetching={isFetching}

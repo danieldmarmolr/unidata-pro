@@ -73,7 +73,7 @@ export default function FinanzasPage() {
             />
           }
         />
-        <TodayPanel compact={period !== "today"} unit={unit} />
+        <TodayPanel unit={unit} context="finanzas" title="HOY · Finanzas" />
 
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-error rounded-xl px-4 py-3 text-sm">

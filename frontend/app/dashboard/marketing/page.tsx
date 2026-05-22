@@ -126,7 +126,7 @@ export default function MarketingPage() {
                   { value: "unidrop", label: "Unidrop" },
                 ]}
               />
-        <TodayPanel compact={period !== "today"} unit={unit} />
+        <TodayPanel unit={unit} context="marketing" title="HOY · Marketing" />
             </>
           }
         />

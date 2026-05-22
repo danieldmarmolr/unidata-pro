@@ -87,10 +87,9 @@ export default function LogisticaPage() {
           }
         />
         <TodayPanel
-          compact={period !== "today"}
           unit={unit}
           context="logistica"
-          title="Comparador HOY · Logistica"
+          title="HOY · Logistica"
         />
 
         {/* Buscador SKU / EAN — pensado para scaneo en deposito */}
