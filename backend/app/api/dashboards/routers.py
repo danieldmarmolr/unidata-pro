@@ -852,14 +852,33 @@ def get_products_abc_distribution(
     return _b()
 
 
+@router.get("/products/omnicanal-table")
+def get_products_omnicanal_table(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Tabla omnicanal enriquecida por SKU: volumen + precio en los 4 canales,
+    costo de importacion Unistore, markups por canal, margenes retail/mayorista,
+    ganancia retail (calc_profit) + ganancia mayorista (precio_drp x qty),
+    imagen + EAN. Respeta el selector global de periodo."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"omnicanal-table:{period}:{from_iso}:{to_iso}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return wholesale_svc.omnicanal_sku_table(period, from_iso, to_iso)
+    return _b()
+
+
+# Compat con el endpoint anterior (deprecado)
 @router.get("/products/wholesale-table")
 def get_products_wholesale_table(
     user: Annotated[dict, Depends(current_user)],
     period_days: Annotated[int, Query(ge=7, le=365)] = 90,
     limit: Annotated[int, Query(ge=10, le=500)] = 200,
 ) -> dict:
-    """Tabla mayorista omnicanal: por SKU, precio + volumen en los 4 canales
-    (Unistore TN/ML, Unidrop TN/ML) + margen del dropshipper + spread retail."""
+    """DEPRECADO: usar /products/omnicanal-table con period+from+to."""
     require_area(user, ["ventas", "compras", "finanzas"])
     key = f"wholesale-table:{period_days}:{limit}"
     @cached(_cache, key=lambda: key)
