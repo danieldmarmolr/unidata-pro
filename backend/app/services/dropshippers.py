@@ -27,7 +27,7 @@ def dropshippers_master(
     riesgo: str = "all",
     actividad: str = "all",
     search: str | None = None,
-    limit: int = 10000,
+    limit: int = 50000,
     canal: str = "all",
     period: str = "30d",
     from_iso: str | None = None,
@@ -147,6 +147,18 @@ def dropshippers_master(
         INNER JOIN public."CustomerPaymentAccount" cpa ON cpa."id" = pi."customerAccountId"
         GROUP BY cpa."userId"
     ),
+    subs_cobradas AS (
+        -- Suscripciones MELI cobradas en el periodo. PaymentIntentSubscription
+        -- tiene userId directo (FK a User). status='PROCESSED' = plata efectiva
+        -- recibida por Unidrop. Esta es la 2da pata del revenue Unidrop (la 1ra
+        -- es profit_for_subscription por orden ML).
+        SELECT pis."userId" AS user_id,
+               COALESCE(SUM(pis."paidAmount") FILTER (WHERE pis.status::text='PROCESSED'),0)::float AS subs_cobradas_periodo,
+               COUNT(*) FILTER (WHERE pis.status::text='PROCESSED')::int AS subs_pagadas_periodo
+        FROM public."PaymentIntentSubscription" pis
+        WHERE pis."createdAt" >= NOW() - make_interval(days => :period_days)
+        GROUP BY pis."userId"
+    ),
     -- TN: agregados de orders TN del cliente final del dropshipper - filtrados por periodo.
     -- user_id apunta al dropshipper Unidrop, NO al cliente final.
     tn AS (
@@ -214,6 +226,8 @@ def dropshippers_master(
         pg.ultimo_pago::text,
         COALESCE(d.deuda_pendiente, 0)::float AS deuda_pendiente,
         COALESCE(d.pagos_con_deuda, 0) AS pagos_con_deuda,
+        COALESCE(sc.subs_cobradas_periodo, 0)::float AS subs_cobradas,
+        COALESCE(sc.subs_pagadas_periodo, 0)::int AS subs_pagadas,
         -- Senales de canal (incluye PaymentIntent como evidencia de actividad)
         (u."subscriptionId" IS NOT NULL OR u."mercadoLibreAccountId" IS NOT NULL OR COALESCE(v.ventas_pagadas,0) > 0 OR COALESCE(pg.intent_ml_orders,0) > 0) AS tiene_meli,
         (COALESCE(tnc.tn_tiendas,0) > 0 OR COALESCE(tn.tn_ventas_pagadas,0) > 0 OR COALESCE(tn.tn_ordenes_totales,0) > 0 OR COALESCE(pg.intent_tn_orders,0) > 0) AS tiene_tn,
@@ -233,6 +247,7 @@ def dropshippers_master(
     LEFT JOIN ventas v ON v.cuenta_meli_id = mla.id
     LEFT JOIN pagos pg ON pg.user_id = u.id
     LEFT JOIN deuda d ON d.user_id = u.id
+    LEFT JOIN subs_cobradas sc ON sc.user_id = u.id
     LEFT JOIN tn ON tn.user_id = u.id
     LEFT JOIN tnc ON tnc.user_id = u.id
     WHERE {where_sql}
@@ -258,6 +273,7 @@ def dropshippers_master(
         "canceladas", "canceladas_staff", "sku_faltante",
         "pagos_procesados", "pago_unidrop_total", "pago_unidrop_meli", "ultimo_pago",
         "deuda_pendiente", "pagos_con_deuda",
+        "subs_cobradas", "subs_pagadas",
         "tiene_meli", "tiene_tn",
         "tn_ordenes_totales", "tn_ventas_pagadas",
         "tn_ventas_pagadas_intent", "tn_ventas_pagadas_tno",
@@ -285,6 +301,13 @@ def dropshippers_master(
             it["canal"] = "sin_canal"
         # GMV combinado para ranking en frontend
         it["gmv_total"] = float(it.get("gmv") or 0) + float(it.get("tn_gmv") or 0)
+        # Ganancia NETA que percibe Unidrop por tener a este dropshipper como cliente:
+        # margen por orden ML (ya neto, incluye comision) + suscripciones cobradas
+        # en el periodo. Distinto de la ganancia que el dropshipper percibe al
+        # revender (esa es gmv - merchandise_cost - shipping_cost - sus gastos).
+        it["ganancia_unidrop_neta"] = round(
+            float(it.get("profit_unidrop") or 0) + float(it.get("subs_cobradas") or 0), 2
+        )
 
     # ============================================================
     # STATS GLOBALES sobre el UNIVERSO (plan + search ya aplicados)
@@ -323,6 +346,48 @@ def dropshippers_master(
     sum_profit = sum(float(it.get("profit_unidrop") or 0) for it in universe)
     sum_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in universe)
     sum_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in universe)
+    sum_subs_cobradas = sum(float(it.get("subs_cobradas") or 0) for it in universe)
+    sum_ganancia_unidrop = sum(float(it.get("ganancia_unidrop_neta") or 0) for it in universe)
+
+    # Nuevos dropshippers en el periodo: createdAt dentro de la ventana
+    period_start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=int(days))
+    nuevos_periodo = 0
+    for it in universe:
+        cr = it.get("creado_en")
+        if not cr:
+            continue
+        try:
+            d = dt.datetime.fromisoformat(cr.replace(" ", "T"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=dt.timezone.utc)
+            if d >= period_start:
+                nuevos_periodo += 1
+        except Exception:
+            pass
+
+    # Breakdown por plan: count + ganancia Unidrop + GMV combinado por plan
+    by_plan: dict[str, dict] = {}
+    for it in universe:
+        plan_name = it.get("plan") or "sin_plan"
+        slot = by_plan.setdefault(plan_name, {
+            "plan_id": it.get("plan_id"),
+            "plan_precio": float(it.get("plan_precio") or 0),
+            "count": 0,
+            "ganancia_unidrop": 0.0,
+            "subs_cobradas": 0.0,
+            "profit_unidrop": 0.0,
+            "gmv_total": 0.0,
+        })
+        slot["count"] += 1
+        slot["ganancia_unidrop"] += float(it.get("ganancia_unidrop_neta") or 0)
+        slot["subs_cobradas"] += float(it.get("subs_cobradas") or 0)
+        slot["profit_unidrop"] += float(it.get("profit_unidrop") or 0)
+        slot["gmv_total"] += float(it.get("gmv_total") or 0)
+    for slot in by_plan.values():
+        slot["ganancia_unidrop"] = round(slot["ganancia_unidrop"], 0)
+        slot["subs_cobradas"] = round(slot["subs_cobradas"], 0)
+        slot["profit_unidrop"] = round(slot["profit_unidrop"], 0)
+        slot["gmv_total"] = round(slot["gmv_total"], 0)
 
     sin_publicar_u = sum(1 for it in universe if (it.get("pub_activas") or 0) == 0)
     # "sin vender" considera TODOS los canales: ni MELI ni TN
@@ -347,6 +412,31 @@ def dropshippers_master(
         if (_last_sale_dt(it) is not None and _last_sale_dt(it) >= cutoff_30d)
     )
     inactivos = universe_total - activos_30d
+
+    # Cross con Meta Ads: spend Meta + CAC + ROAS para entender adquisicion.
+    # Best-effort: si el modulo / sync no esta disponible, devolvemos None y el
+    # frontend simplemente no muestra esos cards. NO bloquea el endpoint.
+    meta_summary = None
+    try:
+        from app.services import meta_ads as meta_svc
+        meta_period = {
+            "today": "7d", "yesterday": "7d", "7d": "7d", "30d": "30d",
+            "90d": "90d", "12m": "1y", "custom": "30d",
+        }.get(period, "30d")
+        ov = meta_svc.overview(period=meta_period, unit="unidrop")
+        spend_meta = float((ov or {}).get("spend") or 0)
+        cac_drop = round(spend_meta / nuevos_periodo, 0) if nuevos_periodo > 0 and spend_meta > 0 else None
+        roas = round(sum_ganancia_unidrop / spend_meta, 2) if spend_meta > 0 else None
+        meta_summary = {
+            "spend": round(spend_meta, 0),
+            "impressions": int((ov or {}).get("impressions") or 0),
+            "clicks": int((ov or {}).get("clicks") or 0),
+            "cac_dropshipper": cac_drop,
+            "roas_ganancia_unidrop": roas,
+            "period": meta_period,
+        }
+    except Exception:
+        meta_summary = None
 
     # ============================================================
     # FILTROS de la lista (afectan SOLO la tabla, no los KPIs)
@@ -378,6 +468,8 @@ def dropshippers_master(
     filtered_profit = sum(float(it.get("profit_unidrop") or 0) for it in items)
     filtered_pago = sum(float(it.get("pago_unidrop_total") or 0) for it in items)
     filtered_deuda = sum(float(it.get("deuda_pendiente") or 0) for it in items)
+    filtered_subs = sum(float(it.get("subs_cobradas") or 0) for it in items)
+    filtered_ganancia_unidrop = sum(float(it.get("ganancia_unidrop_neta") or 0) for it in items)
 
     return {
         "items": items,
@@ -391,6 +483,12 @@ def dropshippers_master(
             "profit_unidrop": round(sum_profit, 0),
             "pago_unidrop": round(sum_pago, 0),
             "deuda_pendiente": round(sum_deuda, 0),
+            # Revenue Unidrop (margen por orden + suscripciones cobradas)
+            "subs_cobradas": round(sum_subs_cobradas, 0),
+            "ganancia_unidrop_total": round(sum_ganancia_unidrop, 0),
+            "nuevos_periodo": nuevos_periodo,
+            "by_plan": by_plan,
+            "meta": meta_summary,
             "sin_publicar": sin_publicar_u,
             "sin_vender": sin_vender_u,
             "con_deuda": con_deuda_u,
@@ -413,6 +511,8 @@ def dropshippers_master(
             "profit_unidrop": round(filtered_profit, 0),
             "pago_unidrop": round(filtered_pago, 0),
             "deuda_pendiente": round(filtered_deuda, 0),
+            "subs_cobradas": round(filtered_subs, 0),
+            "ganancia_unidrop_total": round(filtered_ganancia_unidrop, 0),
         },
         "filters_applied": {
             "plan": plan,

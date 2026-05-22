@@ -50,6 +50,11 @@ type DS = {
   pago_unidrop_total: number;
   ultimo_pago: string | null;
   deuda_pendiente: number;
+  // Suscripciones cobradas en el periodo (segunda pata del revenue Unidrop)
+  subs_cobradas?: number;
+  subs_pagadas?: number;
+  // Ganancia neta para Unidrop = profit por orden + suscripciones cobradas
+  ganancia_unidrop_neta?: number;
   // Canal
   tiene_meli?: boolean;
   tiene_tn?: boolean;
@@ -62,6 +67,25 @@ type DS = {
   gmv_total?: number;
 };
 
+type PlanSlot = {
+  plan_id: number | null;
+  plan_precio: number;
+  count: number;
+  ganancia_unidrop: number;
+  subs_cobradas: number;
+  profit_unidrop: number;
+  gmv_total: number;
+};
+
+type MetaSummary = {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  cac_dropshipper: number | null;
+  roas_ganancia_unidrop: number | null;
+  period: string;
+};
+
 type Resp = {
   items: DS[];
   total: number;
@@ -70,6 +94,11 @@ type Resp = {
     tn_gmv?: number; gmv_total?: number;
     sin_publicar: number; sin_vender: number; con_deuda: number; token_expira: number;
     activos_30d?: number; inactivos?: number;
+    subs_cobradas?: number;
+    ganancia_unidrop_total?: number;
+    nuevos_periodo?: number;
+    by_plan?: Record<string, PlanSlot>;
+    meta?: MetaSummary | null;
     by_channel?: {
       meli: { count: number; gmv: number };
       tn: { count: number; gmv: number };
@@ -79,6 +108,8 @@ type Resp = {
   };
   filtered_stats?: {
     total: number; gmv: number; profit_unidrop: number; pago_unidrop: number; deuda_pendiente: number;
+    subs_cobradas?: number;
+    ganancia_unidrop_total?: number;
   };
   filters_applied?: { plan: string; riesgo: string; actividad: string; canal?: string; search: string };
   generated_at: string;
@@ -127,6 +158,50 @@ export default function DropshippersPage() {
       />
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <TodayPanel unit="unidrop" context="dropshippers" title="HOY · Dropshippers" />
+        {/* Ganancia Unidrop - el KPI hero del listado */}
+        {data?.stats.ganancia_unidrop_total !== undefined && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div className="md:col-span-2 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-emerald-50 to-white p-4">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-700/80 font-semibold">Ganancia Unidrop neta del periodo</div>
+              <div className="mt-1 text-3xl font-bold tabular-nums text-emerald-800">
+                {formatCurrency(data.stats.ganancia_unidrop_total)}
+              </div>
+              <div className="mt-1 text-xs text-emerald-700/80 flex flex-wrap gap-x-4 gap-y-1">
+                <span>Margen ML (profit_for_subscription) <span className="font-semibold tabular-nums">{formatCurrency(data.stats.profit_unidrop)}</span></span>
+                <span>+ Suscripciones cobradas <span className="font-semibold tabular-nums">{formatCurrency(data.stats.subs_cobradas ?? 0)}</span></span>
+              </div>
+            </div>
+            <div className="rounded-xl border border-border bg-surface p-4 flex flex-col justify-between">
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-semibold">Nuevos en el periodo</div>
+                <div className="mt-1 text-3xl font-bold tabular-nums text-primary">
+                  +{formatNumber(data.stats.nuevos_periodo ?? 0)}
+                </div>
+              </div>
+              {data.stats.meta && (
+                <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                  <div className="rounded-lg bg-blue-50 border border-blue-200 px-2 py-1">
+                    <div className="text-[9px] text-blue-700/80 uppercase">Spend Meta</div>
+                    <div className="font-semibold tabular-nums text-blue-800">{formatCurrency(data.stats.meta.spend)}</div>
+                  </div>
+                  <div className="rounded-lg bg-violet-50 border border-violet-200 px-2 py-1">
+                    <div className="text-[9px] text-violet-700/80 uppercase">CAC dropshipper</div>
+                    <div className="font-semibold tabular-nums text-violet-800">
+                      {data.stats.meta.cac_dropshipper !== null ? formatCurrency(data.stats.meta.cac_dropshipper) : "—"}
+                    </div>
+                  </div>
+                  <div className="col-span-2 rounded-lg bg-amber-50 border border-amber-200 px-2 py-1 flex justify-between items-baseline">
+                    <span className="text-[9px] text-amber-700/80 uppercase">ROAS (ganancia / spend)</span>
+                    <span className="font-bold tabular-nums text-amber-800">
+                      {data.stats.meta.roas_ganancia_unidrop !== null ? `${data.stats.meta.roas_ganancia_unidrop.toFixed(2)}x` : "—"}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* KPI strip */}
         <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 mb-4">
           <Stat label="Dropshippers" value={formatNumber(data?.stats.total ?? 0)} hint="todos los que operan en MELI o TN" />
@@ -136,10 +211,58 @@ export default function DropshippersPage() {
             hint={data?.stats.tn_gmv !== undefined ? `MELI ${formatCurrency(data.stats.gmv)} + TN ${formatCurrency(data.stats.tn_gmv)}` : "ventas pagas MELI"}
             color="text-emerald-700"
           />
-          <Stat label="Profit Unidrop" value={formatCurrency(data?.stats.profit_unidrop ?? 0)} hint="comision MELI - solo por sub" color="text-primary" />
-          <Stat label="Pagado a Unidrop" value={formatCurrency(data?.stats.pago_unidrop ?? 0)} hint="payment intents PROCESSED" />
+          <Stat label="Profit Unidrop" value={formatCurrency(data?.stats.profit_unidrop ?? 0)} hint="margen por orden ML (profit_for_subscription)" color="text-primary" />
+          <Stat label="Subs cobradas" value={formatCurrency(data?.stats.subs_cobradas ?? 0)} hint="PaymentIntentSubscription PROCESSED" color="text-violet-700" />
           <Stat label="Deuda pendiente" value={formatCurrency(data?.stats.deuda_pendiente ?? 0)} hint="intents != PROCESSED" color="text-error" />
         </div>
+
+        {/* Breakdown por plan: cuanto pesa cada plan en cantidad + ganancia Unidrop */}
+        {data?.stats.by_plan && Object.keys(data.stats.by_plan).length > 0 && (
+          <div className="mb-4 rounded-xl border border-border bg-surface overflow-hidden">
+            <div className="px-4 py-2 border-b border-border bg-soft text-[11px] uppercase tracking-wider text-text-muted font-semibold">
+              Suscripciones por plan · cantidad y ganancia Unidrop
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="text-[10px] uppercase tracking-wider text-text-muted bg-soft/40">
+                  <tr>
+                    <th className="text-left px-3 py-1.5">Plan</th>
+                    <th className="text-right px-3 py-1.5">Precio/mes</th>
+                    <th className="text-right px-3 py-1.5">Dropshippers</th>
+                    <th className="text-right px-3 py-1.5">GMV combinado</th>
+                    <th className="text-right px-3 py-1.5">Margen ML</th>
+                    <th className="text-right px-3 py-1.5">Subs cobradas</th>
+                    <th className="text-right px-3 py-1.5 bg-emerald-50/60">Ganancia Unidrop</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(data.stats.by_plan)
+                    .sort((a, b) => (b[1].ganancia_unidrop || 0) - (a[1].ganancia_unidrop || 0))
+                    .map(([planName, slot]) => (
+                      <tr key={planName} className="border-t border-border hover:bg-soft transition">
+                        <td className="px-3 py-1.5">
+                          <span className="font-semibold">{planName}</span>
+                          {slot.plan_id !== null && (
+                            <span className="text-text-muted text-[10px] ml-1">#{slot.plan_id}</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {slot.plan_precio > 0 ? formatCurrency(slot.plan_precio) : "—"}
+                        </td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{formatNumber(slot.count)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(slot.gmv_total)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(slot.profit_unidrop)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{formatCurrency(slot.subs_cobradas)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-bold text-emerald-700 bg-emerald-50/40">
+                          {formatCurrency(slot.ganancia_unidrop)}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Canales: clickeable para filtrar */}
         {data?.stats.by_channel && (
@@ -270,8 +393,13 @@ export default function DropshippersPage() {
             <div className="px-4 py-2.5 bg-gradient-to-r from-primary/5 to-accent/5 border-b border-border flex items-center gap-4 flex-wrap text-xs">
               <span className="font-semibold text-primary">Subset filtrado:</span>
               <span><span className="text-text-muted">GMV</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.gmv)}</span></span>
-              <span><span className="text-text-muted">Profit</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.profit_unidrop)}</span></span>
-              <span><span className="text-text-muted">Pagado</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.pago_unidrop)}</span></span>
+              <span><span className="text-text-muted">Profit ML</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.profit_unidrop)}</span></span>
+              {data.filtered_stats.subs_cobradas !== undefined && (
+                <span><span className="text-text-muted">Subs</span> <span className="font-bold tabular-nums">{formatCurrency(data.filtered_stats.subs_cobradas)}</span></span>
+              )}
+              {data.filtered_stats.ganancia_unidrop_total !== undefined && (
+                <span><span className="text-text-muted">Ganancia Unidrop</span> <span className="font-bold tabular-nums text-emerald-700">{formatCurrency(data.filtered_stats.ganancia_unidrop_total)}</span></span>
+              )}
               <span><span className="text-text-muted">Deuda</span> <span className="font-bold tabular-nums text-error">{formatCurrency(data.filtered_stats.deuda_pendiente)}</span></span>
               <span className="text-[10px] text-text-muted ml-auto">Los KPIs de arriba siguen mostrando totales del universo</span>
             </div>
@@ -291,7 +419,7 @@ export default function DropshippersPage() {
                     {canal !== "tn" && <th className="text-left px-3 py-2" title="Cuenta de Mercado Libre vinculada">Cuenta MELI</th>}
                     {canal !== "tn" && <th className="text-right px-3 py-2" title="Publicaciones activas / totales">Pub.</th>}
                     <th className="text-right px-3 py-2">Ventas / GMV</th>
-                    {canal !== "tn" && <th className="text-right px-3 py-2" title="Comision Unidrop por suscripcion MELI">Profit Unidrop</th>}
+                    <th className="text-right px-3 py-2" title="Ganancia neta para Unidrop = margen ML (profit_for_subscription) + suscripciones cobradas en el periodo">Ganancia Unidrop</th>
                     <th className="text-right px-3 py-2">Pagos / Deuda</th>
                     <th className="text-right px-3 py-2" title="Cantidad de dropshippers referidos por este operador">Refer.</th>
                     <th className="text-center px-3 py-2">Acciones</th>
@@ -377,12 +505,15 @@ export default function DropshippersPage() {
                             <div className="text-[10px] text-error mt-0.5">{d.canceladas} canc</div>
                           )}
                         </td>
-                        {canal !== "tn" && (
-                          <td className="px-3 py-2 align-top text-right tabular-nums">
-                            <div className="font-semibold text-primary">{formatCurrency(d.profit_unidrop)}</div>
-                            <div className="text-[10px] text-text-muted">comision MELI</div>
-                          </td>
-                        )}
+                        <td className="px-3 py-2 align-top text-right tabular-nums">
+                          <div className="font-bold text-emerald-700">{formatCurrency(d.ganancia_unidrop_neta ?? d.profit_unidrop)}</div>
+                          <div className="text-[10px] text-text-muted leading-tight">
+                            <div>margen ML <span className="tabular-nums">{formatCurrency(d.profit_unidrop)}</span></div>
+                            {(d.subs_cobradas ?? 0) > 0 && (
+                              <div>+ subs <span className="tabular-nums">{formatCurrency(d.subs_cobradas ?? 0)}</span></div>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-3 py-2 align-top text-right tabular-nums">
                           <div className="font-semibold">{formatCurrency(d.pago_unidrop_total)}</div>
                           {d.deuda_pendiente > 0 ? (
