@@ -2,6 +2,11 @@
 Re-cifra todos los secrets TOTP existentes que estan en plaintext.
 
 Uso (correr UNA SOLA VEZ despues de setear TOTP_CIPHER_KEY en Railway):
+
+    # Desde local con railway CLI logueado:
+    railway run --service backend python backend/scripts/reencrypt_totp_secrets.py --yes
+
+    # O desde una sesion interactiva (preguntara confirmacion):
     cd backend
     python scripts/reencrypt_totp_secrets.py
 
@@ -52,10 +57,16 @@ def main() -> int:
         print("Nada que hacer.")
         return 0
 
-    confirm = input("Confirmar re-cifrado? [y/N]: ").strip().lower()
-    if confirm != "y":
-        print("Abortado.")
-        return 0
+    auto_confirm = "--yes" in sys.argv or os.environ.get("REENCRYPT_CONFIRM") == "yes"
+    if not auto_confirm:
+        try:
+            confirm = input("Confirmar re-cifrado? [y/N]: ").strip().lower()
+        except EOFError:
+            print("Stdin no es interactivo. Re-correr con --yes para confirmar sin prompt.")
+            return 0
+        if confirm != "y":
+            print("Abortado.")
+            return 0
 
     n_ok = 0
     n_fail = 0
