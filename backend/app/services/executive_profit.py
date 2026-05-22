@@ -159,18 +159,70 @@ def _egresos_unidrop(days: int) -> float:
         return 0.0
 
 
+def _meta_ads_spend_unidrop(period: str) -> float:
+    """Spend Meta Ads del periodo asignado a unidad Unidrop (via meta_ad_accounts.unit)."""
+    try:
+        from app.services.meta_ads import overview as meta_overview
+        out = meta_overview(period=period, unit="unidrop") or {}
+        kpi = out.get("kpi") or {}
+        return float(kpi.get("spend") or 0)
+    except Exception as exc:
+        log.warning("meta_ads_spend_unidrop: %s", exc)
+        return 0.0
+
+
 def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None) -> dict:
-    """Ganancia Unidrop neta = Facturacion - Comisiones - Egresos operativos."""
+    """Modelo mixto: volumen plataforma (informativo) + retencion neta de Unidrop.
+
+    Volumen plataforma (NO entra en ganancia Unidrop, es solo referencia):
+      - Facturacion operativa = TN paid + ML paid (volumen omnicanal)
+      - Costo mercaderia      = SUM(unitCost*qty) en TN + merchandise_cost en ML
+
+    Retencion neta de Unidrop:
+      Ingresos:
+        + Comisiones Talo (PaymentTransaction.commission + subs)
+        + Suscripciones MELI cobradas (PaymentIntentSubscription PROCESSED.paidAmount)
+      Egresos:
+        - Meta Ads spend asignado a unit='unidrop'
+        - Egresos operativos del flujo-fondos asignados a empresa Unidrop
+      Ganancia neta = Ingresos - Egresos
+    """
     eng = get_engine("unidrop")
     win = resolve_window(period, from_iso, to_iso)
     days = win["days"]
     p = {"days": days}
 
-    fact = float(scalar(eng, """
-        SELECT COALESCE(SUM(total),0)::float
-        FROM contabillium_dev."ContabilliumInvoice"
-        WHERE "fechaEmision" >= NOW() - make_interval(days => :days)
-    """, p) or 0)
+    # ---------- VOLUMEN PLATAFORMA (informativo) ----------
+
+    # TN paid: volumen + costo de mercaderia per item
+    tn_row = q(eng, """
+        SELECT COALESCE(SUM(tno.total), 0)::float AS volumen,
+               COALESCE(SUM(tnoi.cost * tnoi.quantity) FILTER (WHERE tnoi.cost IS NOT NULL), 0)::float AS costo,
+               COUNT(DISTINCT tno.tienda_nube_id)::int AS ordenes
+        FROM public.tienda_nube_orders tno
+        LEFT JOIN public.tienda_nube_order_items tnoi
+          ON tnoi.tienda_nube_order_id = tno.tienda_nube_id
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= NOW() - make_interval(days => :days)
+    """, p) or [(0, 0, 0)]
+    tn_vol, tn_costo, tn_ords = float(tn_row[0][0] or 0), float(tn_row[0][1] or 0), int(tn_row[0][2] or 0)
+
+    # ML paid: volumen + costo (merchandise_cost ya agregado por orden)
+    ml_row = q(eng, """
+        SELECT COALESCE(SUM("totalAmount"), 0)::float AS volumen,
+               COALESCE(SUM("merchandise_cost"), 0)::float AS costo,
+               COUNT(*)::int AS ordenes
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE status IN ('paid','confirmed','shipped','delivered')
+          AND "dateCreated" >= NOW() - make_interval(days => :days)
+    """, p) or [(0, 0, 0)]
+    ml_vol, ml_costo, ml_ords = float(ml_row[0][0] or 0), float(ml_row[0][1] or 0), int(ml_row[0][2] or 0)
+
+    volumen_plataforma = tn_vol + ml_vol
+    costo_mercaderia = tn_costo + ml_costo
+    ordenes_pagadas = tn_ords + ml_ords
+
+    # ---------- INGRESOS UNIDROP (lo que retiene) ----------
 
     comisiones = float(scalar(eng, """
         SELECT (
@@ -181,18 +233,53 @@ def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None) -> d
         )
     """, p) or 0)
 
+    suscripciones_cobradas = float(scalar(eng, """
+        SELECT COALESCE(SUM("paidAmount"), 0)::float
+        FROM public."PaymentIntentSubscription"
+        WHERE status::text = 'PROCESSED'
+          AND "createdAt" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+
+    ingresos_unidrop = comisiones + suscripciones_cobradas
+
+    # ---------- EGRESOS UNIDROP ----------
+    meta_ads_spend = _meta_ads_spend_unidrop(period)
     egresos = _egresos_unidrop(days)
 
-    ganancia_neta = fact - comisiones - egresos
-    margen_pct = (ganancia_neta / fact * 100) if fact > 0 else 0
+    ganancia_neta = ingresos_unidrop - meta_ads_spend - egresos
+    margen_pct = (ganancia_neta / ingresos_unidrop * 100) if ingresos_unidrop > 0 else 0
+
+    # Facturacion Contabilium queda como referencia (no para calculo)
+    fact_contabilium = float(scalar(eng, """
+        SELECT COALESCE(SUM(total),0)::float
+        FROM contabillium_dev."ContabilliumInvoice"
+        WHERE "fechaEmision" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
 
     return {
         "unit": "unidrop",
-        "facturacion": round(fact, 0),
+        # Volumen plataforma (informativo, NO entra en ganancia)
+        "volumen_plataforma": round(volumen_plataforma, 0),
+        "volumen_tn": round(tn_vol, 0),
+        "volumen_ml": round(ml_vol, 0),
+        "costo_mercaderia": round(costo_mercaderia, 0),
+        "costo_tn": round(tn_costo, 0),
+        "costo_ml": round(ml_costo, 0),
+        "ordenes_pagadas": ordenes_pagadas,
+        "margen_bruto_plataforma": round(volumen_plataforma - costo_mercaderia, 0),
+        # Ingresos Unidrop (retencion real)
         "comisiones": round(comisiones, 0),
+        "suscripciones_cobradas": round(suscripciones_cobradas, 0),
+        "ingresos_unidrop": round(ingresos_unidrop, 0),
+        # Egresos Unidrop
+        "meta_ads_spend": round(meta_ads_spend, 0),
         "egresos_operativos": round(egresos, 0),
+        # Resultado
         "ganancia_neta": round(ganancia_neta, 0),
         "margen_pct": round(margen_pct, 1),
+        # Compat / referencia
+        "facturacion": round(fact_contabilium, 0),  # legacy field name = Contabilium ref
+        "facturacion_contabilium": round(fact_contabilium, 0),
     }
 
 
@@ -315,8 +402,14 @@ _UNISTORE_EMPTY = {
 }
 
 _UNIDROP_EMPTY = {
-    "unit": "unidrop", "facturacion": 0, "comisiones": 0,
-    "egresos_operativos": 0, "ganancia_neta": 0, "margen_pct": 0,
+    "unit": "unidrop",
+    "volumen_plataforma": 0, "volumen_tn": 0, "volumen_ml": 0,
+    "costo_mercaderia": 0, "costo_tn": 0, "costo_ml": 0,
+    "ordenes_pagadas": 0, "margen_bruto_plataforma": 0,
+    "comisiones": 0, "suscripciones_cobradas": 0, "ingresos_unidrop": 0,
+    "meta_ads_spend": 0, "egresos_operativos": 0,
+    "ganancia_neta": 0, "margen_pct": 0,
+    "facturacion": 0, "facturacion_contabilium": 0,
 }
 
 
@@ -359,8 +452,12 @@ def gerencia_profit_overview(period: str = "30d", from_iso: str | None = None,
         deuda = 0
         errors["deuda_talo"] = str(exc)
 
+    # Ganancia consolidada: Unistore (margen sobre venta propia) + Unidrop (retencion neta).
+    # NO sumamos revenue de Unidrop al revenue total porque seria doble-conteo (las
+    # ordenes son de los dropshippers, Unidrop solo retiene comisiones+subs).
+    # El "revenue total" del consolidado es Unistore propio + ingresos Unidrop.
     ganancia_total = uni["ganancia_neta"] + drop["ganancia_neta"]
-    revenue_total = uni["revenue"] + drop["facturacion"]
+    revenue_total = uni["revenue"] + drop["ingresos_unidrop"]
     margen_consolidado = (ganancia_total / revenue_total * 100) if revenue_total > 0 else 0
 
     return {

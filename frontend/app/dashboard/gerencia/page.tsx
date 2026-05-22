@@ -52,11 +52,27 @@ type UnistoreProfit = {
 
 type UnidropProfit = {
   unit: "unidrop";
-  facturacion: number;
+  // Volumen plataforma (informativo)
+  volumen_plataforma: number;
+  volumen_tn: number;
+  volumen_ml: number;
+  costo_mercaderia: number;
+  costo_tn: number;
+  costo_ml: number;
+  ordenes_pagadas: number;
+  margen_bruto_plataforma: number;
+  // Retencion Unidrop
   comisiones: number;
+  suscripciones_cobradas: number;
+  ingresos_unidrop: number;
+  meta_ads_spend: number;
   egresos_operativos: number;
+  // Resultado
   ganancia_neta: number;
   margen_pct: number;
+  // Compat
+  facturacion: number;
+  facturacion_contabilium: number;
 };
 
 type GerenciaResponse = {
@@ -421,10 +437,10 @@ export default function GerenciaPage() {
         <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3">
           Desglose por unidad
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
           {isLoading || !data ? (
-            Array.from({ length: 2 }).map((_, i) => (
-              <div key={i} className="h-[260px] bg-surface border border-border rounded-xl animate-pulse" />
+            Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-[280px] bg-surface border border-border rounded-xl animate-pulse" />
             ))
           ) : (
             <>
@@ -440,14 +456,28 @@ export default function GerenciaPage() {
                 ]}
               />
               <UnitProfitCard
-                title="Unidrop (servicios)"
+                title="Unidrop · volumen plataforma (referencia)"
+                color="#94a3b8"
+                rows={[
+                  { label: "Facturacion TN paid", value: data.unidrop.volumen_tn, prefix: "$ ", muted: true },
+                  { label: "Facturacion ML paid", value: data.unidrop.volumen_ml, prefix: "$ ", muted: true },
+                  { label: "Volumen total", value: data.unidrop.volumen_plataforma, prefix: "$ " },
+                  { label: "− Costo mercaderia (con IVA)", value: data.unidrop.costo_mercaderia, prefix: "$ ", muted: true },
+                  { label: "Margen bruto plataforma", value: data.unidrop.margen_bruto_plataforma, prefix: "$ " },
+                  { label: "Ordenes pagadas", value: data.unidrop.ordenes_pagadas, muted: true },
+                ]}
+              />
+              <UnitProfitCard
+                title="Unidrop · retencion neta"
                 color="#a855f7"
                 rows={[
-                  { label: "Facturacion Contabilium", value: data.unidrop.facturacion, prefix: "$ " },
-                  { label: "− Comisiones Talo", value: data.unidrop.comisiones, prefix: "$ ", muted: true },
+                  { label: "Comisiones Talo cobradas", value: data.unidrop.comisiones, prefix: "$ " },
+                  { label: "Suscripciones MELI cobradas", value: data.unidrop.suscripciones_cobradas, prefix: "$ " },
+                  { label: "Ingresos Unidrop", value: data.unidrop.ingresos_unidrop, prefix: "$ " },
+                  { label: "− Meta Ads Unidrop", value: data.unidrop.meta_ads_spend, prefix: "$ ", muted: true },
                   { label: "− Egresos operativos", value: data.unidrop.egresos_operativos, prefix: "$ ", muted: true },
                   { label: "Ganancia neta", value: data.unidrop.ganancia_neta, prefix: "$ ", negative: data.unidrop.ganancia_neta < 0 },
-                  { label: "Margen", value: data.unidrop.margen_pct, suffix: " %", negative: data.unidrop.margen_pct < 0 },
+                  { label: "Margen sobre retencion", value: data.unidrop.margen_pct, suffix: " %", negative: data.unidrop.margen_pct < 0 },
                 ]}
               />
             </>
