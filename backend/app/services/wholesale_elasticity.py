@@ -86,6 +86,9 @@ def wholesale_sku_table(period_days: int = 90, limit: int = 200) -> dict:
         log.warning("drp_tn fail: %s", e)
 
     # --- Unidrop MELI: precio retail (unitPrice) + costo mayorista (unitCost)
+    # Columna correcta es `status` (no `estado`). Valores reales en prod son
+    # 'paid' / 'cancelled' / 'partially_refunded'. Incluimos paid + parcialmente
+    # refundadas (siguen siendo ingreso para Unistore).
     drp_ml = []
     try:
         drp_ml = q(eng_drp, """
@@ -100,7 +103,7 @@ def wholesale_sku_table(period_days: int = 90, limit: int = 200) -> dict:
             JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
             WHERE oi."sellerSku" IS NOT NULL
               AND o."dateCreated" >= NOW() - make_interval(days => :days)
-              AND o.estado IN ('paid','confirmed','shipped','delivered')
+              AND o.status IN ('paid','partially_refunded')
             GROUP BY oi."sellerSku"
         """, {"days": period_days}) or []
     except Exception as e:

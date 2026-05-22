@@ -355,33 +355,13 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
         cost_idx = cost_index_unistore()
 
         def day_aggregates(days_back: int) -> dict:
-            """Calcula todos los agregados del dia en 2 queries (no 1 por metrica)."""
+            """Una sola query SQL trae todo. Antes usaba LATERAL pero hacia
+            timeout en prod (statement timeout). Ahora una sola pasada agrupa
+            por (sku, orderId) y calcula los agregados en Python."""
             from_ts, to_ts = _day_bounds(days_back)
-            agg = _q(uni, """
-                SELECT
-                  COUNT(DISTINCT oi.sku)                            AS skus,
-                  COALESCE(SUM(oi.quantity), 0)::int                AS unidades,
-                  COUNT(DISTINCT o.id)                              AS ordenes,
-                  AVG(per_order.distinct_skus)::float               AS skus_por_orden
-                FROM tienda_nube."OrderItem" oi
-                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-                JOIN LATERAL (
-                  SELECT COUNT(DISTINCT oi2.sku) AS distinct_skus
-                  FROM tienda_nube."OrderItem" oi2
-                  WHERE oi2."orderId" = o.id AND oi2.sku IS NOT NULL
-                ) per_order ON TRUE
-                WHERE o."paymentStatus" = 'paid'
-                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
-                  AND oi.sku IS NOT NULL
-            """, {"from_ts": from_ts, "to_ts": to_ts}) or []
-            r = agg[0] if agg else (0, 0, 0, 0)
-            skus = int(r[0] or 0)
-            unidades = int(r[1] or 0)
-            ordenes = int(r[2] or 0)
-            sku_per_ord = float(r[3] or 0)
-
             sku_rows = _q(uni, """
                 SELECT oi.sku,
+                       oi."orderId" AS order_id,
                        SUM(oi.quantity)::int AS units,
                        SUM(oi.quantity * oi.price)::float AS revenue
                 FROM tienda_nube."OrderItem" oi
@@ -390,11 +370,26 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
                   AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
                   AND oi.sku IS NOT NULL
             """, {"from_ts": from_ts, "to_ts": to_ts}) or []
+
+            # Agregados en Python (un solo paso sobre las filas, no extra DB)
+            skus_set: set[str] = set()
+            order_skus: dict = {}
+            unidades = 0
+            sku_agg: dict[str, tuple[int, float]] = {}  # sku -> (units, revenue)
+            for sk, oid, u, rev in sku_rows:
+                u = int(u or 0); rev = float(rev or 0)
+                skus_set.add(sk)
+                unidades += u
+                order_skus.setdefault(oid, set()).add(sk)
+                prev = sku_agg.get(sk, (0, 0.0))
+                sku_agg[sk] = (prev[0] + u, prev[1] + rev)
+            skus = len(skus_set)
+            ordenes = len(order_skus)
+            sku_per_ord = (sum(len(s) for s in order_skus.values()) / ordenes) if ordenes else 0.0
             ganancia = 0.0
             rev_con_costo = 0.0
-            for sk, u, rev in sku_rows:
+            for sk, (u, rev) in sku_agg.items():
                 rec = cost_idx.get((sk or "").strip().lower())
-                u = int(u or 0); rev = float(rev or 0)
                 if not (rec and rec.get("costo_con_iva") and u > 0 and rev > 0):
                     continue
                 sin_iva = float(rec.get("costo_sin_iva") or 0)
