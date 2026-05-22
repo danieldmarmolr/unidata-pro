@@ -44,6 +44,7 @@ import { IntegrationHealthList } from "@/components/integration-health";
 import { AlertsPanel } from "@/components/alerts-panel";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { ProfitConsolidatedChart, type ProfitConsolidatedResponse } from "@/components/profit-consolidated-chart";
+import { CommercialSection } from "@/components/commercial-section";
 import { api, getToken } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { ExecutiveOverview, CategoryValue, KpiCard as KpiCardT } from "@/lib/types";
@@ -1006,93 +1007,46 @@ export default function GerenciaUnificadaPage() {
 
         {/* ============== § 4. COMERCIAL ============== */}
         <section>
-          <SectionHeader number="4" emoji="📈" title="Comercial" subtitle="Revenue mix por canal · top productos · performance dropshippers" />
+          <SectionHeader number="4" emoji="📈" title="Comercial" subtitle="Revenue cross-org granular · share por canal y unidad · top SKUs y clientes por ganancia · performance dropshippers" />
 
-          {/* Revenue chart + donut */}
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-6">
-            <div className="xl:col-span-2">
-              {loadingExec || !exec ? (
-                <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-              ) : (
-                <RevenueChart series={exec.revenue_by_channel} filterSeries={selectedChannel} />
-              )}
-            </div>
-            <div>
-              {loadingExec || !exec ? (
-                <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-              ) : (
-                <DonutChart
-                  caption={`Mix de revenue · ${periodLabel}`}
-                  data={(exec.revenue_mix ?? []).map((r) => ({ name: String(r.category), value: r.value }))}
-                  height={300}
-                  colorMap={DONUT_COLORS}
-                  highlightName={selectedChannel ? (Object.entries(DONUT_TO_SERIES).find(([, v]) => v === selectedChannel)?.[0] ?? null) : null}
-                  onSliceClick={(d) => {
-                    const seriesLabel = DONUT_TO_SERIES[d.name] ?? null;
-                    setSelectedChannel((prev) => (prev === seriesLabel ? null : seriesLabel));
-                  }}
-                />
-              )}
-            </div>
-          </div>
+          {/* Componente nuevo con controles de granularidad, ventana, modo vista,
+              + share por canal/unidad, + tabla SKUs por ganancia, + tabla clientes por ganancia */}
+          <CommercialSection />
 
-          {/* Top productos cross + Lifecycle */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
-            {loadingExec || !exec ? (
-              <>
-                <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-                <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-              </>
-            ) : (
-              <>
-                <CategoryTable
-                  caption="Top 15 productos cross-canal (30d)"
-                  subtitle="TN + ML combinados · click para abrir SKU 360"
-                  data={exec.top_products_cross ?? []}
-                  formatter="currency"
-                  extraColumns={[
-                    { key: "sku", label: "SKU", format: "raw" },
-                    { key: "units", label: "Unid", format: "number" },
-                    { key: "tn", label: "TN", format: "currency" },
-                    { key: "ml", label: "ML", format: "currency" },
-                  ]}
-                  onRowClick={(r) => {
-                    const sku = (r as { extra?: { sku?: unknown } }).extra?.sku;
-                    if (typeof sku === "string" && sku) {
-                      router.push(`/dashboard/productos/${encodeURIComponent(sku)}`);
-                    }
-                  }}
-                />
-                <CategoryTable
-                  caption="Lifecycle de customers Unistore"
-                  subtitle="Nuevo · 2da · Convertido · Recurrente"
-                  data={exec.lifecycle_mix ?? []}
-                  formatter="number"
-                  extraColumns={[{ key: "revenue", label: "Revenue total", format: "currency" }]}
-                />
-              </>
-            )}
-          </div>
+          {/* Lifecycle de customers (Unistore) — info legacy de la home */}
+          {exec?.lifecycle_mix && (
+            <div className="mt-6">
+              <CategoryTable
+                caption="Lifecycle de customers Unistore"
+                subtitle="Nuevo · 2da compra · Convertido a recurrente · Recurrente — basado en historico TN"
+                data={exec.lifecycle_mix ?? []}
+                formatter="number"
+                extraColumns={[{ key: "revenue", label: "Revenue total", format: "currency" }]}
+              />
+            </div>
+          )}
 
           {/* Dropshippers performance */}
-          <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3 flex items-center gap-2">
-            <Crown size={12} /> Performance Dropshippers
-            {d360?.dropshippers?.total_dropshippers ? (
-              <span className="font-normal normal-case text-text-muted">· {d360.dropshippers.total_dropshippers} activos</span>
-            ) : null}
-          </div>
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            {loading360 || !d360 ? (
-              <>
-                <div className="h-[300px] bg-surface border border-border rounded-xl animate-pulse" />
-                <div className="h-[300px] bg-surface border border-border rounded-xl animate-pulse" />
-              </>
-            ) : (
-              <>
-                <DropshippersList title="Top 10 por ganancia Unidrop" emptyMsg={d360.dropshippers.error || "Sin dropshippers con ganancia"} rows={d360.dropshippers.top10_by_profit} emphasis="profit" />
-                <DropshippersList title="Criticos — deuda o margen negativo" emptyMsg={d360.dropshippers.error || "Sin criticos en el periodo"} rows={d360.dropshippers.bottom5_criticos} emphasis="deuda" />
-              </>
-            )}
+          <div className="mt-6">
+            <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3 flex items-center gap-2">
+              <Crown size={12} /> Performance Dropshippers
+              {d360?.dropshippers?.total_dropshippers ? (
+                <span className="font-normal normal-case text-text-muted">· {d360.dropshippers.total_dropshippers} activos</span>
+              ) : null}
+            </div>
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {loading360 || !d360 ? (
+                <>
+                  <div className="h-[300px] bg-surface border border-border rounded-xl animate-pulse" />
+                  <div className="h-[300px] bg-surface border border-border rounded-xl animate-pulse" />
+                </>
+              ) : (
+                <>
+                  <DropshippersList title="Top 10 por ganancia Unidrop" emptyMsg={d360.dropshippers.error || "Sin dropshippers con ganancia"} rows={d360.dropshippers.top10_by_profit} emphasis="profit" />
+                  <DropshippersList title="Criticos — deuda o margen negativo" emptyMsg={d360.dropshippers.error || "Sin criticos en el periodo"} rows={d360.dropshippers.bottom5_criticos} emphasis="deuda" />
+                </>
+              )}
+            </div>
           </div>
         </section>
 

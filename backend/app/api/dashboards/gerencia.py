@@ -11,6 +11,7 @@ from app.services.executive_profit import (
     gerencia_profit_overview, profit_daily_series, profit_daily_consolidated,
 )
 from app.services.executive_360 import gerencia_360_blocks
+from app.services.commercial_breakdown import commercial_breakdown
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 
@@ -19,6 +20,7 @@ _cache: TTLCache = TTLCache(maxsize=64, ttl=300)
 _cache_360: TTLCache = TTLCache(maxsize=64, ttl=300)
 _cache_series: TTLCache = TTLCache(maxsize=8, ttl=600)  # serie 90d: TTL largo, es muy cara
 _cache_consolidated: TTLCache = TTLCache(maxsize=8, ttl=600)
+_cache_commercial: TTLCache = TTLCache(maxsize=32, ttl=600)
 
 
 @router.get("/gerencia")
@@ -89,5 +91,31 @@ def get_gerencia_profit_consolidated(
     @cached(_cache_consolidated, key=lambda: key)
     def _build() -> dict:
         return profit_daily_consolidated(days=days, forecast_horizon=horizon)
+
+    return _build()
+
+
+@router.get("/gerencia/commercial")
+def get_gerencia_commercial(
+    user: Annotated[dict, Depends(current_user)],
+    granularity: Annotated[Literal["day", "week", "month", "quarter"], Query()] = "month",
+    period_months: Annotated[int, Query(ge=1, le=36)] = 12,
+    top_n_skus: Annotated[int, Query(ge=5, le=100)] = 20,
+    top_n_customers: Annotated[int, Query(ge=5, le=100)] = 20,
+) -> dict:
+    """Desglose comercial: serie temporal granular por canal + share + top SKUs
+    y clientes por ganancia neta. Granularidad ajustable (day/week/month/quarter)."""
+    require_area(user, ["finanzas", "administracion"])
+
+    key = f"commercial:{granularity}:{period_months}:{top_n_skus}:{top_n_customers}"
+
+    @cached(_cache_commercial, key=lambda: key)
+    def _build() -> dict:
+        return commercial_breakdown(
+            granularity=granularity,
+            period_months=period_months,
+            top_n_skus=top_n_skus,
+            top_n_customers=top_n_customers,
+        )
 
     return _build()
