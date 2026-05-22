@@ -413,10 +413,10 @@ def omnicanal_sku_table(
         "generated_at": now_ar().isoformat(),
         "column_glossary": _column_glossary(),
         "todo": [
-            "Curva precio-volumen mayorista mensual por SKU (regresion)",
-            "Detectar cambios escalon de unitCost y correlacionar con volumen Unidrop",
-            "Mapeo de equivalencias de SKU cross-canal",
-            "Comparar elasticidad retail vs mayorista por SKU",
+            "Persistir mapeo SKU cross-canal en tabla sku_omnichannel_map (las propuestas ya estan en tab Mapeo)",
+            "Sumar canal suscripciones MELI Unidrop",
+            "Filtrar outliers / meses con promo en las regresiones de elasticidad",
+            "Forecast post-suba PVP mayorista usando elasticidad estimada",
         ],
     }
 

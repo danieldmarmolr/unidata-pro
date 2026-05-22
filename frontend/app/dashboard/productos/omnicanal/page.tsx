@@ -3,13 +3,18 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { Info, ArrowUp, ArrowDown, ImageOff } from "lucide-react";
+import { Info, ArrowUp, ArrowDown, ImageOff, Table, LineChart, Activity, Network } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
+import { ElasticityView } from "./_components/ElasticityView";
+import { PriceStepsView } from "./_components/PriceStepsView";
+import { SkuEquivalenceView } from "./_components/SkuEquivalenceView";
+
+type Tab = "tabla" | "elasticidad" | "cambios-precio" | "mapeo-sku";
 
 type CanalUTN = { units: number; revenue: number; price_avg: number };
 type CanalDRP = {
@@ -82,6 +87,7 @@ type OmnicanalResp = {
 
 type SortKey =
   | "units_total" | "revenue_total_grupo"
+  | "share_unistore_pct" | "share_unidrop_pct"
   | "costo_importacion" | "precio_retail_unistore_avg" | "precio_retail_unidrop_avg" | "precio_mayorista_avg"
   | "markup_retail_unistore_pct" | "markup_mayorista_pct" | "markup_drp_pct"
   | "margen_retail_unistore_pct" | "margen_drp_pct" | "spread_retail_pct"
@@ -90,6 +96,7 @@ type SortKey =
 type Filter =
   | "all" | "con-cost" | "sin-cost" | "con-mayorista" | "sin-mayorista"
   | "solo-unistore" | "solo-unidrop" | "ambos"
+  | "uni-dominante" | "drp-dominante"
   | "margen-drp-alto" | "margen-drp-bajo"
   | "spread-positivo" | "spread-negativo";
 
@@ -98,11 +105,13 @@ export default function OmnicanalPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
+  const [tab, setTab] = useState<Tab>("tabla");
 
   const { data, isFetching, error } = useQuery<OmnicanalResp>({
     queryKey: ["products-omnicanal", period, customFrom, customTo],
     queryFn: () => api(`/api/dashboards/products/omnicanal-table?${_qs}`),
     staleTime: 60_000,
+    enabled: tab === "tabla",
   });
 
   const glossaryMap = useMemo(() => {
@@ -133,6 +142,8 @@ export default function OmnicanalPage() {
       case "solo-unistore": rows = rows.filter((r) => r.units_unidrop === 0); break;
       case "solo-unidrop": rows = rows.filter((r) => r.units_unistore === 0); break;
       case "ambos": rows = rows.filter((r) => r.units_unistore > 0 && r.units_unidrop > 0); break;
+      case "uni-dominante": rows = rows.filter((r) => r.share_unistore_pct >= 70); break;
+      case "drp-dominante": rows = rows.filter((r) => r.share_unidrop_pct >= 70); break;
       case "margen-drp-alto": rows = rows.filter((r) => (r.margen_drp_pct ?? 0) >= 30); break;
       case "margen-drp-bajo": rows = rows.filter((r) => r.margen_drp_pct !== null && r.margen_drp_pct < 10); break;
       case "spread-positivo": rows = rows.filter((r) => (r.spread_retail_pct ?? 0) > 0); break;
@@ -161,6 +172,8 @@ export default function OmnicanalPage() {
       { value: "ambos", label: "Vendidos en ambos", count: sk.filter((r) => r.units_unistore > 0 && r.units_unidrop > 0).length },
       { value: "solo-unistore", label: "Solo Unistore", count: sk.filter((r) => r.units_unidrop === 0).length },
       { value: "solo-unidrop", label: "Solo Unidrop", count: sk.filter((r) => r.units_unistore === 0).length },
+      { value: "uni-dominante", label: "Dominante Unistore (≥70%)", count: sk.filter((r) => r.share_unistore_pct >= 70).length },
+      { value: "drp-dominante", label: "Dominante Unidrop (≥70%)", count: sk.filter((r) => r.share_unidrop_pct >= 70).length },
       { value: "con-cost", label: "Con costo importacion", count: sk.filter((r) => r.costo_importacion !== null).length },
       { value: "con-mayorista", label: "Con dato mayorista", count: sk.filter((r) => r.precio_mayorista_avg > 0).length },
       { value: "margen-drp-alto", label: "Margen DRP ≥30%", count: sk.filter((r) => (r.margen_drp_pct ?? 0) >= 30).length },
@@ -195,6 +208,22 @@ export default function OmnicanalPage() {
 
       <div className="flex-1 px-8 py-6 overflow-y-auto">
         <DashboardHeader filters={<></>} generatedAt={data?.generated_at} isFetching={isFetching} />
+
+        {/* Tab nav */}
+        <div className="flex flex-wrap gap-1 mb-4 bg-surface border border-border rounded-xl p-1.5">
+          <TabButton active={tab === "tabla"} onClick={() => setTab("tabla")} icon={Table} label="Tabla SKU cross-canal" />
+          <TabButton active={tab === "elasticidad"} onClick={() => setTab("elasticidad")} icon={LineChart} label="Elasticidad retail vs mayorista" />
+          <TabButton active={tab === "cambios-precio"} onClick={() => setTab("cambios-precio")} icon={Activity} label="Cambios de precio mayorista" />
+          <TabButton active={tab === "mapeo-sku"} onClick={() => setTab("mapeo-sku")} icon={Network} label="Mapeo SKU cross-canal" />
+        </div>
+
+        {tab !== "tabla" && (
+          tab === "elasticidad" ? <ElasticityView />
+          : tab === "cambios-precio" ? <PriceStepsView />
+          : <SkuEquivalenceView />
+        )}
+
+        {tab === "tabla" && <>
 
         {/* Banner explicativo */}
         <div className="bg-gradient-to-r from-violet-50 to-fuchsia-50 border border-violet-200 rounded-xl p-4 mb-4 flex items-start gap-3">
@@ -305,7 +334,8 @@ export default function OmnicanalPage() {
                 <tr>
                   <th className="text-left px-2 py-2">SKU / Producto</th>
                   <Hdr k="units_total" label="Unid total" tooltipKey="units_total" />
-                  <th className="text-right px-2 py-2 whitespace-nowrap" title={glossaryMap["share_uni_drp"]}>Mix Uni/Drp</th>
+                  <Hdr k="share_unistore_pct" label="% Unistore" tooltipKey="share_uni_drp" />
+                  <Hdr k="share_unidrop_pct" label="% Unidrop" tooltipKey="share_uni_drp" />
                   <Hdr k="costo_importacion" label="Costo imp." tooltipKey="costo_importacion" />
                   <Hdr k="precio_retail_unistore_avg" label="Prec retail Uni" tooltipKey="precio_retail_unistore_avg" />
                   <Hdr k="precio_retail_unidrop_avg" label="Prec retail Drp" tooltipKey="precio_retail_unidrop_avg" />
@@ -347,9 +377,10 @@ export default function OmnicanalPage() {
                       </div>
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums font-bold">{formatNumber(r.units_total)}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap">
+                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap bg-violet-50/40">
                       <span className="text-violet-700 font-semibold">{r.share_unistore_pct}%</span>
-                      <span className="text-text-muted/60"> / </span>
+                    </td>
+                    <td className="px-2 py-1.5 text-right tabular-nums whitespace-nowrap bg-amber-50/40">
                       <span className="text-amber-700 font-semibold">{r.share_unidrop_pct}%</span>
                     </td>
                     <Cell value={r.costo_importacion} kind="currency" />
@@ -368,10 +399,10 @@ export default function OmnicanalPage() {
                   </tr>
                 ))}
                 {filtered.length === 0 && !isFetching && (
-                  <tr><td colSpan={16} className="text-center py-12 text-text-muted">Sin SKUs que coincidan con los filtros</td></tr>
+                  <tr><td colSpan={17} className="text-center py-12 text-text-muted">Sin SKUs que coincidan con los filtros</td></tr>
                 )}
                 {!data && isFetching && (
-                  <tr><td colSpan={16} className="text-center py-12 text-text-muted">Cargando dataset omnicanal…</td></tr>
+                  <tr><td colSpan={17} className="text-center py-12 text-text-muted">Cargando dataset omnicanal…</td></tr>
                 )}
               </tbody>
             </table>
@@ -402,21 +433,26 @@ export default function OmnicanalPage() {
             </div>
           </details>
         )}
-
-        {/* Roadmap */}
-        {data?.todo && data.todo.length > 0 && (
-          <div className="mt-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
-            <div className="text-xs font-bold text-amber-900 mb-2">📌 Roadmap omnicanal — próximas iteraciones</div>
-            <ul className="list-disc pl-5 text-xs text-amber-800 space-y-1">
-              {data.todo.map((t) => <li key={t}>{t}</li>)}
-            </ul>
-            <div className="text-[10px] text-amber-700 mt-2">
-              Detalles técnicos en <code className="font-mono">docs/OMNICANAL_PRODUCTOS.md</code>.
-            </div>
-          </div>
-        )}
+        </>}
       </div>
     </>
+  );
+}
+
+function TabButton({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: any; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={
+        "flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg transition " +
+        (active
+          ? "bg-primary text-white shadow"
+          : "text-text-muted hover:bg-soft/60 hover:text-text")
+      }
+    >
+      <Icon size={13} />
+      {label}
+    </button>
   );
 }
 

@@ -644,6 +644,9 @@ from app.services import product_analytics as prod_analytics_svc
 from app.services import products_master as products_master_svc
 from app.services import products_timeseries as products_ts_svc
 from app.services import wholesale_elasticity as wholesale_svc
+from app.services import wholesale_curve as wholesale_curve_svc
+from app.services import wholesale_steps as wholesale_steps_svc
+from app.services import sku_equivalence as sku_equiv_svc
 from app.services import sku_optimizer as sku_opt_svc
 from app.services import rfm_flows as rfm_flows_svc
 from app.services import forecast_batch as forecast_svc
@@ -931,6 +934,73 @@ def get_products_wholesale_table(
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return wholesale_svc.wholesale_sku_table(period_days, limit)
+    return _b()
+
+
+@router.get("/products/wholesale-curve/{sku}")
+def get_products_wholesale_curve(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+    months: Annotated[int, Query(ge=3, le=24)] = 12,
+) -> dict:
+    """Curva precio-volumen mensual de un SKU + elasticidad retail (Unistore TN)
+    + elasticidad mayorista (Unidrop ML, unitCost) + diagnostico comparativo."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"wholesale-curve:{sku}:{months}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return wholesale_curve_svc.wholesale_curve(sku, months)
+    return _b()
+
+
+@router.get("/products/elasticity-comparison")
+def get_products_elasticity_comparison(
+    user: Annotated[dict, Depends(current_user)],
+    top_n: Annotated[int, Query(ge=10, le=200)] = 50,
+    months: Annotated[int, Query(ge=3, le=24)] = 12,
+    min_units: Annotated[int, Query(ge=10, le=500)] = 30,
+) -> dict:
+    """Lista top SKUs ordenados por diferencia entre elasticidad retail vs mayorista.
+    Identifica donde Unistore puede subir PVP mayorista sin perder volumen."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"elasticity-comp:{top_n}:{months}:{min_units}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return wholesale_curve_svc.elasticity_comparison(top_n, months, min_units)
+    return _b()
+
+
+@router.get("/products/wholesale-steps")
+def get_products_wholesale_steps(
+    user: Annotated[dict, Depends(current_user)],
+    months: Annotated[int, Query(ge=6, le=36)] = 18,
+    min_units_total: Annotated[int, Query(ge=5, le=500)] = 30,
+    top_n: Annotated[int, Query(ge=10, le=200)] = 60,
+) -> dict:
+    """SKUs con cambios escalon detectados de unitCost (>=5% mes a mes) + impacto
+    en el volumen Unidrop del mes siguiente vs baseline de 3 meses previos."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"wholesale-steps:{months}:{min_units_total}:{top_n}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return wholesale_steps_svc.wholesale_steps(months, min_units_total, top_n)
+    return _b()
+
+
+@router.get("/products/sku-equivalence")
+def get_products_sku_equivalence(
+    user: Annotated[dict, Depends(current_user)],
+    period_months: Annotated[int, Query(ge=1, le=24)] = 6,
+    min_units: Annotated[int, Query(ge=1, le=100)] = 5,
+) -> dict:
+    """Propuestas de mapeo cross-canal de SKUs: detecta huerfanos Unidrop (no
+    aparecen en Unistore) y propone matches con Unistore por normalizacion +
+    prefijo + nombre similar (Levenshtein)."""
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-equiv:{period_months}:{min_units}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku_equiv_svc.sku_equivalence(period_months, min_units)
     return _b()
 
 
