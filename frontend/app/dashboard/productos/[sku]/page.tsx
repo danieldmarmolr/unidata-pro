@@ -4,7 +4,6 @@ import { use } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/topbar";
-import { KpiCard } from "@/components/kpi-card";
 import { CategoryTable } from "@/components/generic-table";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { ExportButtons } from "@/components/export-buttons";
@@ -12,6 +11,7 @@ import { SkuOmnichannel, type UnidropPricingPayload } from "@/components/sku-omn
 import { SkuStackedEvolution } from "@/components/sku-stacked-evolution";
 import { SkuStockDetail } from "@/components/sku-stock-detail";
 import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
+import { SkuKpiStrip } from "@/components/sku-kpi-strip";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -321,13 +321,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
-          {isLoading || !data
-            ? Array.from({ length: 5 }).map((_, i) => (
-                <div key={i} className="bg-surface border border-border rounded-xl p-5 h-[126px] animate-pulse" />
-              ))
-            : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
-        </div>
+        {isLoading || !data ? (
+          <div className="bg-surface border border-border rounded-xl h-[68px] mb-6 animate-pulse" />
+        ) : (
+          <SkuKpiStrip cards={data.cards} />
+        )}
 
         {/* Forecast hero: barras apiladas por canal + linea forecast 30d/60d */}
         {omni?.monthly_by_channel ? (

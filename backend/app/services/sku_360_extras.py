@@ -37,36 +37,137 @@ log = logging.getLogger("unidata.sku_360_extras")
 # 1. STOCK DETAIL: area -> ubicaciones
 # ============================================================
 
-def stock_detail(sku: str) -> dict:
-    """Stock DIGIP del SKU agrupado area -> ubicaciones[].
+_STOCK_BREAKDOWN_COLS = [
+    "unidadesDisponibles", "unidadesReservadas", "unidadesBloqueadas",
+    "unidadesAdespachar", "unidadesADespachar", "unidadesAdespacar",
+    "unidadesEnRecepcion", "unidadesTransitoInterno",
+    "unidadesVencidas", "unidadesPedidas",
+]
 
-    Tambien suma 'edad': el ultimo movimiento de ajuste registrado en
-    MovimientoAjuste por (sku, area). No es la fecha exacta de entrada pero
-    da una pista de cuanto hace que se toco el stock de esa area.
 
-    Devuelve:
-        {
-          "sku": str,
-          "total": int,                    # suma global
-          "total_ubicaciones": int,
-          "areas_count": int,
-          "areas": [
-            {
-              "area": str,
-              "total": int,
-              "ubicaciones": [{"ubicacion": str, "units": int}, ...],
-              "last_movement": "YYYY-MM-DD" | None,
-              "movements_count": int       # cantidad de ajustes
-            }, ...
-          ]
-        }
+def _digip_stock_summary(eng, sku: str) -> dict:
+    """Lee digip."Stock" para tomar el panorama completo agregado del SKU
+    (disponibles / reservadas / bloqueadas / a despachar / en recepcion /
+    transito interno / vencidas / pedidas + updatedAt).
+
+    digip.Stock es 1 row por SKU (resumen consolidado). digip.StockDetalle
+    es per (sku, area, ubicacion). Las dos son complementarias.
+
+    Como el schema digip es inconsistente (PascalCase, camelCase, lowercase
+    mezclados), descubrimos las columnas reales via information_schema en
+    vez de hardcodearlas y rezar.
     """
-    out = {"sku": sku, "total": 0, "total_ubicaciones": 0, "areas_count": 0, "areas": []}
+    out = {
+        "available": False,
+        "disponibles": 0, "reservadas": 0, "bloqueadas": 0,
+        "a_despachar": 0, "en_recepcion": 0, "transito_interno": 0,
+        "vencidas": 0, "pedidas": 0,
+        "total_fisico": 0,    # disponibles + reservadas + bloqueadas + a_despachar (lo que ya esta en deposito)
+        "total_pipeline": 0,  # en_recepcion + transito_interno + pedidas (lo que viene)
+        "updated_at": None,
+    }
+    try:
+        # Descubrir el nombre real de la columna SKU + columnas de unidades
+        cols_rows = q(eng, """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema='digip' AND table_name='Stock'
+        """) or []
+        cols = {r[0] for r in cols_rows}
+        # SKU column: probar variantes en orden
+        sku_col = None
+        for candidate in ("CodigoArticulo", "codigoArticulo", "articuloCodigo"):
+            if candidate in cols:
+                sku_col = candidate
+                break
+        if not sku_col:
+            log.warning("digip.Stock: no SKU column found, available cols=%s", sorted(cols))
+            return out
+
+        # Construir SELECT solo con las columnas que existen
+        select_parts = []
+        col_map = {}  # nombre canonico -> nombre real
+        canonical_to_db = {
+            "disponibles": ["unidadesDisponibles"],
+            "reservadas": ["unidadesReservadas"],
+            "bloqueadas": ["unidadesBloqueadas"],
+            "a_despachar": ["unidadesAdespachar", "unidadesADespachar"],
+            "en_recepcion": ["unidadesEnRecepcion"],
+            "transito_interno": ["unidadesTransitoInterno"],
+            "vencidas": ["unidadesVencidas"],
+            "pedidas": ["unidadesPedidas"],
+        }
+        for canonical, candidates in canonical_to_db.items():
+            for cand in candidates:
+                if cand in cols:
+                    col_map[canonical] = cand
+                    select_parts.append(f'COALESCE("{cand}", 0)::int AS {canonical}')
+                    break
+        # updated_at
+        upd_col = "updatedAt" if "updatedAt" in cols else ("updated_at" if "updated_at" in cols else None)
+        if upd_col:
+            select_parts.append(f'MAX("{upd_col}") AS upd')
+
+        if not select_parts:
+            return out
+
+        sql = f'''
+            SELECT {", ".join(select_parts)}
+            FROM digip."Stock"
+            WHERE "{sku_col}" = :sku
+            GROUP BY "{sku_col}"
+        '''
+        rows = q(eng, sql, {"sku": sku}) or []
+        if not rows:
+            return out
+        row = rows[0]
+        # Mapping posicional - el orden del SELECT lo respeta
+        idx = 0
+        for canonical in canonical_to_db:
+            if canonical in col_map:
+                out[canonical] = int(row[idx] or 0)
+                idx += 1
+        if upd_col and idx < len(row):
+            v = row[idx]
+            if v:
+                try:
+                    out["updated_at"] = v.strftime("%Y-%m-%d %H:%M") if hasattr(v, "strftime") else str(v)[:16]
+                except Exception:
+                    out["updated_at"] = str(v)[:16]
+
+        out["total_fisico"] = out["disponibles"] + out["reservadas"] + out["bloqueadas"] + out["a_despachar"]
+        out["total_pipeline"] = out["en_recepcion"] + out["transito_interno"] + out["pedidas"]
+        out["available"] = (out["total_fisico"] + out["total_pipeline"] + out["vencidas"]) > 0
+        return out
+    except Exception as e:
+        log.warning("_digip_stock_summary fail sku=%s err=%s", sku, e)
+        return out
+
+
+def stock_detail(sku: str) -> dict:
+    """Stock DIGIP del SKU: panorama agregado (digip.Stock) +
+    desglose area -> ubicaciones[] (digip.StockDetalle).
+
+    breakdown: 1 row de digip.Stock con disponibles/reservadas/bloqueadas/
+    a_despachar/en_recepcion/transito_interno/vencidas/pedidas + updated_at.
+
+    areas: per (area, ubicacion) sumando unidades + last_movement de
+    MovimientoAjuste por (sku, area).
+
+    Las dos vistas son complementarias: breakdown te dice el panorama
+    operativo; areas te dice donde fisicamente esta cada unidad.
+    """
+    out = {
+        "sku": sku, "total": 0, "total_ubicaciones": 0, "areas_count": 0,
+        "areas": [], "breakdown": None,
+    }
     try:
         eng = get_engine("unistore")
     except Exception as e:
         log.warning("stock_detail engine fail: %s", e)
         return out
+
+    # Panorama agregado del SKU (digip.Stock)
+    out["breakdown"] = _digip_stock_summary(eng, sku)
 
     # Stock por area + ubicacion
     try:

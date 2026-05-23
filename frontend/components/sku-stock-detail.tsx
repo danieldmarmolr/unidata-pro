@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, MapPin, Boxes, Calendar } from "lucide-react";
+import {
+  ChevronDown, ChevronRight, MapPin, Boxes, Calendar,
+  CheckCircle2, Lock, ShieldAlert, Truck, PackagePlus,
+  Repeat, AlertTriangle, ShoppingBag,
+} from "lucide-react";
 import { formatNumber } from "@/lib/utils";
 
 type Ubicacion = { ubicacion: string; units: number };
@@ -14,13 +18,94 @@ type AreaBlock = {
   movements_count: number;
 };
 
+type StockBreakdown = {
+  available: boolean;
+  disponibles: number;
+  reservadas: number;
+  bloqueadas: number;
+  a_despachar: number;
+  en_recepcion: number;
+  transito_interno: number;
+  vencidas: number;
+  pedidas: number;
+  total_fisico: number;
+  total_pipeline: number;
+  updated_at: string | null;
+};
+
 type StockDetail = {
   sku: string;
   total: number;
   total_ubicaciones: number;
   areas_count: number;
   areas: AreaBlock[];
+  breakdown?: StockBreakdown | null;
 };
+
+const BREAKDOWN_TILES: Array<{
+  key: keyof StockBreakdown;
+  label: string;
+  tone: string;
+  icon: any;
+  tooltip: string;
+}> = [
+  {
+    key: "disponibles",
+    label: "Disponibles",
+    tone: "border-emerald-200 bg-emerald-50 text-emerald-900",
+    icon: CheckCircle2,
+    tooltip: "Stock fisico libre para vender",
+  },
+  {
+    key: "reservadas",
+    label: "Reservadas",
+    tone: "border-amber-200 bg-amber-50 text-amber-900",
+    icon: Lock,
+    tooltip: "Comprometidas a ordenes existentes",
+  },
+  {
+    key: "bloqueadas",
+    label: "Bloqueadas",
+    tone: "border-rose-200 bg-rose-50 text-rose-900",
+    icon: ShieldAlert,
+    tooltip: "Retenidas (control de calidad / problema)",
+  },
+  {
+    key: "a_despachar",
+    label: "A despachar",
+    tone: "border-cyan-200 bg-cyan-50 text-cyan-900",
+    icon: Truck,
+    tooltip: "Picking / preparando salida",
+  },
+  {
+    key: "en_recepcion",
+    label: "En recepcion",
+    tone: "border-blue-200 bg-blue-50 text-blue-900",
+    icon: PackagePlus,
+    tooltip: "Llegando del proveedor, sin ingresar a deposito",
+  },
+  {
+    key: "transito_interno",
+    label: "Transito interno",
+    tone: "border-violet-200 bg-violet-50 text-violet-900",
+    icon: Repeat,
+    tooltip: "Moviendose entre depositos",
+  },
+  {
+    key: "vencidas",
+    label: "Vencidas",
+    tone: "border-zinc-300 bg-zinc-100 text-zinc-700",
+    icon: AlertTriangle,
+    tooltip: "Caducadas - no vendibles",
+  },
+  {
+    key: "pedidas",
+    label: "Pedidas (PO)",
+    tone: "border-indigo-200 bg-indigo-50 text-indigo-900",
+    icon: ShoppingBag,
+    tooltip: "En orden de compra al proveedor, aun no salio",
+  },
+];
 
 type Props = { data: StockDetail };
 
@@ -52,7 +137,11 @@ export function SkuStockDetail({ data }: Props) {
     setExpanded(next);
   }
 
-  if (!data || data.total === 0) {
+  const b = data?.breakdown;
+  const hasBreakdown = b?.available;
+  const hasAreas = data && data.total > 0;
+
+  if (!data || (!hasBreakdown && !hasAreas)) {
     return (
       <div className="bg-surface border border-border rounded-xl p-5">
         <div className="text-sm font-bold text-text mb-1">Stock DIGIP detallado</div>
@@ -73,22 +162,76 @@ export function SkuStockDetail({ data }: Props) {
           <div>
             <h3 className="text-sm font-bold text-text">Stock DIGIP detallado</h3>
             <p className="text-[11px] text-text-muted">
-              Click una área para expandir ubicaciones · {data.areas_count} áreas · {data.total_ubicaciones} ubicaciones
+              Panorama agregado + ubicaciones físicas
+              {data.areas_count > 0 && ` · ${data.areas_count} áreas · ${data.total_ubicaciones} ubicaciones`}
+              {b?.updated_at && ` · sync ${b.updated_at}`}
             </p>
           </div>
         </div>
         <div className="flex gap-4 text-right">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Total</div>
-            <div className="text-xl font-extrabold text-text tabular-nums">{formatNumber(data.total)}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Ubicaciones</div>
-            <div className="text-xl font-extrabold text-primary tabular-nums">{data.total_ubicaciones}</div>
-          </div>
+          {hasBreakdown && (
+            <>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Físico</div>
+                <div className="text-xl font-extrabold text-text tabular-nums">{formatNumber(b!.total_fisico)}</div>
+                <div className="text-[9px] text-text-muted">en depósito</div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Pipeline</div>
+                <div className="text-xl font-extrabold text-cyan-700 tabular-nums">{formatNumber(b!.total_pipeline)}</div>
+                <div className="text-[9px] text-text-muted">en camino</div>
+              </div>
+            </>
+          )}
+          {!hasBreakdown && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Total</div>
+              <div className="text-xl font-extrabold text-text tabular-nums">{formatNumber(data.total)}</div>
+            </div>
+          )}
+          {hasAreas && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Ubicaciones</div>
+              <div className="text-xl font-extrabold text-primary tabular-nums">{data.total_ubicaciones}</div>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Breakdown tiles (digip.Stock) */}
+      {hasBreakdown && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-4">
+          {BREAKDOWN_TILES.map((t) => {
+            const v = b![t.key] as number;
+            const Icon = t.icon;
+            return (
+              <div
+                key={String(t.key)}
+                title={t.tooltip}
+                className={`border rounded-lg px-2.5 py-2 ${t.tone} ${v === 0 ? "opacity-50" : ""}`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <Icon size={12} />
+                  <span className="text-[9px] uppercase tracking-wider font-bold truncate">
+                    {t.label}
+                  </span>
+                </div>
+                <div className="text-lg font-extrabold tabular-nums mt-0.5">
+                  {formatNumber(v)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!hasAreas && (
+        <div className="text-xs text-text-muted italic py-2">
+          Sin desglose por ubicación en DIGIP (las unidades están agregadas en el panorama de arriba).
+        </div>
+      )}
+
+      {hasAreas && (
       <div className="border border-border rounded-lg overflow-hidden">
         <div className="bg-soft/60 px-3 py-2 grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wider text-text-muted font-bold">
           <div className="col-span-5">Área</div>
@@ -178,6 +321,7 @@ export function SkuStockDetail({ data }: Props) {
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }
