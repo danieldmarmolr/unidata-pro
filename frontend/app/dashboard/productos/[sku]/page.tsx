@@ -2,16 +2,16 @@
 
 import { use } from "react";
 import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/topbar";
 import { KpiCard } from "@/components/kpi-card";
 import { CategoryTable } from "@/components/generic-table";
-import { DailyRevenueChart } from "@/components/sparkline";
-import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { ExportButtons } from "@/components/export-buttons";
-import { SkuOmnichannel } from "@/components/sku-omnichannel";
+import { SkuOmnichannel, type UnidropPricingPayload } from "@/components/sku-omnichannel";
+import { SkuStackedEvolution } from "@/components/sku-stacked-evolution";
+import { SkuStockDetail } from "@/components/sku-stock-detail";
+import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -40,6 +40,52 @@ type CostInfo = {
   margen_warning?: string;
   legacy_lote?: boolean;
 } | null;
+
+type StockDetailPayload = {
+  sku: string;
+  total: number;
+  total_ubicaciones: number;
+  areas_count: number;
+  areas: Array<{
+    area: string;
+    total: number;
+    ubicaciones: Array<{ ubicacion: string; units: number }>;
+    last_movement: string | null;
+    movements_count: number;
+  }>;
+};
+
+type ChannelForecast = {
+  daily_velocity: number;
+  trend_pct: number;
+  forecast_30d: number;
+  forecast_60d: number;
+  revenue_forecast_30d?: number;
+};
+
+type ForecastPayload = {
+  unistore_tn: ChannelForecast;
+  unistore_meli: ChannelForecast;
+  unidrop_tn: ChannelForecast;
+  unidrop_meli: ChannelForecast;
+  total: { forecast_30d: number; forecast_60d: number; revenue_forecast_30d: number };
+};
+
+type Lote = {
+  lote: string | null;
+  proveedor: string | null;
+  fecha_ingreso: string | null;
+  imported_at: string | null;
+  cantidad: number | null;
+  costo_unit_usd: number | null;
+  costo_unit_ars: number | null;
+  costo_con_iva_unit_ars: number | null;
+  precio_ars: number | null;
+  rentabilidad_ars: number | null;
+  pct_rentabilidad: number | null;
+  categoria?: string | null;
+  ncm?: string | null;
+};
 
 type Detail = {
   sku: string;
@@ -85,6 +131,21 @@ type Detail = {
   generated_at: string;
 };
 
+// Shape del endpoint /api/dashboards/sku-omnichannel/{sku}
+type OmnichannelResp = {
+  monthly_by_channel: Array<{
+    mes: string;
+    unistore_tn: number;
+    unistore_meli: number;
+    unidrop_tn: number;
+    unidrop_meli: number;
+    rev_unistore_tn: number;
+    rev_unistore_meli: number;
+    rev_unidrop_tn: number;
+    rev_unidrop_meli: number;
+  }>;
+};
+
 export default function ProductDetailPage({ params }: { params: Promise<{ sku: string }> }) {
   const { sku: skuRaw } = use(params);
   const sku = decodeURIComponent(skuRaw);
@@ -105,6 +166,42 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
     queryKey: ["product-detail", sku, effectivePeriod, customFrom, customTo],
     queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}?${qs}`),
     staleTime: 60_000,
+  });
+
+  // Fetch del monthly_by_channel para el chart apilado. TanStack dedup el cache
+  // con el de SkuOmnichannel por mismo queryKey - 1 sola request real.
+  const { data: omni } = useQuery<OmnichannelResp>({
+    queryKey: ["sku-omnichannel", sku],
+    queryFn: () => api(`/api/dashboards/sku-omnichannel/${encodeURIComponent(sku)}`),
+    staleTime: 5 * 60_000,
+    enabled: !!sku,
+  });
+
+  // Las 4 vistas extras del SKU 360 V2 cargan en endpoints separados para que
+  // la pagina renderice rapido. Cada bloque muestra skeleton hasta que llega.
+  const { data: stockDetailData, isLoading: stockDetailLoading } = useQuery<StockDetailPayload>({
+    queryKey: ["sku-stock-detail", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/stock-detail`),
+    staleTime: 3 * 60_000,
+    enabled: !!sku,
+  });
+  const { data: forecastData } = useQuery<ForecastPayload>({
+    queryKey: ["sku-forecast", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/forecast`),
+    staleTime: 3 * 60_000,
+    enabled: !!sku,
+  });
+  const { data: unidropPricingData } = useQuery<UnidropPricingPayload>({
+    queryKey: ["sku-unidrop-pricing", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/unidrop-pricing`),
+    staleTime: 3 * 60_000,
+    enabled: !!sku,
+  });
+  const { data: lotesData, isLoading: lotesLoading } = useQuery<{ lotes: Lote[] }>({
+    queryKey: ["sku-lotes", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/lotes`),
+    staleTime: 5 * 60_000,
+    enabled: !!sku,
   });
 
   return (
@@ -232,8 +329,21 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             : data.cards.map((c) => <KpiCard key={c.label} data={c} />)}
         </div>
 
-        {/* Vista omnicanal del SKU: 4 fuentes (Unistore TN/MELI + Unidrop TN/MELI) */}
-        <SkuOmnichannel sku={sku} />
+        {/* Forecast hero: barras apiladas por canal + linea forecast 30d/60d */}
+        {omni?.monthly_by_channel ? (
+          <div className="mb-6">
+            <SkuStackedEvolution
+              monthly={omni.monthly_by_channel}
+              forecast={forecastData ?? null}
+            />
+          </div>
+        ) : (
+          <div className="mb-6 bg-surface border border-border rounded-xl p-5 h-[440px] animate-pulse" />
+        )}
+
+        {/* Vista omnicanal del SKU: 4 fuentes (Unistore TN/MELI + Unidrop TN/MELI)
+            + pricing mayorista enriquecido en las cards Unidrop */}
+        <SkuOmnichannel sku={sku} unidropPricing={unidropPricingData} />
 
         {data?.cost_info && data.cost_info.cost_ars && (
           <div className="bg-gradient-to-r from-primary/10 to-accent/10 border border-primary/30 rounded-xl px-5 py-4 mb-6 flex flex-wrap items-center gap-x-8 gap-y-2 text-sm">
@@ -284,42 +394,22 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           </div>
         )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
-          {isLoading || !data ? (
-            <>
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-            </>
-          ) : (
-            <div className="xl:col-span-2">
-              <InteractiveMetricChart
-                points={(() => {
-                  // Mergeamos los dos time series en un solo array de puntos
-                  // con ambas metricas accesibles. Asi el chart interactivo
-                  // puede comparar revenue vs unidades en el mismo grafico.
-                  const map = new Map<string, any>();
-                  for (const p of data.monthly_revenue.points) {
-                    map.set(p.date, { date: p.date, revenue: p.value });
-                  }
-                  for (const p of data.monthly_units.points) {
-                    const existing = map.get(p.date) ?? { date: p.date };
-                    existing.units = p.value;
-                    map.set(p.date, existing);
-                  }
-                  return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
-                })()}
-                metrics={[
-                  { key: "revenue", label: "Revenue", kind: "currency", color: "#7a3eae" },
-                  { key: "units", label: "Unidades", kind: "number", color: "#10b981" },
-                ]}
-                defaultPrimary="revenue"
-                defaultSecondary="units"
-                caption="Evolución mensual del SKU (12m)"
-                subtitle="Click los selectors arriba: Barras = Revenue $ · Línea = Unidades · ideal para ver si las ventas crecen por volumen o por precio"
-                height={320}
-              />
-            </div>
-          )}
+        {/* Stock DIGIP detallado: area -> ubicaciones expandible + edad de movimientos */}
+        <div className="mb-6">
+          {stockDetailLoading ? (
+            <div className="bg-surface border border-border rounded-xl p-5 h-[280px] animate-pulse" />
+          ) : stockDetailData ? (
+            <SkuStockDetail data={stockDetailData} />
+          ) : null}
+        </div>
+
+        {/* Historial de lotes con delta de costo vs lote previo */}
+        <div className="mb-6">
+          {lotesLoading ? (
+            <div className="bg-surface border border-border rounded-xl p-5 h-[200px] animate-pulse" />
+          ) : lotesData?.lotes && lotesData.lotes.length > 0 ? (
+            <SkuLotesTimeline lotes={lotesData.lotes} loteVigente={data?.cost_info?.lote ?? null} />
+          ) : null}
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
@@ -358,37 +448,24 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           )}
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {isLoading || !data ? (
-            <>
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-              <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
-            </>
-          ) : (
-            <>
-              <CategoryTable
-                caption="Stock por area (Digip)"
-                subtitle="Suma de unidades + ubicaciones"
-                data={data.stock_by_area}
-                formatter="number"
-                extraColumns={[{ key: "ubicaciones", label: "Ubic", format: "number" }]}
-              />
-              <CategoryTable
-                caption="Devoluciones (Unidev)"
-                subtitle={data.devoluciones.length === 0 ? "Sin devoluciones registradas" : "Ultimas 20"}
-                data={data.devoluciones}
-                formatter="currency"
-                extraColumns={[
-                  { key: "fecha", label: "Fecha", format: "raw" },
-                  { key: "estado", label: "Estado", format: "raw" },
-                  { key: "resolucion", label: "Resol", format: "raw" },
-                  { key: "cantidad", label: "Cant", format: "number" },
-                ]}
-                showProgress={false}
-              />
-            </>
-          )}
-        </div>
+        {/* Devoluciones (sola, sin stock simple — el stock detallado ya esta arriba) */}
+        {data && data.devoluciones.length > 0 && (
+          <div className="mb-6">
+            <CategoryTable
+              caption="Devoluciones (Unidev)"
+              subtitle="Ultimas 20"
+              data={data.devoluciones}
+              formatter="currency"
+              extraColumns={[
+                { key: "fecha", label: "Fecha", format: "raw" },
+                { key: "estado", label: "Estado", format: "raw" },
+                { key: "resolucion", label: "Resol", format: "raw" },
+                { key: "cantidad", label: "Cant", format: "number" },
+              ]}
+              showProgress={false}
+            />
+          </div>
+        )}
 
         {/* Ordenes que incluyen este SKU (respeta el filtro de periodo) */}
         {data && data.recent_orders && (

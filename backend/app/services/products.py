@@ -20,7 +20,6 @@ from app.services.drilldowns import (
     _shipping_type_col,
     _carrier_col,
 )
-
 log = logging.getLogger("unidata.products")
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
@@ -343,6 +342,11 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
     from_ts = win["from_ts"]
     to_ts = win["to_ts"]
     eng = get_engine("unistore")
+
+    # NOTA: las vistas extras del SKU 360 V2 (stock_detail, forecast,
+    # unidrop_pricing, lotes_all) viven en endpoints separados
+    # /products/sku/{sku}/stock-detail|forecast|unidrop-pricing|lotes
+    # para no bloquear el render de la pagina principal.
 
     info = q(eng, """
         SELECT MAX(p.id) AS product_id,

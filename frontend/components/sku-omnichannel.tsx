@@ -22,6 +22,29 @@ type Channel = {
   error: string | null;
 };
 
+// Bloque de pricing mayorista por canal Unidrop (TN o MELI) - lo trae el
+// endpoint product_detail.unidrop_pricing y se inyecta como prop opcional.
+export type UnidropPricingBlock = {
+  available: boolean;
+  units: number;
+  orders: number;
+  cost_avg: number;
+  cost_stddev: number;
+  cost_min: number;
+  cost_max: number;
+  price_retail_avg: number;
+  price_retail_stddev: number;
+  price_min: number;
+  price_max: number;
+  markup_pct: number | null;
+  pricing_consistency: "tight" | "moderate" | "dispersed" | null;
+};
+
+export type UnidropPricingPayload = {
+  tn: UnidropPricingBlock;
+  meli: UnidropPricingBlock;
+};
+
 type Inconsistencia = {
   tipo: string;
   severity: "info" | "warning" | "error";
@@ -101,9 +124,49 @@ function SeverityIcon({ severity }: { severity: Inconsistencia["severity"] }) {
   return <Info size={14} className="text-blue-600 shrink-0 mt-0.5" />;
 }
 
-function ChannelCard({ keyName, c }: { keyName: keyof Resp["channels"]; c: Channel }) {
+function ConsistencyBadge({ c }: { c: UnidropPricingBlock["pricing_consistency"] }) {
+  if (!c) return null;
+  const map: Record<string, { label: string; cls: string; title: string }> = {
+    tight: {
+      label: "Pricing alineado",
+      cls: "bg-emerald-50 text-emerald-800 border-emerald-200",
+      title: "Coef. variación <5% — los dropshippers venden a precio similar",
+    },
+    moderate: {
+      label: "Pricing variado",
+      cls: "bg-amber-50 text-amber-800 border-amber-200",
+      title: "Coef. variación 5–20% — variabilidad moderada de precios",
+    },
+    dispersed: {
+      label: "Pricing disperso",
+      cls: "bg-rose-50 text-rose-800 border-rose-200",
+      title: "Coef. variación >20% — guerra de precios o mercados distintos",
+    },
+  };
+  const m = map[c];
+  if (!m) return null;
+  return (
+    <span
+      title={m.title}
+      className={`inline-block text-[10px] px-1.5 py-0.5 rounded border ${m.cls}`}
+    >
+      {m.label}
+    </span>
+  );
+}
+
+function ChannelCard({
+  keyName,
+  c,
+  pricing,
+}: {
+  keyName: keyof Resp["channels"];
+  c: Channel;
+  pricing?: UnidropPricingBlock;
+}) {
   const meta = CHANNEL_META[keyName];
   const Icon = meta.icon;
+  const isUnidrop = keyName === "unidrop_tn" || keyName === "unidrop_meli";
   return (
     <div className={`border-2 rounded-xl p-4 ${meta.accent} ${!c.available ? "opacity-60" : ""}`}>
       <div className="flex items-start justify-between mb-2">
@@ -151,13 +214,77 @@ function ChannelCard({ keyName, c }: { keyName: keyof Resp["channels"]; c: Chann
             <div>Precio prom.: <strong className="text-text">{formatCurrency(c.avg_price)}</strong></div>
             {c.last_sale && <div>Ult. venta: <strong className="text-text">{c.last_sale.slice(0, 10)}</strong></div>}
           </div>
+
+          {/* Pricing mayorista para Unidrop (TN o MELI) - solo si hay data del backend */}
+          {isUnidrop && pricing?.available && (
+            <div className="mt-3 pt-3 border-t border-border/50">
+              <div className="flex items-baseline justify-between mb-1.5">
+                <span className="text-[10px] uppercase tracking-wider text-text-muted font-bold">
+                  Pricing mayorista (180d)
+                </span>
+                <ConsistencyBadge c={pricing.pricing_consistency} />
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="bg-surface/60 border border-border/40 rounded px-1.5 py-1">
+                  <div className="text-[9px] uppercase text-text-muted">Costo prom.</div>
+                  <div className="font-bold tabular-nums text-text">
+                    {formatCurrency(pricing.cost_avg)}
+                  </div>
+                  {pricing.cost_stddev > 0 && (
+                    <div className="text-[9px] text-text-muted">±{formatCurrency(pricing.cost_stddev)}</div>
+                  )}
+                </div>
+                <div className="bg-surface/60 border border-border/40 rounded px-1.5 py-1">
+                  <div className="text-[9px] uppercase text-text-muted">Precio drop.</div>
+                  <div className="font-bold tabular-nums text-text">
+                    {formatCurrency(pricing.price_retail_avg)}
+                  </div>
+                  {pricing.price_retail_stddev > 0 && (
+                    <div className="text-[9px] text-text-muted">±{formatCurrency(pricing.price_retail_stddev)}</div>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-1.5 text-[11px]">
+                <span className="text-text-muted">Markup mayorista:</span>
+                {pricing.markup_pct !== null ? (
+                  <strong
+                    className={`tabular-nums ${
+                      pricing.markup_pct >= 30
+                        ? "text-emerald-700"
+                        : pricing.markup_pct >= 10
+                          ? "text-amber-700"
+                          : "text-rose-700"
+                    }`}
+                    title="(precio retail dropshipper − costo mayorista) / costo mayorista"
+                  >
+                    {pricing.markup_pct >= 0 ? "+" : ""}
+                    {pricing.markup_pct}%
+                  </strong>
+                ) : (
+                  <span className="text-text-muted">—</span>
+                )}
+              </div>
+              {(pricing.cost_min > 0 || pricing.price_min > 0) && (
+                <div className="text-[9px] text-text-muted mt-1">
+                  Rango costo: {formatCurrency(pricing.cost_min)} – {formatCurrency(pricing.cost_max)}
+                  {" · "}precio: {formatCurrency(pricing.price_min)} – {formatCurrency(pricing.price_max)}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
   );
 }
 
-export function SkuOmnichannel({ sku }: { sku: string }) {
+export function SkuOmnichannel({
+  sku,
+  unidropPricing,
+}: {
+  sku: string;
+  unidropPricing?: UnidropPricingPayload;
+}) {
   const { data, isLoading } = useQuery<Resp>({
     queryKey: ["sku-omnichannel", sku],
     queryFn: () => api(`/api/dashboards/sku-omnichannel/${encodeURIComponent(sku)}`),
@@ -204,8 +331,8 @@ export function SkuOmnichannel({ sku }: { sku: string }) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         <ChannelCard keyName="unistore_tn" c={channels.unistore_tn} />
         <ChannelCard keyName="unistore_meli" c={channels.unistore_meli} />
-        <ChannelCard keyName="unidrop_tn" c={channels.unidrop_tn} />
-        <ChannelCard keyName="unidrop_meli" c={channels.unidrop_meli} />
+        <ChannelCard keyName="unidrop_tn" c={channels.unidrop_tn} pricing={unidropPricing?.tn} />
+        <ChannelCard keyName="unidrop_meli" c={channels.unidrop_meli} pricing={unidropPricing?.meli} />
       </div>
 
       {data.inconsistencias.length > 0 && (

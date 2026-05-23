@@ -18,6 +18,7 @@ from app.services import logistica_unidrop as logistica_drp_svc
 from app.services import marketing as marketing_svc
 from app.services import pagos as pagos_svc
 from app.services import products as products_svc
+from app.services import sku_360_extras as sku360_svc
 from app.services import saas as saas_svc
 from app.services import sales_unidrop as sales_drp_svc
 from app.services import subscriptions_meli as subs_meli_svc
@@ -355,13 +356,13 @@ def get_dropshippers(
     actividad: Annotated[str, Query()] = "all",
     canal: Annotated[Literal["all", "meli", "tn", "ambos", "sin_canal"], Query()] = "all",
     search: Annotated[str | None, Query()] = None,
-    limit: Annotated[int, Query(le=20000)] = 500,
+    limit: Annotated[int, Query(le=50000)] = 50000,
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Listado de dropshippers Unidrop con caching agresivo (3 min TTL).
-    Default limit reducido a 500 - la UI hace pagination/filter del lado cliente.
+    Default 50000 - trae a todos (universo real ~8600). El frontend pagina.
     """
     require_area(user, ["ventas", "cs"])
     cache_key = f"dropshippers:{plan}:{riesgo}:{actividad}:{canal}:{search or ''}:{limit}:{period}:{from_iso or ''}:{to_iso or ''}"
@@ -1337,6 +1338,66 @@ def get_product_detail(
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
         return products_svc.product_detail(sku, period=period, from_iso=from_iso, to_iso=to_iso)
+    return _b()
+
+
+# ============================================================
+# SKU 360 V2 - Endpoints extras (lazy, cargan en paralelo en el frontend)
+# Separados del product_detail para que la pagina principal renderice rapido.
+# ============================================================
+
+_sku360_cache: TTLCache = TTLCache(maxsize=256, ttl=180)
+
+
+@router.get("/products/sku/{sku}/stock-detail")
+def get_sku_stock_detail(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    require_area(user, ["ventas", "compras", "logistica"])
+    key = f"sku-stock:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.stock_detail(sku)
+    return _b()
+
+
+@router.get("/products/sku/{sku}/forecast")
+def get_sku_forecast(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-forecast:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.forecast_per_channel(sku)
+    return _b()
+
+
+@router.get("/products/sku/{sku}/unidrop-pricing")
+def get_sku_unidrop_pricing(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-drp-pricing:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.unidrop_pricing(sku)
+    return _b()
+
+
+@router.get("/products/sku/{sku}/lotes")
+def get_sku_lotes(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-lotes:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return {"lotes": sku360_svc.lotes_history(sku)}
     return _b()
 
 
