@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
 import { Segmented } from "@/components/segmented";
+import { ExportButtons } from "@/components/export-buttons";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { Mail, Search, ExternalLink, AlertTriangle, Sparkles } from "lucide-react";
+import { Mail, Search, ExternalLink, AlertTriangle, Sparkles, ArrowUp, ArrowDown, Info } from "lucide-react";
 
 type Plan = "all" | "1" | "2" | "3" | "4";
 type Riesgo = "all" | "sin_publicar" | "sin_vender" | "con_deuda" | "token_expira";
@@ -135,6 +136,18 @@ export default function DropshippersPage() {
   const [actividad, setActividad] = useState<Actividad>("all");
   const [canal, setCanal] = useState<Canal>("all");
   const [search, setSearch] = useState("");
+  const [showFormula, setShowFormula] = useState(false);
+  // Sort + paginacion frontend: con ~8k dropshippers la tabla podia ser pesada,
+  // por eso visible se limita a `pageLimit` y el user lo expande con el boton.
+  type SortKey = "ganancia_unidrop_neta" | "gmv_total" | "profit_unidrop" | "subs_cobradas"
+    | "deuda_pendiente" | "ventas_pagadas" | "creado_en" | "ultima_venta";
+  const [sortKey, setSortKey] = useState<SortKey>("ganancia_unidrop_neta");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [pageLimit, setPageLimit] = useState(200);
+  const onSort = (k: SortKey) => {
+    if (sortKey === k) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(k); setSortDir("desc"); }
+  };
 
   const { data, isLoading } = useQuery<Resp>({
     queryKey: ["dropshippers", plan, riesgo, actividad, canal, search, period, customFrom, customTo],
@@ -150,6 +163,40 @@ export default function DropshippersPage() {
     staleTime: 60_000,
   });
 
+  // Sort + slice del lado frontend. El backend devuelve hasta 50k rows; aca
+  // ordenamos por la columna que el usuario elige y mostramos solo los
+  // primeros `pageLimit` (200 default). Asi la tabla siempre arranca con
+  // los mas relevantes y el user puede expandir.
+  const sortedItems = useMemo<DS[]>(() => {
+    const rows = data?.items ?? [];
+    if (rows.length === 0) return rows;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const get = (r: DS) => {
+      switch (sortKey) {
+        case "ganancia_unidrop_neta": return r.ganancia_unidrop_neta ?? r.profit_unidrop ?? 0;
+        case "gmv_total": return r.gmv_total ?? ((r.gmv ?? 0) + (r.tn_gmv ?? 0));
+        case "profit_unidrop": return r.profit_unidrop ?? 0;
+        case "subs_cobradas": return r.subs_cobradas ?? 0;
+        case "deuda_pendiente": return r.deuda_pendiente ?? 0;
+        case "ventas_pagadas": return (r.ventas_pagadas ?? 0) + (r.tn_ventas_pagadas ?? 0);
+        case "creado_en": return r.creado_en ? Date.parse(r.creado_en) : 0;
+        case "ultima_venta": {
+          const v = r.ultima_venta ? Date.parse(r.ultima_venta) : 0;
+          const t = r.tn_ultima_venta ? Date.parse(r.tn_ultima_venta) : 0;
+          return Math.max(v, t);
+        }
+        default: return 0;
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const va = get(a) as number;
+      const vb = get(b) as number;
+      if (va === vb) return 0;
+      return (va < vb ? -1 : 1) * dir;
+    });
+  }, [data?.items, sortKey, sortDir]);
+  const visibleItems = sortedItems.slice(0, pageLimit);
+
   return (
     <>
       <Topbar
@@ -162,7 +209,17 @@ export default function DropshippersPage() {
         {data?.stats.ganancia_unidrop_total !== undefined && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
             <div className="md:col-span-2 rounded-xl border border-emerald-200 bg-gradient-to-r from-emerald-50 via-emerald-50 to-white p-4">
-              <div className="text-[10px] uppercase tracking-wider text-emerald-700/80 font-semibold">Ganancia Unidrop neta del periodo</div>
+              <div className="flex items-baseline justify-between gap-2 flex-wrap">
+                <div className="text-[10px] uppercase tracking-wider text-emerald-700/80 font-semibold">Ganancia Unidrop neta del periodo</div>
+                <button
+                  type="button"
+                  onClick={() => setShowFormula((v) => !v)}
+                  className="inline-flex items-center gap-1 text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold"
+                  aria-label="Ver formula del calculo"
+                >
+                  <Info size={11} /> {showFormula ? "ocultar" : "como se calcula"}
+                </button>
+              </div>
               <div className="mt-1 text-3xl font-bold tabular-nums text-emerald-800">
                 {formatCurrency(data.stats.ganancia_unidrop_total)}
               </div>
@@ -170,6 +227,31 @@ export default function DropshippersPage() {
                 <span>Margen ML (profit_for_subscription) <span className="font-semibold tabular-nums">{formatCurrency(data.stats.profit_unidrop)}</span></span>
                 <span>+ Suscripciones cobradas <span className="font-semibold tabular-nums">{formatCurrency(data.stats.subs_cobradas ?? 0)}</span></span>
               </div>
+              {showFormula && (
+                <div className="mt-3 pt-3 border-t border-emerald-200 text-[11px] leading-relaxed text-emerald-900/85 space-y-2">
+                  <div className="font-semibold text-emerald-900">Como se calcula la ganancia Unidrop neta del periodo</div>
+                  <div>
+                    <span className="font-bold">Ganancia Unidrop</span> = <span className="font-mono bg-white/60 px-1 rounded">Margen ML</span> + <span className="font-mono bg-white/60 px-1 rounded">Suscripciones cobradas</span>
+                  </div>
+                  <ul className="list-disc pl-5 space-y-1.5">
+                    <li>
+                      <span className="font-semibold">Margen ML</span> = suma de
+                      <span className="font-mono bg-white/60 px-1 rounded mx-0.5">OrderMercadoLibre.profit_for_subscription</span>
+                      para todas las ordenes con <span className="font-mono">status='paid'</span> dentro del periodo.
+                      Este campo ya es <em>neto</em>: precio mayorista que pago el dropshipper - costo importacion - comisiones absorbidas por Unidrop.
+                    </li>
+                    <li>
+                      <span className="font-semibold">Suscripciones cobradas</span> = suma de
+                      <span className="font-mono bg-white/60 px-1 rounded mx-0.5">PaymentIntentSubscription.paidAmount</span>
+                      con <span className="font-mono">status='PROCESSED'</span> y
+                      <span className="font-mono">createdAt</span> en el periodo. Es la plata efectiva que el dropshipper transfirio a Unidrop por su Combo mensual (MELI).
+                    </li>
+                  </ul>
+                  <div className="text-emerald-700/70 italic">
+                    No incluye: costos operativos (sueldos, Meta Ads, infra), comisiones de pasarela ni ganancia que percibe el dropshipper al revender (eso es <span className="font-mono">GMV - merchandise_cost - shipping - sus gastos</span>).
+                  </div>
+                </div>
+              )}
             </div>
             <div className="rounded-xl border border-border bg-surface p-4 flex flex-col justify-between">
               <div>
@@ -367,23 +449,47 @@ export default function DropshippersPage() {
               ]}
             />
             {data && (
-              <div className="text-xs text-text-muted ml-auto">
-                {data.stats.total === data.total
-                  ? `${formatNumber(data.total)} dropshippers`
-                  : (
-                    <span>
-                      Viendo <span className="font-bold text-text">{formatNumber(data.total)}</span> de {formatNumber(data.stats.total)}
-                      {(riesgo !== "all" || actividad !== "all" || search) && (
-                        <button
-                          onClick={() => { setRiesgo("all"); setActividad("all"); setSearch(""); }}
-                          className="ml-2 text-primary hover:underline text-[11px]"
-                          title="Quitar filtros"
-                        >
-                          limpiar filtros
-                        </button>
-                      )}
-                    </span>
-                  )}
+              <div className="flex items-center gap-3 ml-auto">
+                <div className="text-xs text-text-muted">
+                  {data.stats.total === data.total
+                    ? <span><span className="font-bold text-text">{formatNumber(data.total)}</span> dropshippers</span>
+                    : (
+                      <span>
+                        Viendo <span className="font-bold text-text">{formatNumber(Math.min(visibleItems.length, data.total))}</span>
+                        {data.total !== visibleItems.length && (
+                          <span className="text-text-muted/70"> / {formatNumber(data.total)}</span>
+                        )}
+                        <span className="text-text-muted/60"> de {formatNumber(data.stats.total)}</span>
+                        {(riesgo !== "all" || actividad !== "all" || search) && (
+                          <button
+                            onClick={() => { setRiesgo("all"); setActividad("all"); setSearch(""); }}
+                            className="ml-2 text-primary hover:underline text-[11px]"
+                            title="Quitar filtros"
+                          >
+                            limpiar filtros
+                          </button>
+                        )}
+                      </span>
+                    )}
+                </div>
+                <ExportButtons
+                  filename={`dropshippers_${period}`}
+                  size="xs"
+                  showLabel={false}
+                  columns={["DNI", "Nombre", "Email", "Telefono", "Plan", "Canal", "GMV total", "Margen ML", "Subs cobradas", "Ganancia Unidrop", "Pagado", "Deuda", "Ventas pagas", "Creado", "Ultima venta"]}
+                  rows={sortedItems.map((d) => [
+                    d.dni ?? "", d.fantasy_name || d.nombre, d.email, d.telefono ?? "",
+                    d.plan ?? "sin_plan", d.canal ?? "",
+                    d.gmv_total ?? ((d.gmv ?? 0) + (d.tn_gmv ?? 0)),
+                    d.profit_unidrop ?? 0,
+                    d.subs_cobradas ?? 0,
+                    d.ganancia_unidrop_neta ?? d.profit_unidrop ?? 0,
+                    d.pago_unidrop_total ?? 0,
+                    d.deuda_pendiente ?? 0,
+                    (d.ventas_pagadas ?? 0) + (d.tn_ventas_pagadas ?? 0),
+                    d.creado_en ?? "", d.ultima_venta ?? d.tn_ultima_venta ?? "",
+                  ])}
+                />
               </div>
             )}
           </div>
@@ -418,15 +524,15 @@ export default function DropshippersPage() {
                     {canal !== "tn" && <th className="text-left px-3 py-2" title="Plan de suscripcion MELI">Plan</th>}
                     {canal !== "tn" && <th className="text-left px-3 py-2" title="Cuenta de Mercado Libre vinculada">Cuenta MELI</th>}
                     {canal !== "tn" && <th className="text-right px-3 py-2" title="Publicaciones activas / totales">Pub.</th>}
-                    <th className="text-right px-3 py-2">Ventas / GMV</th>
-                    <th className="text-right px-3 py-2" title="Ganancia neta para Unidrop = margen ML (profit_for_subscription) + suscripciones cobradas en el periodo">Ganancia Unidrop</th>
-                    <th className="text-right px-3 py-2">Pagos / Deuda</th>
+                    <SortHdr k="ventas_pagadas" label="Ventas / GMV" sortKey={sortKey} sortDir={sortDir} onSort={onSort} title="Click para ordenar por GMV combinado ML+TN" />
+                    <SortHdr k="ganancia_unidrop_neta" label="Ganancia Unidrop" sortKey={sortKey} sortDir={sortDir} onSort={onSort} title="Ganancia neta para Unidrop = margen ML (profit_for_subscription) + suscripciones cobradas en el periodo" />
+                    <SortHdr k="deuda_pendiente" label="Pagos / Deuda" sortKey={sortKey} sortDir={sortDir} onSort={onSort} title="Click para ordenar por deuda pendiente" />
                     <th className="text-right px-3 py-2" title="Cantidad de dropshippers referidos por este operador">Refer.</th>
                     <th className="text-center px-3 py-2">Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.items.map((d) => {
+                  {visibleItems.map((d) => {
                     const wa = waLink(d.telefono);
                     return (
                       <tr key={d.user_id} className="border-t border-border hover:bg-soft transition">
@@ -552,10 +658,69 @@ export default function DropshippersPage() {
                 </tbody>
               </table>
             )}
+            {/* Footer paginacion: indica cuantos se muestran y permite cargar mas */}
+            {!isLoading && data?.items?.length && sortedItems.length > pageLimit && (
+              <div className="px-4 py-3 border-t border-border bg-soft/30 flex items-center justify-between gap-2 flex-wrap text-xs">
+                <div className="text-text-muted">
+                  Mostrando <span className="font-bold text-text">{formatNumber(visibleItems.length)}</span> de {formatNumber(sortedItems.length)} ordenados por <span className="font-semibold">{sortKey}</span> {sortDir === "desc" ? "desc" : "asc"}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {[200, 500, 1000, 5000].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setPageLimit(n)}
+                      className={
+                        "px-2 py-1 rounded-md text-[11px] font-semibold transition " +
+                        (pageLimit === n ? "bg-primary text-white" : "bg-soft text-text-muted hover:text-text")
+                      }
+                    >
+                      {formatNumber(n)}
+                    </button>
+                  ))}
+                  <button
+                    onClick={() => setPageLimit(sortedItems.length)}
+                    className={
+                      "px-2 py-1 rounded-md text-[11px] font-semibold transition " +
+                      (pageLimit >= sortedItems.length ? "bg-primary text-white" : "bg-soft text-text-muted hover:text-text")
+                    }
+                  >
+                    Todos
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
     </>
+  );
+}
+
+type SortKey_ = "ganancia_unidrop_neta" | "gmv_total" | "profit_unidrop" | "subs_cobradas"
+  | "deuda_pendiente" | "ventas_pagadas" | "creado_en" | "ultima_venta";
+
+function SortHdr({
+  k, label, sortKey, sortDir, onSort, title,
+}: {
+  k: SortKey_;
+  label: string;
+  sortKey: SortKey_;
+  sortDir: "asc" | "desc";
+  onSort: (k: SortKey_) => void;
+  title?: string;
+}) {
+  const active = sortKey === k;
+  return (
+    <th
+      onClick={() => onSort(k)}
+      title={title}
+      className="text-right px-3 py-2 cursor-pointer select-none hover:bg-soft/80 transition"
+    >
+      <div className="inline-flex items-center gap-1 justify-end">
+        {label}
+        {active && (sortDir === "asc" ? <ArrowUp size={10} /> : <ArrowDown size={10} />)}
+      </div>
+    </th>
   );
 }
 
