@@ -1452,7 +1452,69 @@ def start_sync_async(
 
 
 def _period_days(p: str) -> int:
-    return {"7d": 7, "30d": 30, "90d": 90, "1y": 365, "all": 3650}.get(p, 30)
+    return {
+        "today": 1, "yesterday": 1,
+        "7d": 7, "30d": 30, "90d": 90,
+        "12m": 365, "1y": 365, "all": 3650,
+    }.get(p, 30)
+
+
+def spend_for_period(period: str, from_iso: str | None = None,
+                     to_iso: str | None = None, unit: str | None = None) -> float:
+    """Suma de spend Meta Ads en la ventana definida por resolve_window(period).
+
+    Maneja correctamente 'today' (solo HOY), 'yesterday' (solo AYER),
+    'Nd' (rolling N dias hasta HOY inclusive) y 'custom' [from, to] inclusivos.
+
+    Reemplaza al patron `meta_overview(period).kpi.spend` que NO soportaba today/yesterday/12m
+    y traia 30d de spend siempre que no encontraba el period en `_period_days`.
+    """
+    import datetime as _dt
+    from app.services._utils import resolve_window
+    meta_ads_db.init()
+
+    win = resolve_window(period=period, from_iso=from_iso, to_iso=to_iso)
+    # win["from_ts"] y win["to_ts"] son datetimes UTC naive.
+    # Convertimos a fechas calendar de Argentina para matchear date_start (DATE sin TZ).
+    from zoneinfo import ZoneInfo
+    AR = ZoneInfo("America/Argentina/Buenos_Aires")
+    UTC = ZoneInfo("UTC")
+
+    def _to_ar_date(dt_naive: _dt.datetime) -> _dt.date:
+        return dt_naive.replace(tzinfo=UTC).astimezone(AR).date()
+
+    d_from = _to_ar_date(win["from_ts"])
+    d_to_inclusive = _to_ar_date(win["to_ts"])
+
+    # Si to_ts == medianoche AR, significa que es exclusivo del dia (caso 'yesterday'):
+    # de from_ts=AYER 00:00 a to_ts=HOY 00:00 -> solo AYER.
+    # Para detectarlo, miramos si el datetime AR es exactamente medianoche.
+    to_ar_dt = win["to_ts"].replace(tzinfo=UTC).astimezone(AR)
+    is_exclusive_midnight = (
+        to_ar_dt.hour == 0 and to_ar_dt.minute == 0 and to_ar_dt.second == 0
+        and (to_ar_dt - to_ar_dt.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds() == 0
+    )
+    if is_exclusive_midnight and d_to_inclusive > d_from:
+        d_to_exclusive = d_to_inclusive  # ya es el dia siguiente
+    else:
+        d_to_exclusive = d_to_inclusive + _dt.timedelta(days=1)
+
+    where_unit = "AND a.unit = %s" if unit else ""
+    params: list = [d_from, d_to_exclusive]
+    if unit:
+        params.append(unit)
+
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f"""
+            SELECT COALESCE(SUM(i.spend), 0)::float AS spend
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE i.date_start >= %s
+              AND i.date_start < %s
+              {where_unit}
+        """, params)
+        row = cur.fetchone()
+        return float((row or {}).get("spend") or 0)
 
 
 def _f(v: Any) -> float | None:

@@ -532,16 +532,16 @@ SELECT (
 def explain_meta_ads_spend(period: str = "30d") -> dict:
     """Detalle del spend Meta Ads UNIDROP — incluye breakdown por cuenta + por campaña +
     cobertura del sync. Comparte forma con explain_metric pero requiere queries propias."""
-    from app.services.meta_ads import overview as meta_overview, campaigns as meta_campaigns
+    from app.services.meta_ads import overview as meta_overview, campaigns as meta_campaigns, spend_for_period
     from app.db.local_persistence import get_conn
     from app.db.meta_ads_db import init as meta_init
 
     meta_init()
     out = meta_overview(period=period, unit="unidrop") or {}
-    kpi = out.get("kpi") or {}
     accounts = out.get("accounts") or []
     daily = out.get("daily") or []
-    total_spend = float(kpi.get("spend") or 0)
+    # Total con la ventana correcta (today/yesterday/12m soportados — meta_overview no lo hace).
+    total_spend = spend_for_period(period=period, unit="unidrop")
 
     # Top 10 campañas
     try:

@@ -159,13 +159,17 @@ def _egresos_unidrop(days: int) -> float:
         return 0.0
 
 
-def _meta_ads_spend_unidrop(period: str) -> float:
-    """Spend Meta Ads del periodo asignado a unidad Unidrop (via meta_ad_accounts.unit)."""
+def _meta_ads_spend_unidrop(period: str, from_iso: str | None = None,
+                            to_iso: str | None = None) -> float:
+    """Spend Meta Ads del periodo asignado a unidad Unidrop (via meta_ad_accounts.unit).
+
+    Usa spend_for_period() que respeta today/yesterday/custom correctamente
+    (bug fix: el viejo path via meta_overview() caia al default 30d para los
+    periods que _period_days no conocia).
+    """
     try:
-        from app.services.meta_ads import overview as meta_overview
-        out = meta_overview(period=period, unit="unidrop") or {}
-        kpi = out.get("kpi") or {}
-        return float(kpi.get("spend") or 0)
+        from app.services.meta_ads import spend_for_period
+        return spend_for_period(period=period, from_iso=from_iso, to_iso=to_iso, unit="unidrop")
     except Exception as exc:
         log.warning("meta_ads_spend_unidrop: %s", exc)
         return 0.0
@@ -371,7 +375,7 @@ def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None,
     ingresos_unidrop = comisiones + suscripciones_cobradas + ganancia_mayorista
 
     # ---------- EGRESOS UNIDROP ----------
-    meta_ads_spend = _meta_ads_spend_unidrop(period)
+    meta_ads_spend = _meta_ads_spend_unidrop(period, from_iso=from_iso, to_iso=to_iso)
     egresos = _egresos_unidrop(days)
 
     ganancia_neta = ingresos_unidrop - meta_ads_spend - egresos
