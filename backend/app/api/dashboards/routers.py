@@ -883,13 +883,14 @@ def get_products_master_table(
 def get_products_profit_daily(
     user: Annotated[dict, Depends(current_user)],
     days: Annotated[int, Query(ge=14, le=365)] = 90,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
-    """Serie diaria: revenue, costo y ganancia neta + media movil 7d."""
+    """Serie diaria: revenue, costo y ganancia neta + media movil 7d + storytelling."""
     require_area(user, ["ventas", "compras", "finanzas"])
-    key = f"products-profit-daily:{days}"
+    key = f"products-profit-daily:{unit}:{days}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_ts_svc.profit_daily(days)
+        return products_ts_svc.profit_daily(days, unit=unit)
     return _b()
 
 
@@ -897,13 +898,14 @@ def get_products_profit_daily(
 def get_products_catalog_active(
     user: Annotated[dict, Depends(current_user)],
     weeks: Annotated[int, Query(ge=8, le=104)] = 52,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """Serie semanal: % del catalogo publicado que tuvo venta esa semana."""
     require_area(user, ["ventas", "compras"])
-    key = f"products-catalog-active:{weeks}"
+    key = f"products-catalog-active:{unit}:{weeks}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_ts_svc.catalog_active(weeks)
+        return products_ts_svc.catalog_active(weeks, unit=unit)
     return _b()
 
 
@@ -911,13 +913,28 @@ def get_products_catalog_active(
 def get_products_abc_distribution(
     user: Annotated[dict, Depends(current_user)],
     months: Annotated[int, Query(ge=3, le=24)] = 12,
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
 ) -> dict:
     """Serie mensual: cuantos SKUs hay en clase A/B/C cada mes."""
     require_area(user, ["ventas", "compras"])
-    key = f"products-abc-dist:{months}"
+    key = f"products-abc-dist:{unit}:{months}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_ts_svc.abc_distribution(months)
+        return products_ts_svc.abc_distribution(months, unit=unit)
+    return _b()
+
+
+@router.get("/products/timeseries/cross-correlations")
+def get_products_cross_correlations(
+    user: Annotated[dict, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
+) -> dict:
+    """Lecturas cruzadas entre ganancia, catalogo activo y concentracion ABC."""
+    require_area(user, ["ventas", "compras", "finanzas"])
+    key = f"products-cross-corr:{unit}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return products_ts_svc.cross_correlations(unit=unit)
     return _b()
 
 

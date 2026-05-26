@@ -12,10 +12,11 @@ import { CategoryTable } from "@/components/generic-table";
 import { DashboardHeader } from "@/components/dashboard-header";
 import { Segmented } from "@/components/segmented";
 import { SkuMasterTable, type SkuRow } from "@/components/sku-master-table";
-import { ProductsTrendCharts } from "@/components/products-trend-charts";
+import { ProductsTrendCharts, type ProductsUnit } from "@/components/products-trend-charts";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue } from "@/lib/types";
+import { Info } from "lucide-react";
 
 type Channel = "all" | "tn" | "ml";
 
@@ -55,19 +56,23 @@ export default function ProductosPage() {
   const customFrom = useGlobalFilters((s) => s.customFrom);
   const customTo = useGlobalFilters((s) => s.customTo);
   const _qs = periodToQuery(period, customFrom, customTo);
+  const [unit, setUnit] = useState<ProductsUnit>("unistore");
   const [channel, setChannel] = useState<Channel>("all");
   const router = useRouter();
+  const isUnistore = unit === "unistore";
 
   const { data, isLoading, isFetching, error } = useQuery<ProductsResp>({
     queryKey: ["dashboards", "products", period, customFrom, customTo, channel],
     queryFn: () => api(`/api/dashboards/products?${_qs}&channel=${channel}`),
     staleTime: 60_000,
+    enabled: isUnistore,
   });
 
   const { data: master, isLoading: masterLoading } = useQuery<MasterTableResp>({
     queryKey: ["dashboards", "products-master", period, customFrom, customTo, channel],
     queryFn: () => api(`/api/dashboards/products/master-table?${_qs}&channel=${channel}`),
     staleTime: 60_000,
+    enabled: isUnistore,
   });
 
   const goSku = (r: CategoryValue) => {
@@ -87,26 +92,38 @@ export default function ProductosPage() {
           generatedAt={data?.generated_at}
           isFetching={isFetching}
           filters={
-            <Segmented<Channel>
-              value={channel}
-              onChange={setChannel}
-              options={[
-                { value: "all", label: "TN + ML" },
-                { value: "tn", label: "Tienda Nube" },
-                { value: "ml", label: "Mercado Libre" },
-              ]}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Segmented<ProductsUnit>
+                value={unit}
+                onChange={setUnit}
+                options={[
+                  { value: "unistore", label: "Unistore" },
+                  { value: "unidrop", label: "Unidrop" },
+                ]}
+              />
+              {isUnistore && (
+                <Segmented<Channel>
+                  value={channel}
+                  onChange={setChannel}
+                  options={[
+                    { value: "all", label: "TN + ML" },
+                    { value: "tn", label: "Tienda Nube" },
+                    { value: "ml", label: "Mercado Libre" },
+                  ]}
+                />
+              )}
+            </div>
           }
         />
         <TodayPanel
-          unit="unistore"
+          unit={unit}
           context="productos"
-          title="HOY · Productos"
+          title={`HOY · Productos ${unit === "unidrop" ? "Unidrop" : "Unistore"}`}
         />
 
         {/* Buscador SKU / EAN con autocomplete + dropdown de matches */}
         <div className="mb-6">
-          <SmartSearch mode="skus" unit="unistore" variant="hero" />
+          <SmartSearch mode="skus" unit={unit} variant="hero" />
         </div>
 
         {error && (
@@ -115,68 +132,85 @@ export default function ProductosPage() {
           </div>
         )}
 
-        {/* Strip denso de KPIs */}
-        {isLoading || !data ? (
-          <div className="flex flex-wrap gap-2 mb-6">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <div key={i} className="bg-surface border border-border rounded-lg h-[68px] w-[140px] animate-pulse" />
-            ))}
-          </div>
-        ) : (
-          <KpiChipStrip
-            cards={data.cards}
-            getDrill={(label) => getCardDrill(label, { period, channel })}
-          />
+        {/* Strip denso de KPIs - solo Unistore (Unidrop no tiene aun cards en /products) */}
+        {isUnistore && (
+          isLoading || !data ? (
+            <div className="flex flex-wrap gap-2 mb-6">
+              {Array.from({ length: 12 }).map((_, i) => (
+                <div key={i} className="bg-surface border border-border rounded-lg h-[68px] w-[140px] animate-pulse" />
+              ))}
+            </div>
+          ) : (
+            <KpiChipStrip
+              cards={data.cards}
+              getDrill={(label) => getCardDrill(label, { period, channel })}
+            />
+          )
         )}
 
-        {/* Graficos de tendencias */}
-        <ProductsTrendCharts />
+        {!isUnistore && (
+          <div className="mb-6 bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 text-sm text-sky-900 flex items-start gap-2">
+            <Info size={16} className="mt-0.5 shrink-0" />
+            <div>
+              <div className="font-bold">Vista Unidrop · SKUs vendidos por dropshippers</div>
+              <div className="text-xs opacity-80">
+                Cruza orders pagas de ML (DROP-{`{dni}`}-) y TN. KPIs detallados + tabla maestra solo disponibles para Unistore por ahora.
+              </div>
+            </div>
+          </div>
+        )}
 
-        {/* Tabla maestra por SKU (reemplaza el viejo Top 20) */}
-        <div className="mb-6">
-          {masterLoading || !master ? (
-            <div className="bg-surface border border-border rounded-xl h-[600px] animate-pulse" />
-          ) : (
-            <SkuMasterTable data={master.skus} summary={master.summary} />
-          )}
-        </div>
+        {/* Graficos de tendencias con storytelling */}
+        <ProductsTrendCharts unit={unit} />
 
-        {/* Tablas operativas: stock critico + sin movimiento */}
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          {isLoading || !data ? (
-            <>
-              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-            </>
-          ) : (
-            <>
-              <CategoryTable
-                caption="Stock critico que se sigue vendiendo"
-                subtitle="Stock <= 5 y con ventas en 30d. Alerta operativa"
-                data={data.stock_critico_alerta}
-                formatter="number"
-                extraColumns={[
-                  { key: "sku", label: "SKU", format: "raw" },
-                  { key: "stock", label: "Stock", format: "number" },
-                ]}
-                showProgress={false}
-                onRowClick={goSku}
-              />
-              <CategoryTable
-                caption="Sin movimiento (>90d) con stock"
-                subtitle="Top 20 SKUs en catalogo sin venta hace 90+ dias"
-                data={data.sin_movimiento}
-                formatter="number"
-                extraColumns={[
-                  { key: "sku", label: "SKU", format: "raw" },
-                  { key: "stock", label: "Stock", format: "number" },
-                ]}
-                showProgress={false}
-                onRowClick={goSku}
-              />
-            </>
-          )}
-        </div>
+        {/* Tabla maestra por SKU + tablas operativas solo Unistore */}
+        {isUnistore && (
+          <>
+            <div className="mb-6">
+              {masterLoading || !master ? (
+                <div className="bg-surface border border-border rounded-xl h-[600px] animate-pulse" />
+              ) : (
+                <SkuMasterTable data={master.skus} summary={master.summary} />
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {isLoading || !data ? (
+                <>
+                  <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+                  <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+                </>
+              ) : (
+                <>
+                  <CategoryTable
+                    caption="Stock critico que se sigue vendiendo"
+                    subtitle="Stock <= 5 y con ventas en 30d. Alerta operativa"
+                    data={data.stock_critico_alerta}
+                    formatter="number"
+                    extraColumns={[
+                      { key: "sku", label: "SKU", format: "raw" },
+                      { key: "stock", label: "Stock", format: "number" },
+                    ]}
+                    showProgress={false}
+                    onRowClick={goSku}
+                  />
+                  <CategoryTable
+                    caption="Sin movimiento (>90d) con stock"
+                    subtitle="Top 20 SKUs en catalogo sin venta hace 90+ dias"
+                    data={data.sin_movimiento}
+                    formatter="number"
+                    extraColumns={[
+                      { key: "sku", label: "SKU", format: "raw" },
+                      { key: "stock", label: "Stock", format: "number" },
+                    ]}
+                    showProgress={false}
+                    onRowClick={goSku}
+                  />
+                </>
+              )}
+            </div>
+          </>
+        )}
       </div>
     </>
   );
