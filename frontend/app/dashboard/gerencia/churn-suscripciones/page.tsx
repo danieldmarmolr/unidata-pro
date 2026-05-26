@@ -5,19 +5,43 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell, Legend, LabelList,
 } from "recharts";
-import { TrendingDown, AlertTriangle, DollarSign, CheckCircle2, XCircle, Clock, ExternalLink, Sparkles } from "lucide-react";
+import { TrendingDown, TrendingUp, ArrowRight, AlertTriangle, DollarSign, CheckCircle2, XCircle, Clock, ExternalLink, Sparkles, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
 import { api } from "@/lib/api";
 
 type Period = "30d" | "90d" | "6m" | "1y";
+type Granularity = "day" | "week" | "month" | "quarter" | "year";
 
 type Status = "pending" | "transferred" | "integration_cancelled" | "rejected";
 
+type RequestRow = {
+  id: number; dropshipper_user_id: number; dni: string;
+  name: string; fantasy_name: string | null; plan: string | null;
+  abandonment_reason: string; reason: string | null; status: Status;
+  refund_amount_arg: number | null;
+  paid_subscription_total_arg: number | null;
+  paid_subscription_count: number | null;
+  bank_name: string; bank_holder_name: string; bank_cbu_last4: string | null;
+  created_at: string;
+  transferred_at: string | null;
+  integration_cancelled_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+};
+
+type EvolutionBucket = {
+  period_start: string; period_end: string;
+  pending: number; transferred: number;
+  integration_cancelled: number; rejected: number;
+  total: number; paid_total_arg: number;
+};
+
 type ChurnResp = {
   period: Period;
+  granularity: Granularity;
   kpis: {
     total_requests: number;
     pending: number;
@@ -33,29 +57,34 @@ type ChurnResp = {
   by_status: Record<string, number>;
   by_reason: Array<{ reason: string; count: number }>;
   by_plan: Array<{ plan: string; count: number; paid_total_arg: number }>;
-  monthly_series: Array<{
-    month: string; pending: number; transferred: number;
-    integration_cancelled: number; rejected: number; total: number;
-  }>;
+  evolution: {
+    series: EvolutionBucket[];
+    stats: {
+      peak: number;
+      peak_period_start: string | null;
+      peak_period_end: string | null;
+      average: number;
+      trend: "up" | "down" | "flat";
+      bucket_count: number;
+    };
+  };
   telemetry_by_kind: Array<{ kind: string; count: number; distinct_incidents: number }>;
   failed_users: Array<{
     dni: string; email: string | null; kind: string;
     last_seen: string; attempts: number; messages: string | null;
   }>;
-  recent_requests: Array<{
-    id: number; dropshipper_user_id: number; dni: string;
-    name: string; fantasy_name: string | null; plan: string | null;
-    abandonment_reason: string; reason: string | null; status: Status;
-    refund_amount_arg: number | null;
-    paid_subscription_total_arg: number | null;
-    paid_subscription_count: number | null;
-    bank_name: string; bank_holder_name: string; bank_cbu_last4: string | null;
-    created_at: string;
-    transferred_at: string | null;
-    integration_cancelled_at: string | null;
-    rejected_at: string | null;
-    rejection_reason: string | null;
-  }>;
+  recent_requests: RequestRow[];
+};
+
+type DrillDownResp = {
+  period_start: string;
+  period_end: string;
+  total_requests: number;
+  revenue_churned_arg: number;
+  pending_refund_arg: number;
+  by_status: Record<string, number>;
+  by_reason: Array<{ reason: string; count: number }>;
+  requests: RequestRow[];
 };
 
 const ABANDONMENT_LABELS: Record<string, string> = {
@@ -119,10 +148,51 @@ function fmtDateTime(iso: string | null | undefined): string {
   }
 }
 
-function fmtMonth(iso: string): string {
+function fmtBucket(iso: string, granularity: Granularity): string {
   try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("es-AR", { month: "short", year: "2-digit", timeZone: "America/Argentina/Buenos_Aires" });
+    const d = new Date(iso + "T00:00:00");
+    const tz = "America/Argentina/Buenos_Aires";
+    switch (granularity) {
+      case "day":
+        return d.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: tz });
+      case "week":
+        return `${d.toLocaleDateString("es-AR", { day: "2-digit", month: "short", timeZone: tz })}`;
+      case "month":
+        return d.toLocaleDateString("es-AR", { month: "short", year: "2-digit", timeZone: tz });
+      case "quarter": {
+        const q = Math.floor(d.getMonth() / 3) + 1;
+        return `Q${q} ${String(d.getFullYear()).slice(-2)}`;
+      }
+      case "year":
+        return String(d.getFullYear());
+      default:
+        return iso;
+    }
+  } catch {
+    return iso;
+  }
+}
+
+function fmtBucketLong(iso: string, granularity: Granularity): string {
+  try {
+    const d = new Date(iso + "T00:00:00");
+    const tz = "America/Argentina/Buenos_Aires";
+    switch (granularity) {
+      case "day":
+        return d.toLocaleDateString("es-AR", { weekday: "long", day: "2-digit", month: "long", year: "numeric", timeZone: tz });
+      case "week":
+        return `Semana del ${d.toLocaleDateString("es-AR", { day: "2-digit", month: "long", year: "numeric", timeZone: tz })}`;
+      case "month":
+        return d.toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: tz });
+      case "quarter": {
+        const q = Math.floor(d.getMonth() / 3) + 1;
+        return `Q${q} de ${d.getFullYear()}`;
+      }
+      case "year":
+        return String(d.getFullYear());
+      default:
+        return iso;
+    }
   } catch {
     return iso;
   }
@@ -135,12 +205,39 @@ const PERIODS: Array<{ value: Period; label: string }> = [
   { value: "1y",  label: "12 meses" },
 ];
 
+const GRANULARITIES: Array<{ value: Granularity; label: string }> = [
+  { value: "day",     label: "Día"     },
+  { value: "week",    label: "Sem"     },
+  { value: "month",   label: "Mes"     },
+  { value: "quarter", label: "Q"       },
+  { value: "year",    label: "Año"     },
+];
+
+const GRAN_UNIT: Record<Granularity, string> = {
+  day:     "día",
+  week:    "semana",
+  month:   "mes",
+  quarter: "trimestre",
+  year:    "año",
+};
+
 export default function ChurnSuscripcionesPage() {
   const [period, setPeriod] = useState<Period>("90d");
+  const [granularity, setGranularity] = useState<Granularity>("week");
+  const [drillRange, setDrillRange] = useState<{ start: string; end: string } | null>(null);
 
   const { data, isLoading, isError, error, refetch, isFetching } = useQuery<ChurnResp>({
-    queryKey: ["gerencia-churn", period],
-    queryFn: () => api<ChurnResp>(`/api/dashboards/gerencia/churn-suscripciones?period=${period}`),
+    queryKey: ["gerencia-churn", period, granularity],
+    queryFn: () => api<ChurnResp>(`/api/dashboards/gerencia/churn-suscripciones?period=${period}&granularity=${granularity}`),
+    staleTime: 120_000,
+  });
+
+  const { data: drillData, isLoading: drillLoading } = useQuery<DrillDownResp>({
+    queryKey: ["gerencia-churn-drill", drillRange?.start, drillRange?.end],
+    queryFn: () => api<DrillDownResp>(
+      `/api/dashboards/gerencia/churn-suscripciones/drill-down?period_start=${drillRange!.start}&period_end=${drillRange!.end}`,
+    ),
+    enabled: !!drillRange,
     staleTime: 120_000,
   });
 
@@ -246,28 +343,69 @@ export default function ChurnSuscripcionesPage() {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2 bg-white rounded-xl border border-border p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-sm font-semibold text-text">Evolución mensual</h2>
-                  <div className="text-[10px] text-text-muted">Últimos 12 meses · todos los status</div>
+                <div className="flex items-start justify-between mb-3 gap-4 flex-wrap">
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold text-text">
+                      Evolución de cancelaciones · click en una barra para ver detalle
+                    </h2>
+                    <EvolutionSubtitle stats={data.evolution.stats} granularity={data.granularity} />
+                  </div>
+                  <div className="flex rounded-lg border border-border overflow-hidden shrink-0">
+                    {GRANULARITIES.map((g) => (
+                      <button
+                        key={g.value}
+                        onClick={() => setGranularity(g.value)}
+                        className={`px-2.5 py-1 text-xs font-medium transition ${
+                          granularity === g.value
+                            ? "bg-primary text-white"
+                            : "bg-white text-text-muted hover:bg-bg"
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="h-64">
-                  {data.monthly_series.length === 0 ? (
+                  {data.evolution.series.length === 0 ? (
                     <div className="h-full flex items-center justify-center text-sm text-text-muted">Sin datos</div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={data.monthly_series}>
+                      <BarChart
+                        data={data.evolution.series}
+                        onClick={(e) => {
+                          const payload = (e as unknown as { activePayload?: Array<{ payload?: EvolutionBucket }> })?.activePayload?.[0]?.payload;
+                          if (payload?.period_start && payload?.period_end) {
+                            setDrillRange({ start: payload.period_start, end: payload.period_end });
+                          }
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
                         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis dataKey="month" tickFormatter={fmtMonth} tick={{ fontSize: 11 }} />
+                        <XAxis
+                          dataKey="period_start"
+                          tickFormatter={(v) => fmtBucket(String(v), data.granularity)}
+                          tick={{ fontSize: 11 }}
+                        />
                         <YAxis tick={{ fontSize: 11 }} />
                         <Tooltip
                           contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                          labelFormatter={(label) => fmtMonth(String(label))}
+                          labelFormatter={(label) => fmtBucketLong(String(label), data.granularity)}
                         />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
-                        <Bar dataKey="pending"               stackId="s" name="Pendiente"          fill={STATUS_META.pending.color} />
-                        <Bar dataKey="transferred"           stackId="s" name="Transferido"        fill={STATUS_META.transferred.color} />
-                        <Bar dataKey="integration_cancelled" stackId="s" name="Cancel. MELI"      fill={STATUS_META.integration_cancelled.color} />
-                        <Bar dataKey="rejected"              stackId="s" name="Rechazada"         fill={STATUS_META.rejected.color} />
+                        <Bar dataKey="pending"               stackId="s" name="Pendiente"     fill={STATUS_META.pending.color} />
+                        <Bar dataKey="transferred"           stackId="s" name="Transferido"   fill={STATUS_META.transferred.color} />
+                        <Bar dataKey="integration_cancelled" stackId="s" name="Cancel. MELI"  fill={STATUS_META.integration_cancelled.color} />
+                        <Bar dataKey="rejected"              stackId="s" name="Rechazada"     fill={STATUS_META.rejected.color}>
+                          <LabelList
+                            dataKey="total"
+                            position="top"
+                            fill="#0f172a"
+                            fontSize={11}
+                            fontWeight={600}
+                            formatter={(v) => (typeof v === "number" && v > 0 ? String(v) : "")}
+                          />
+                        </Bar>
                       </BarChart>
                     </ResponsiveContainer>
                   )}
@@ -481,8 +619,161 @@ export default function ChurnSuscripcionesPage() {
             </div>
           </>
         )}
+
+        {drillRange && (
+          <DrillDownModal
+            range={drillRange}
+            granularity={data?.granularity ?? "month"}
+            data={drillData}
+            loading={drillLoading}
+            onClose={() => setDrillRange(null)}
+          />
+        )}
       </div>
     </>
+  );
+}
+
+function EvolutionSubtitle({
+  stats, granularity,
+}: {
+  stats: ChurnResp["evolution"]["stats"];
+  granularity: Granularity;
+}) {
+  const unit = GRAN_UNIT[granularity];
+  const trendIcon = stats.trend === "up" ? (
+    <TrendingUp className="w-3.5 h-3.5 text-rose-500 inline" />
+  ) : stats.trend === "down" ? (
+    <TrendingDown className="w-3.5 h-3.5 text-emerald-500 inline" />
+  ) : (
+    <ArrowRight className="w-3.5 h-3.5 text-zinc-400 inline" />
+  );
+  const trendLabel = stats.trend === "up" ? "tendencia ↗ subiendo" : stats.trend === "down" ? "tendencia ↘ bajando" : "tendencia → estable";
+  const peakText = stats.peak > 0 && stats.peak_period_start
+    ? `Pico: ${stats.peak} cancelaciones · ${fmtBucketLong(stats.peak_period_start, granularity)}`
+    : "Sin cancelaciones en el rango";
+  return (
+    <div className="text-xs text-text-muted mt-1 flex items-center gap-2 flex-wrap">
+      <span className="font-medium text-text">{peakText}</span>
+      <span className="text-zinc-300">·</span>
+      <span>Media: <span className="font-semibold text-text">{stats.average}/{unit}</span></span>
+      <span className="text-zinc-300">·</span>
+      <span className="flex items-center gap-1">{trendIcon} {trendLabel}</span>
+    </div>
+  );
+}
+
+function DrillDownModal({
+  range, granularity, data, loading, onClose,
+}: {
+  range: { start: string; end: string };
+  granularity: Granularity;
+  data: DrillDownResp | undefined;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-xl max-w-5xl w-full max-h-[90vh] overflow-hidden shadow-2xl flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-4 border-b border-border flex items-start justify-between">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-text-muted font-semibold">Detalle del período</div>
+            <h2 className="text-lg font-bold text-text mt-0.5">{fmtBucketLong(range.start, granularity)}</h2>
+            {data && (
+              <div className="text-xs text-text-muted mt-1">
+                {data.total_requests} solicitudes · {fmtMoney(data.revenue_churned_arg)} histórico · {fmtMoney(data.pending_refund_arg)} pendiente
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-bg text-text-muted hover:text-text transition"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto">
+          {loading && (
+            <div className="p-12 text-center text-text-muted">Cargando detalle...</div>
+          )}
+
+          {data && data.requests.length === 0 && (
+            <div className="p-12 text-center text-text-muted">Sin solicitudes en este período.</div>
+          )}
+
+          {data && data.requests.length > 0 && (
+            <>
+              {data.by_reason.length > 0 && (
+                <div className="px-5 py-3 bg-bg border-b border-border flex flex-wrap gap-2">
+                  {data.by_reason.map((r) => (
+                    <span
+                      key={r.reason}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white border border-border text-xs"
+                    >
+                      <span className="text-text-muted">{ABANDONMENT_LABELS[r.reason] || r.reason}</span>
+                      <span className="font-mono font-bold text-text">{r.count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <table className="w-full text-sm">
+                <thead className="bg-bg sticky top-0">
+                  <tr className="text-[11px] uppercase tracking-wider text-text-muted">
+                    <th className="text-left px-4 py-2 font-semibold">Fecha</th>
+                    <th className="text-left px-4 py-2 font-semibold">Dropshipper</th>
+                    <th className="text-left px-4 py-2 font-semibold">Plan</th>
+                    <th className="text-left px-4 py-2 font-semibold">Motivo / Comentario</th>
+                    <th className="text-right px-4 py-2 font-semibold">$ Solicitado</th>
+                    <th className="text-right px-4 py-2 font-semibold">$ Histórico</th>
+                    <th className="text-left px-4 py-2 font-semibold">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.requests.map((r) => {
+                    const meta = STATUS_META[r.status];
+                    return (
+                      <tr key={r.id} className="border-t border-border hover:bg-bg/50">
+                        <td className="px-4 py-2 text-text-muted font-mono text-xs whitespace-nowrap">{fmtDateTime(r.created_at)}</td>
+                        <td className="px-4 py-2">
+                          <Link
+                            href={`/dashboard/dropshipper/${r.dropshipper_user_id}`}
+                            className="text-text hover:text-primary hover:underline font-medium"
+                            target="_blank"
+                          >
+                            {r.name}
+                          </Link>
+                          {r.fantasy_name && <div className="text-xs text-text-muted truncate max-w-[200px]">{r.fantasy_name}</div>}
+                          <div className="text-[10px] text-text-muted font-mono">DNI {r.dni}</div>
+                        </td>
+                        <td className="px-4 py-2 text-text-muted text-xs">{r.plan || "—"}</td>
+                        <td className="px-4 py-2">
+                          <div className="text-xs text-text">{ABANDONMENT_LABELS[r.abandonment_reason] || r.abandonment_reason}</div>
+                          {r.reason && <div className="text-[10px] text-text-muted italic mt-0.5 max-w-[280px]">&quot;{r.reason}&quot;</div>}
+                        </td>
+                        <td className="px-4 py-2 text-right font-mono text-text whitespace-nowrap">{fmtMoney(r.refund_amount_arg)}</td>
+                        <td className="px-4 py-2 text-right font-mono text-text-muted whitespace-nowrap">{fmtMoney(r.paid_subscription_total_arg)}</td>
+                        <td className="px-4 py-2">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold border ${meta.bg} ${meta.border} ${meta.text}`}>
+                            {meta.label}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

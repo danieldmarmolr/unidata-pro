@@ -19,9 +19,21 @@ log = logging.getLogger("unidata.subscription_churn")
 
 _VALID_PERIODS = {"30d": 30, "90d": 90, "6m": 180, "1y": 365}
 
+_GRAN_CONFIG: dict[str, dict] = {
+    "day":     {"trunc": "day",     "interval": "1 day",    "lookback_days": 30},
+    "week":    {"trunc": "week",    "interval": "1 week",   "lookback_days": 12 * 7},
+    "month":   {"trunc": "month",   "interval": "1 month",  "lookback_days": 366},
+    "quarter": {"trunc": "quarter", "interval": "3 months", "lookback_days": 2 * 366},
+    "year":    {"trunc": "year",    "interval": "1 year",   "lookback_days": 5 * 366},
+}
+
 
 def _period_days(period: str) -> int:
     return _VALID_PERIODS.get(period, 30)
+
+
+def _granularity_config(granularity: str) -> dict:
+    return _GRAN_CONFIG.get(granularity, _GRAN_CONFIG["month"])
 
 
 def _iso(dt) -> str | None:
@@ -32,9 +44,11 @@ def _iso(dt) -> str | None:
     return dt.isoformat()
 
 
-def get_churn_overview(period: str = "30d") -> dict:
+def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
     days = _period_days(period)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    gran = _granularity_config(granularity)
+    gran_cutoff = datetime.now(timezone.utc) - timedelta(days=gran["lookback_days"])
 
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
@@ -85,17 +99,20 @@ def get_churn_overview(period: str = "30d") -> dict:
         ]
 
         cur.execute(
-            """
-            SELECT date_trunc('month', created_at)::date AS month,
+            f"""
+            SELECT date_trunc('{gran["trunc"]}', created_at)::date AS period_start,
+                   (date_trunc('{gran["trunc"]}', created_at) + INTERVAL '{gran["interval"]}')::date AS period_end,
                    status,
-                   COUNT(*)::int AS count
+                   COUNT(*)::int AS count,
+                   COALESCE(SUM(paid_subscription_total_arg), 0)::float AS paid_total_arg
             FROM subscription_refund_requests
-            WHERE created_at >= NOW() - INTERVAL '12 months'
-            GROUP BY 1, 2
+            WHERE created_at >= %s
+            GROUP BY 1, 2, 3
             ORDER BY 1
-            """
+            """,
+            (gran_cutoff,),
         )
-        monthly_rows = cur.fetchall()
+        evolution_rows = cur.fetchall()
 
         cur.execute(
             """
@@ -201,18 +218,40 @@ def get_churn_overview(period: str = "30d") -> dict:
         pending_refund_arg = float(money["pending_refund"] or 0)
         revenue_churned_arg = float(money["revenue_churned"] or 0)
 
-    monthly_series: dict[str, dict] = {}
+    evolution_series: dict[str, dict] = {}
     statuses = ("pending", "transferred", "integration_cancelled", "rejected")
-    for r in monthly_rows:
-        m = r["month"].isoformat()
-        bucket = monthly_series.setdefault(
-            m,
-            {"month": m, "pending": 0, "transferred": 0, "integration_cancelled": 0, "rejected": 0, "total": 0},
+    for r in evolution_rows:
+        ps = r["period_start"].isoformat()
+        pe = r["period_end"].isoformat()
+        bucket = evolution_series.setdefault(
+            ps,
+            {
+                "period_start": ps, "period_end": pe,
+                "pending": 0, "transferred": 0, "integration_cancelled": 0, "rejected": 0,
+                "total": 0, "paid_total_arg": 0.0,
+            },
         )
         st = r["status"]
+        cnt = int(r["count"])
         if st in statuses:
-            bucket[st] = int(r["count"])
-        bucket["total"] += int(r["count"])
+            bucket[st] = cnt
+        bucket["total"] += cnt
+        bucket["paid_total_arg"] += float(r["paid_total_arg"] or 0)
+
+    evolution_list = sorted(evolution_series.values(), key=lambda x: x["period_start"])
+    totals = [b["total"] for b in evolution_list]
+    peak = max(totals) if totals else 0
+    peak_bucket = next((b for b in evolution_list if b["total"] == peak), None) if peak > 0 else None
+    avg_per_bucket = round(sum(totals) / len(totals), 1) if totals else 0
+    trend = "flat"
+    if len(totals) >= 4:
+        half = len(totals) // 2
+        first_half_avg = sum(totals[:half]) / half if half else 0
+        second_half_avg = sum(totals[half:]) / (len(totals) - half)
+        if second_half_avg > first_half_avg * 1.2:
+            trend = "up"
+        elif second_half_avg < first_half_avg * 0.8:
+            trend = "down"
 
     total_requests = sum(by_status.values())
     total_form_errors = sum(t["count"] for t in telemetry_by_kind)
@@ -224,6 +263,7 @@ def get_churn_overview(period: str = "30d") -> dict:
 
     return {
         "period": period,
+        "granularity": granularity,
         "kpis": {
             "total_requests": total_requests,
             "pending": by_status.get("pending", 0),
@@ -239,8 +279,93 @@ def get_churn_overview(period: str = "30d") -> dict:
         "by_status": by_status,
         "by_reason": by_reason,
         "by_plan": by_plan,
-        "monthly_series": sorted(monthly_series.values(), key=lambda x: x["month"]),
+        "evolution": {
+            "series": evolution_list,
+            "stats": {
+                "peak": peak,
+                "peak_period_start": peak_bucket["period_start"] if peak_bucket else None,
+                "peak_period_end": peak_bucket["period_end"] if peak_bucket else None,
+                "average": avg_per_bucket,
+                "trend": trend,
+                "bucket_count": len(evolution_list),
+            },
+        },
         "telemetry_by_kind": telemetry_by_kind,
         "failed_users": failed_users,
         "recent_requests": recent_requests,
+    }
+
+
+def get_drill_down(period_start: str, period_end: str) -> dict:
+    """Detalle de las solicitudes de un periodo especifico (drill-down desde el
+    chart). period_start y period_end son ISO dates (YYYY-MM-DD).
+    period_end es exclusivo (< period_end)."""
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, dropshipper_user_id, dropshipper_dni,
+                   dropshipper_name, dropshipper_fantasy_name,
+                   subscription_plan_name, abandonment_reason, reason,
+                   status, refund_amount_arg,
+                   paid_subscription_total_arg, paid_subscription_count,
+                   bank_name, bank_holder_name, bank_cbu,
+                   created_at, transferred_at, integration_cancelled_at,
+                   rejected_at, rejection_reason
+            FROM subscription_refund_requests
+            WHERE created_at >= %s::date
+              AND created_at < %s::date
+            ORDER BY created_at DESC
+            """,
+            (period_start, period_end),
+        )
+        rows = cur.fetchall()
+
+        requests = [
+            {
+                "id": int(r["id"]),
+                "dropshipper_user_id": int(r["dropshipper_user_id"]),
+                "dni": r["dropshipper_dni"],
+                "name": r["dropshipper_name"],
+                "fantasy_name": r["dropshipper_fantasy_name"],
+                "plan": r["subscription_plan_name"],
+                "abandonment_reason": r["abandonment_reason"],
+                "reason": r["reason"],
+                "status": r["status"],
+                "refund_amount_arg": float(r["refund_amount_arg"]) if r["refund_amount_arg"] is not None else None,
+                "paid_subscription_total_arg": float(r["paid_subscription_total_arg"]) if r["paid_subscription_total_arg"] is not None else None,
+                "paid_subscription_count": int(r["paid_subscription_count"]) if r["paid_subscription_count"] is not None else None,
+                "bank_name": r["bank_name"],
+                "bank_holder_name": r["bank_holder_name"],
+                "bank_cbu_last4": (r["bank_cbu"] or "")[-4:] if r["bank_cbu"] else None,
+                "created_at": _iso(r["created_at"]),
+                "transferred_at": _iso(r["transferred_at"]),
+                "integration_cancelled_at": _iso(r["integration_cancelled_at"]),
+                "rejected_at": _iso(r["rejected_at"]),
+                "rejection_reason": r["rejection_reason"],
+            }
+            for r in rows
+        ]
+
+        by_status: dict[str, int] = {}
+        by_reason: dict[str, int] = {}
+        total_paid = 0.0
+        total_refund = 0.0
+        for r in requests:
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+            by_reason[r["abandonment_reason"]] = by_reason.get(r["abandonment_reason"], 0) + 1
+            total_paid += r["paid_subscription_total_arg"] or 0
+            total_refund += r["refund_amount_arg"] or 0
+
+    return {
+        "period_start": period_start,
+        "period_end": period_end,
+        "total_requests": len(requests),
+        "revenue_churned_arg": total_paid,
+        "pending_refund_arg": total_refund,
+        "by_status": by_status,
+        "by_reason": sorted(
+            [{"reason": k, "count": v} for k, v in by_reason.items()],
+            key=lambda x: -x["count"],
+        ),
+        "requests": requests,
     }
