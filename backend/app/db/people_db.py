@@ -449,14 +449,26 @@ def _post_to_dict(row: dict) -> dict:
 
 # ---------- directory + org chart ----------
 
-def list_directory(only_active: bool = True) -> list[dict]:
-    """Lista plana de colaboradores con su area y manager (no recursivo)."""
+def list_directory(only_active: bool = True, include_hidden: bool = False) -> list[dict]:
+    """Lista plana de colaboradores con su area y manager (no recursivo).
+
+    Si include_hidden=False, oculta a los usuarios con hidden_from_directory=TRUE.
+    Cuando include_hidden=True (admins/gerencia/People), devuelve a todos
+    y expone el flag en cada item.
+    """
     init()
-    sql = """
+    conditions = []
+    if only_active:
+        conditions.append("u.is_active = TRUE")
+    if not include_hidden:
+        conditions.append("COALESCE(u.hidden_from_directory, FALSE) = FALSE")
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
+    sql = f"""
         SELECT u.id, u.email, u.name, u.role, u.is_admin, u.is_active,
                u.area_id, u.manager_user_id, u.job_title, u.bio,
                u.birthday_month, u.birthday_day, u.birthday_year,
                u.joined_at, u.location_city, u.avatar_url, u.interests,
+               COALESCE(u.hidden_from_directory, FALSE) AS hidden_from_directory,
                a.slug AS area_slug, a.name AS area_name, a.color AS area_color,
                m.name AS manager_name, m.email AS manager_email
           FROM users u
@@ -465,35 +477,38 @@ def list_directory(only_active: bool = True) -> list[dict]:
          {where}
          ORDER BY a.sort_order NULLS LAST, u.name ASC
     """
-    where = "WHERE u.is_active = TRUE" if only_active else ""
     out = []
     with get_conn() as c, c.cursor() as cur:
-        cur.execute(sql.format(where=where))
+        cur.execute(sql)
         for r in cur.fetchall():
             d = dict(r)
             d["joined_at"] = _iso(d.get("joined_at"))
             d["is_active"] = bool(d.get("is_active"))
             d["is_admin"] = bool(d.get("is_admin"))
+            d["hidden_from_directory"] = bool(d.get("hidden_from_directory"))
             out.append(d)
     return out
 
 
-def org_chart() -> list[dict]:
+def org_chart(include_hidden: bool = False) -> list[dict]:
     """Devuelve la lista de users con info necesaria para construir arbol manager->reportes.
 
     El cliente arma el arbol; este endpoint solo da la data plana enriquecida.
+    Si include_hidden=False, filtra usuarios con hidden_from_directory=TRUE.
     """
     init()
+    where_hidden = "" if include_hidden else " AND COALESCE(u.hidden_from_directory, FALSE) = FALSE"
     with get_conn() as c, c.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT u.id, u.name, u.email, u.role, u.is_admin, u.avatar_url,
                    u.job_title, u.manager_user_id, u.joined_at,
+                   COALESCE(u.hidden_from_directory, FALSE) AS hidden_from_directory,
                    a.slug AS area_slug, a.name AS area_name, a.color AS area_color,
                    m.name AS manager_name
               FROM users u
               LEFT JOIN areas a ON a.id = u.area_id
               LEFT JOIN users m ON m.id = u.manager_user_id
-             WHERE u.is_active = TRUE
+             WHERE u.is_active = TRUE{where_hidden}
              ORDER BY u.name ASC
         """)
         users = [dict(r) for r in cur.fetchall()]
@@ -506,8 +521,30 @@ def org_chart() -> list[dict]:
     for u in users:
         u["is_manager"] = u["id"] in has_reports
         u["is_admin"] = bool(u.get("is_admin"))
+        u["hidden_from_directory"] = bool(u.get("hidden_from_directory"))
         u["joined_at"] = _iso(u.get("joined_at"))
     return users
+
+
+def set_directory_visibility(user_id: int, hidden: bool) -> dict | None:
+    """Alterna el flag hidden_from_directory. Devuelve el row actualizado o None."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE users
+               SET hidden_from_directory = %s, updated_at = NOW()
+             WHERE id = %s
+            RETURNING id, name, COALESCE(hidden_from_directory, FALSE) AS hidden_from_directory
+            """,
+            (bool(hidden), user_id),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    d["hidden_from_directory"] = bool(d.get("hidden_from_directory"))
+    return d
 
 
 def get_public_profile(user_id: int, viewer_id: int) -> dict | None:

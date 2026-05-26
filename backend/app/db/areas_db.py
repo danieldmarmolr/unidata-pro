@@ -80,6 +80,7 @@ def init() -> None:
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_completed BOOLEAN NOT NULL DEFAULT FALSE')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS job_title TEXT')
             cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT')
+            cur.execute('ALTER TABLE users ADD COLUMN IF NOT EXISTS hidden_from_directory BOOLEAN NOT NULL DEFAULT FALSE')
 
             # Tabla M:N para areas secundarias del user (la primaria sigue siendo users.area_id)
             cur.execute("""

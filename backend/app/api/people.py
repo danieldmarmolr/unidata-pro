@@ -71,17 +71,37 @@ def _can_manage_people(user: dict) -> bool:
 
 @router.get("/directory")
 def get_directory(
-    _: Annotated[dict, Depends(current_user)],
+    user: Annotated[dict, Depends(current_user)],
     only_active: bool = True,
 ) -> dict:
-    items = people_db.list_directory(only_active=only_active)
+    include_hidden = _can_manage_people(user)
+    items = people_db.list_directory(only_active=only_active, include_hidden=include_hidden)
     return {"items": items, "count": len(items)}
 
 
 @router.get("/org-chart")
-def get_org_chart(_: Annotated[dict, Depends(current_user)]) -> dict:
-    items = people_db.org_chart()
+def get_org_chart(user: Annotated[dict, Depends(current_user)]) -> dict:
+    include_hidden = _can_manage_people(user)
+    items = people_db.org_chart(include_hidden=include_hidden)
     return {"items": items, "count": len(items)}
+
+
+class DirectoryVisibilityBody(BaseModel):
+    hidden: bool
+
+
+@router.patch("/directory/{user_id}/visibility")
+def set_directory_visibility(
+    user_id: int,
+    body: DirectoryVisibilityBody,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    if not _can_manage_people(user):
+        raise HTTPException(403, "Solo admin/gerencia/People puede ocultar perfiles del directorio")
+    updated = people_db.set_directory_visibility(user_id, body.hidden)
+    if not updated:
+        raise HTTPException(404, "Usuario no encontrado")
+    return updated
 
 
 @router.get("/profile/{user_id}")

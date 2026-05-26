@@ -32,6 +32,7 @@ export type DirectoryItem = {
   location_city: string | null;
   avatar_url: string | null;
   interests: string | null;
+  hidden_from_directory?: boolean;
 };
 
 export type OrgChartItem = {
@@ -49,6 +50,7 @@ export type OrgChartItem = {
   area_color: string | null;
   is_manager: boolean;
   joined_at: string | null;
+  hidden_from_directory?: boolean;
 };
 
 export type FeedReaction = {
