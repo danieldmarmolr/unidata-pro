@@ -772,6 +772,263 @@ def digip_articulo_info(sku: str) -> dict:
 
 
 # ============================================================
+# LOTES CONSUMPTION: cruce lote x ventas omnicanal a traves del tiempo
+# ============================================================
+# Da la pregunta del millon del catalogo: "este lote, cuanto me dejo?".
+# Para cada lote del SKU define un periodo (de su fecha_ingreso hasta la
+# del siguiente, o hoy si es el vigente) y suma todas las ventas reales
+# de los 4 canales en ese rango. Despues calcula ganancia neta = revenue
+# - (unidades_vendidas * costo_unit_ars_con_iva).
+#
+# Esto es una *aproximacion* — no es FIFO real, no sabemos a que lote
+# fisico pertenecia cada unidad vendida. Pero como los lotes en la
+# practica se importan en serie, esta aproximacion temporal funciona
+# bien para entender la rentabilidad lote por lote.
+
+
+def _sales_in_period(sku: str, from_date: str, to_date: str | None) -> dict:
+    """Suma omnicanal de unidades vendidas + revenue entre from_date y to_date.
+    Reusa las mismas 4 queries de sku_omnichannel pero acotadas a un rango."""
+    out = {"units": 0, "revenue": 0.0, "orders": 0}
+    try:
+        eng_uni = get_engine("unistore")
+    except Exception:
+        eng_uni = None
+    try:
+        eng_drp = get_engine("unidrop")
+    except Exception:
+        eng_drp = None
+
+    if not from_date:
+        return out
+
+    # to_date inclusive -> usamos < to_date+1d para limitar; si to_date es None
+    # tomamos NOW (lote vigente). Para simplificar usamos clausulas distintas.
+    where_to_uni = "" if not to_date else "AND o.\"createdAt\" < :to_d"
+    where_to_meli = "" if not to_date else "AND mo.date_created < :to_d"
+    where_to_drp_tn = "" if not to_date else "AND tno.created_at < :to_d"
+    where_to_drp_meli = "" if not to_date else "AND o.\"dateCreated\" < :to_d"
+    params = {"sku": sku, "from_d": from_date}
+    if to_date:
+        params["to_d"] = to_date
+
+    # Unistore TN
+    if eng_uni:
+        try:
+            rows = q(eng_uni, f"""
+                SELECT
+                    COALESCE(SUM(oi.quantity), 0)::int,
+                    COALESCE(SUM(oi.quantity * oi.price), 0)::float,
+                    COUNT(DISTINCT oi."orderId")::int
+                FROM tienda_nube."OrderItem" oi
+                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+                WHERE oi.sku = :sku AND o."paymentStatus" = 'paid'
+                  AND o."createdAt" >= :from_d {where_to_uni}
+            """, params) or []
+            if rows:
+                out["units"] += int(rows[0][0] or 0)
+                out["revenue"] += float(rows[0][1] or 0)
+                out["orders"] += int(rows[0][2] or 0)
+        except Exception as e:
+            log.warning("_sales_in_period unistore_tn fail: %s", e)
+
+        # Unistore MELI
+        try:
+            rows = q(eng_uni, f"""
+                SELECT
+                    COALESCE(SUM(mi.quantity), 0)::int,
+                    COALESCE(SUM(mi.quantity * mi.unit_price), 0)::float,
+                    COUNT(DISTINCT mi.order_id)::int
+                FROM meli.meli_order_items mi
+                JOIN meli.meli_orders mo ON mo.id = mi.order_id
+                WHERE mi.seller_sku = :sku
+                  AND mo.status IN ('paid','confirmed','shipped','delivered')
+                  AND mo.date_created >= :from_d {where_to_meli}
+            """, params) or []
+            if rows:
+                out["units"] += int(rows[0][0] or 0)
+                out["revenue"] += float(rows[0][1] or 0)
+                out["orders"] += int(rows[0][2] or 0)
+        except Exception as e:
+            log.warning("_sales_in_period unistore_meli fail: %s", e)
+
+    if eng_drp:
+        # Unidrop TN
+        try:
+            rows = q(eng_drp, f"""
+                SELECT
+                    COALESCE(SUM(oi.quantity), 0)::int,
+                    COALESCE(SUM(oi.quantity * oi.price), 0)::float,
+                    COUNT(DISTINCT oi.tienda_nube_order_id)::int
+                FROM public.tienda_nube_order_items oi
+                JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+                WHERE oi.sku = :sku AND tno.payment_status::text = 'paid'
+                  AND tno.created_at >= :from_d {where_to_drp_tn}
+            """, params) or []
+            if rows:
+                out["units"] += int(rows[0][0] or 0)
+                out["revenue"] += float(rows[0][1] or 0)
+                out["orders"] += int(rows[0][2] or 0)
+        except Exception as e:
+            log.warning("_sales_in_period unidrop_tn fail: %s", e)
+
+        # Unidrop MELI
+        try:
+            rows = q(eng_drp, f"""
+                SELECT
+                    COALESCE(SUM(oi.quantity), 0)::int,
+                    COALESCE(SUM(oi.quantity * oi."unitPrice"), 0)::float,
+                    COUNT(DISTINCT oi."orderId")::int
+                FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+                WHERE oi."sellerSku" = :sku
+                  AND (o.status IN ('paid','confirmed','shipped','delivered') OR o."paidAmount" > 0)
+                  AND o."dateCreated" >= :from_d {where_to_drp_meli}
+            """, params) or []
+            if rows:
+                out["units"] += int(rows[0][0] or 0)
+                out["revenue"] += float(rows[0][1] or 0)
+                out["orders"] += int(rows[0][2] or 0)
+        except Exception as e:
+            log.warning("_sales_in_period unidrop_meli fail: %s", e)
+
+    return out
+
+
+def lotes_consumption(sku: str) -> dict:
+    """Cruce lote x ventas omnicanal a traves del tiempo.
+
+    Para cada lote del SKU define un periodo (de su fecha_ingreso hasta la
+    fecha_ingreso del lote siguiente, o NOW para el vigente). Para cada
+    periodo:
+      - unidades vendidas omnicanal (4 canales)
+      - revenue acumulado (ARS)
+      - costo total de la mercaderia vendida = unidades * costo_unit_ars_con_iva
+      - ganancia neta = revenue - costo
+      - velocidad diaria = unidades / dias del periodo
+      - % consumido del lote = vendidas / cantidad_lote (cap 100)
+
+    Tambien devuelve una serie temporal del costo USD/ARS para el chart de
+    evolucion.
+    """
+    from app.db import costs_db
+    rec = costs_db.cost_by_sku(sku)
+    out = {
+        "sku": sku,
+        "available": False,
+        "lotes": [],
+        "cost_evolution": [],
+        "totals": {
+            "ganancia": 0.0, "revenue": 0.0, "costo": 0.0,
+            "units_sold": 0, "margen_pct": None,
+        },
+    }
+    if not rec or not rec.get("history"):
+        return out
+
+    # Ordenamos ASC por fecha_ingreso (cronologico) — al reves de history.
+    # fecha_ingreso es TEXT; los formatos validos son YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS.
+    raw_lotes = rec["history"]
+    enriched = []
+    for h in raw_lotes:
+        fi = (h.get("fecha_ingreso") or "")[:10]
+        if not fi:
+            # Fallback: usar imported_at si fecha_ingreso esta vacia
+            fi = str(h.get("imported_at") or "")[:10]
+        enriched.append({**h, "_fecha": fi})
+    enriched = [h for h in enriched if h["_fecha"]]
+    enriched.sort(key=lambda h: h["_fecha"])
+
+    if not enriched:
+        return out
+
+    today_iso = dt.date.today().isoformat()
+    out["available"] = True
+
+    # Construir periodos: lote[i].fecha_fin = lote[i+1].fecha_ingreso (o today)
+    for idx, h in enumerate(enriched):
+        from_d = h["_fecha"]
+        if idx + 1 < len(enriched):
+            to_d = enriched[idx + 1]["_fecha"]
+            vigente = False
+        else:
+            to_d = None  # NOW
+            vigente = True
+
+        # Dias del periodo
+        try:
+            from_dt = dt.date.fromisoformat(from_d)
+            end_dt = dt.date.fromisoformat(to_d) if to_d else dt.date.today()
+            dias = max(1, (end_dt - from_dt).days)
+        except Exception:
+            dias = 1
+
+        sales = _sales_in_period(sku, from_d, to_d)
+        cantidad_lote = int(h.get("cantidad") or 0)
+        costo_unit_ars_iva = float(
+            h.get("costo_con_iva_unit_ars")
+            or h.get("costo_unit_ars")
+            or h.get("cost_ars") or 0
+        )
+        costo_unit_usd = float(
+            h.get("costo_unit_usd_max")
+            or h.get("cost_usd") or 0
+        )
+        units_sold = sales["units"]
+        revenue = sales["revenue"]
+        costo_total = units_sold * costo_unit_ars_iva
+        ganancia = revenue - costo_total
+        margen_pct = round(ganancia / revenue * 100, 1) if revenue > 0 else None
+        consumido_pct = round(units_sold / cantidad_lote * 100, 1) if cantidad_lote > 0 else None
+        velocidad = round(units_sold / dias, 2) if dias > 0 else 0.0
+
+        out["lotes"].append({
+            "lote": h.get("lote"),
+            "proveedor": h.get("proveedor"),
+            "fecha_ingreso": from_d,
+            "fecha_fin": to_d or today_iso,
+            "vigente": vigente,
+            "dias": dias,
+            "cantidad_lote": cantidad_lote,
+            "costo_unit_usd": round(costo_unit_usd, 2) if costo_unit_usd else None,
+            "costo_unit_ars": round(costo_unit_ars_iva, 0) if costo_unit_ars_iva else None,
+            "precio_ars_sugerido": float(h.get("precio_ars") or 0) or None,
+            "units_sold": units_sold,
+            "orders": sales["orders"],
+            "revenue": round(revenue, 0),
+            "costo_total": round(costo_total, 0),
+            "ganancia": round(ganancia, 0),
+            "margen_pct": margen_pct,
+            "consumido_pct": consumido_pct,
+            "velocidad_diaria": velocidad,
+            "categoria": h.get("categoria"),
+        })
+
+        out["cost_evolution"].append({
+            "fecha": from_d,
+            "lote": h.get("lote"),
+            "costo_usd": round(costo_unit_usd, 2) if costo_unit_usd else None,
+            "costo_ars": round(costo_unit_ars_iva, 0) if costo_unit_ars_iva else None,
+            "precio_ars": float(h.get("precio_ars") or 0) or None,
+        })
+
+        out["totals"]["ganancia"] += ganancia
+        out["totals"]["revenue"] += revenue
+        out["totals"]["costo"] += costo_total
+        out["totals"]["units_sold"] += units_sold
+
+    if out["totals"]["revenue"] > 0:
+        out["totals"]["margen_pct"] = round(
+            out["totals"]["ganancia"] / out["totals"]["revenue"] * 100, 1
+        )
+    out["totals"]["ganancia"] = round(out["totals"]["ganancia"], 0)
+    out["totals"]["revenue"] = round(out["totals"]["revenue"], 0)
+    out["totals"]["costo"] = round(out["totals"]["costo"], 0)
+
+    return out
+
+
+# ============================================================
 # LOTES HISTORY: passthrough enriquecido de cost_by_sku.history
 # ============================================================
 

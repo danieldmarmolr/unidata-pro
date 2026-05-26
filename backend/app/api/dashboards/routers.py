@@ -1451,6 +1451,21 @@ def get_sku_digip_info(
     return _b()
 
 
+@router.get("/products/sku/{sku}/lotes-consumption")
+def get_sku_lotes_consumption(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Cruce lote x ventas omnicanal: para cada lote, cuanto se vendio,
+    cuanto se gano y como evoluciono el costo a traves del tiempo."""
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-lotes-consumption:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.lotes_consumption(sku)
+    return _b()
+
+
 @router.get("/customers/{customer_id}")
 def get_customer_detail(
     customer_id: int,

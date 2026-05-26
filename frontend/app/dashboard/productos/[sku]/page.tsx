@@ -14,6 +14,7 @@ import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
 import { SkuKpiStrip } from "@/components/sku-kpi-strip";
 import { SkuDigipArticulo, type DigipArticuloInfo } from "@/components/sku-digip-articulo";
 import { SkuStockVsDemand } from "@/components/sku-stock-vs-demand";
+import { SkuLotesConsumption, type LotesConsumptionPayload } from "@/components/sku-lotes-consumption";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -235,6 +236,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
     staleTime: 5 * 60_000,
     enabled: !!sku,
   });
+  const { data: lotesConsumptionData, isLoading: lotesConsumptionLoading } = useQuery<LotesConsumptionPayload>({
+    queryKey: ["sku-lotes-consumption", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/lotes-consumption`),
+    staleTime: 5 * 60_000,
+    enabled: !!sku,
+  });
 
   // Granularidad del grafico (dia / semana / mes). Day arranca con ventana 90d,
   // week con 365d, month con 365d (los meses agrupan a 12 buckets).
@@ -453,7 +460,11 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           ) : null}
         </div>
 
-        {/* Historial de lotes con delta de costo vs lote previo */}
+        {/* Consumo lote a lote: cruce de cada lote con ventas omnicanal del
+            periodo, ganancia, margen y evolucion del costo USD/ARS */}
+        <SkuLotesConsumption data={lotesConsumptionData} loading={lotesConsumptionLoading} />
+
+        {/* Historial de lotes con delta de costo vs lote previo (timeline simple) */}
         <div className="mb-6">
           {lotesLoading ? (
             <div className="bg-surface border border-border rounded-xl p-5 h-[200px] animate-pulse" />
