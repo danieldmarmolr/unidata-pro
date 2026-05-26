@@ -1,0 +1,201 @@
+{
+  "name": "UNIDATA · People digest diario",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Daily 8am AR",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.unidatacenter.com.ar/api/people/digest/recipients",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": false,
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "get-recipients",
+      "name": "GET /digest/recipients",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__UNIDATA_CRED_ID__",
+          "name": "UNIDATA API Bearer"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "recipients",
+        "options": {}
+      },
+      "id": "split-recipients",
+      "name": "Split recipients",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop",
+      "name": "Loop por user",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-email",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-email-filter",
+      "name": "Tiene email?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.unidatacenter.com.ar/api/people/digest/preview?target_user_id={{ $json.user_id }}&as_html=true",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "get-html",
+      "name": "GET HTML preview",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__UNIDATA_CRED_ID__",
+          "name": "UNIDATA API Bearer"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Construye el body para Resend con el HTML del digest.\n// Skip si el HTML es vacio (user sin contenido).\n\nconst html = $input.first().json.data || $input.first().json;\nconst recipient = $('Loop por user').item.json;\n\nif (typeof html !== 'string' || !html.trim() || html.length < 50) {\n  // Sin contenido suficiente; no enviar.\n  return [];\n}\n\nreturn [{\n  json: {\n    to: recipient.email,\n    name: recipient.name,\n    subject: `Tu resumen de UNIDATA · ${recipient.unread_notifs + recipient.unread_dms} pendientes`,\n    html: html,\n  }\n}];\n"
+      },
+      "id": "build-email",
+      "name": "Armar email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.resend.com/emails",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ from: 'UNIDATA <people@unidatacenter.com.ar>', to: [$json.to], subject: $json.subject, html: $json.html }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "send-resend",
+      "name": "Resend Send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__RESEND_CRED_ID__",
+          "name": "Resend API Bearer"
+        }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Daily 8am AR": {
+      "main": [[{ "node": "GET /digest/recipients", "type": "main", "index": 0 }]]
+    },
+    "GET /digest/recipients": {
+      "main": [[{ "node": "Split recipients", "type": "main", "index": 0 }]]
+    },
+    "Split recipients": {
+      "main": [[{ "node": "Loop por user", "type": "main", "index": 0 }]]
+    },
+    "Loop por user": {
+      "main": [
+        [{ "node": "Tiene email?", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Tiene email?": {
+      "main": [[{ "node": "GET HTML preview", "type": "main", "index": 0 }]]
+    },
+    "GET HTML preview": {
+      "main": [[{ "node": "Armar email", "type": "main", "index": 0 }]]
+    },
+    "Armar email": {
+      "main": [[{ "node": "Resend Send", "type": "main", "index": 0 }]]
+    },
+    "Resend Send": {
+      "main": [[{ "node": "Loop por user", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "timezone": "America/Argentina/Buenos_Aires",
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "executionTimeout": 1800
+  }
+}
