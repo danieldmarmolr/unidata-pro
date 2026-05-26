@@ -127,6 +127,50 @@ def get_gerencia_commercial(
     return _build()
 
 
+@router.get("/gerencia/explain/{metric}")
+def get_gerencia_explain(
+    metric: str,
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Breakdown estructurado de cada KPI de Gerencia (formula + steps + fuentes + warnings).
+
+    Metricas soportadas: ganancia-consolidada · margen-consolidado · cobertura-costos ·
+    deuda-talo · unistore-{revenue,ganancia,costo,margen} · unidrop-{volumen,costo-mercaderia,
+    margen-bruto,comisiones,subs-meli,mayorista,meta-ads,egresos,ingresos,ganancia-neta,margen}."""
+    require_area(user, ["finanzas", "administracion"])
+
+    key = f"explain:{metric}:{period}:{from_iso}:{to_iso}"
+
+    @cached(_cache_explain, key=lambda: key)
+    def _build() -> dict:
+        return explain_metric(metric=metric, period=period, from_iso=from_iso, to_iso=to_iso)
+
+    return _build()
+
+
+@router.get("/gerencia/meta-explain")
+def get_gerencia_meta_explain(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m"], Query()] = "30d",
+) -> dict:
+    """Cruce Meta Ads x Unidrop con los 2 modelos de atribucion lado a lado:
+    period-based (lo que hoy se resta en Gerencia) vs cohort-attributed
+    (revenue de la cohort firmada en el periodo en sus primeros 30d).
+    Devuelve KPIs comparativos + funnel + recomendacion textual."""
+    require_area(user, ["finanzas", "administracion"])
+
+    key = f"meta-explain:{period}"
+
+    @cached(_cache_meta_explain, key=lambda: key)
+    def _build() -> dict:
+        return explain_meta_unidrop(period=period)
+
+    return _build()
+
+
 @router.get("/gerencia/churn-suscripciones")
 def get_gerencia_churn(
     user: Annotated[dict, Depends(current_user)],

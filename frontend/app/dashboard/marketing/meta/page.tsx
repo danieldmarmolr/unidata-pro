@@ -15,6 +15,7 @@ import {
   CheckCircle2, XCircle, History, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { MetaImpactChart } from "@/components/meta-impact-chart";
+import { CalcExplainModal } from "@/components/calc-explain-modal";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -187,6 +188,7 @@ export default function MetaAdsPage() {
   const me = getUser();
   const isAdmin = !!me?.is_admin || me?.role === "admin";
   const [period, setPeriod] = useState<"7d" | "30d" | "90d" | "1y">("30d");
+  const [explainMetric, setExplainMetric] = useState<string | null>(null);
   // Default UNIDROP — por ahora solo esa unidad tiene Meta Ads conectado.
   // Unistore queda placeholder (boton disabled) hasta que se desarrolle.
   const [unit, setUnit] = useState<"unistore" | "unidrop">("unidrop");
@@ -490,12 +492,20 @@ export default function MetaAdsPage() {
           </div>
         )}
 
+        {explainMetric && (
+          <CalcExplainModal
+            metric={explainMetric}
+            period={period === "1y" ? "12m" : period}
+            onClose={() => setExplainMetric(null)}
+          />
+        )}
+
         {!isEmpty && ov && (
           <div className="space-y-5">
             {/* ── Section 1: Pulso ── */}
             <Section title="Pulso" icon={Activity} subtitle="KPIs hero + variación vs periodo previo equivalente">
               <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
-                <KpiHero icon={DollarSign} label="Inversión" value={formatCurrency(ov.kpi.spend)} hint={`${formatNumber(ov.kpi.active_campaigns)} campañas activas`} delta={stQ.data?.delta_pct.spend} />
+                <KpiHero icon={DollarSign} label="Inversión" value={formatCurrency(ov.kpi.spend)} hint={`${formatNumber(ov.kpi.active_campaigns)} campañas activas`} delta={stQ.data?.delta_pct.spend} onClick={() => setExplainMetric("meta-spend")} />
                 <KpiHero icon={Eye} label="Impresiones" value={formatNumber(ov.kpi.impressions)} hint={`Alcance ${formatNumber(ov.kpi.reach)}`} delta={stQ.data?.delta_pct.impressions} />
                 <KpiHero icon={MousePointerClick} label="Clicks" value={formatNumber(ov.kpi.clicks)} hint={`CTR ${ov.kpi.ctr.toFixed(2)}%`} delta={stQ.data?.delta_pct.clicks} />
                 <KpiHero icon={Target} label="CPC" value={formatCurrency(ov.kpi.cpc)} hint="Costo por click" />
@@ -531,16 +541,19 @@ export default function MetaAdsPage() {
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
                   <KpiBoxCross icon={UserPlus} accent="emerald" label="Nuevos signups"
                     value={formatNumber(impQ.data.kpi.new_signups)}
-                    hint={impQ.data.kpi.cac_dropshipper > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_dropshipper)}/dropshipper` : "Sin CAC"} />
+                    hint={impQ.data.kpi.cac_dropshipper > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_dropshipper)}/dropshipper` : "Sin CAC"}
+                    onClick={() => setExplainMetric("meta-cac-signup")} />
                   <KpiBoxCross icon={Repeat} accent="primary" label="Suscripciones nuevas"
                     value={formatNumber(impQ.data.kpi.new_subscriptions)}
-                    hint={impQ.data.kpi.cac_subscripcion > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_subscripcion)}/sub` : "Sin CAC"} />
+                    hint={impQ.data.kpi.cac_subscripcion > 0 ? `CAC ${formatCurrency(impQ.data.kpi.cac_subscripcion)}/sub` : "Sin CAC"}
+                    onClick={() => setExplainMetric("meta-cac-sub")} />
                   <KpiBoxCross icon={DollarSign} accent="emerald" label="Revenue PaymentIntent"
                     value={formatCurrency(impQ.data.kpi.revenue_pi)}
                     hint={`${formatNumber(impQ.data.kpi.pi_count)} pagos PROCESSED`} />
                   <KpiBoxCross icon={TrendingUp} accent="amber" label="ROAS (gross)"
                     value={impQ.data.kpi.roas > 0 ? `${impQ.data.kpi.roas.toFixed(2)}x` : "—"}
-                    hint={impQ.data.kpi.spend > 0 ? `${formatCurrency(impQ.data.kpi.revenue_pi)} / ${formatCurrency(impQ.data.kpi.spend)}` : "Sin spend"} />
+                    hint={impQ.data.kpi.spend > 0 ? `${formatCurrency(impQ.data.kpi.revenue_pi)} / ${formatCurrency(impQ.data.kpi.spend)}` : "Sin spend"}
+                    onClick={() => setExplainMetric("meta-roas-period")} />
                   <KpiBoxCross icon={Users} accent="primary" label="Conv click→signup"
                     value={impQ.data.kpi.clicks > 0 ? `${(impQ.data.kpi.new_signups / impQ.data.kpi.clicks * 100).toFixed(2)}%` : "—"}
                     hint={`${formatNumber(impQ.data.kpi.clicks)} → ${formatNumber(impQ.data.kpi.new_signups)}`} />
@@ -592,14 +605,17 @@ export default function MetaAdsPage() {
               <Section title="Atribución de ventas" icon={ArrowUpRight} subtitle="Revenue del cohort firmado en el periodo + LTV inicial + activation rate">
                 <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-3">
                   <MiniStat label="Revenue total periodo" value={formatCurrency(attrQ.data.kpi.revenue_total)} hint={`${formatNumber(attrQ.data.kpi.pi_count_total)} pagos`} />
-                  <MiniStat label="Revenue cohort" value={formatCurrency(attrQ.data.kpi.revenue_attributed)} hint={`${formatNumber(attrQ.data.kpi.pi_count_attributed)} pagos`} accent="emerald" />
-                  <MiniStat label="% Atribución" value={`${attrQ.data.kpi.rev_attribution_pct.toFixed(1)}%`} hint="del revenue total" accent="primary" />
+                  <MiniStat label="Revenue cohort" value={formatCurrency(attrQ.data.kpi.revenue_attributed)} hint={`${formatNumber(attrQ.data.kpi.pi_count_attributed)} pagos`} accent="emerald"
+                    onClick={() => setExplainMetric("meta-roas-cohort")} />
+                  <MiniStat label="% Atribución" value={`${attrQ.data.kpi.rev_attribution_pct.toFixed(1)}%`} hint="del revenue total" accent="primary"
+                    onClick={() => setExplainMetric("meta-roas-cohort")} />
                   <MiniStat label="Activation rate" value={`${attrQ.data.kpi.activation_rate.toFixed(1)}%`}
                     hint={`${formatNumber(attrQ.data.kpi.users_with_revenue)} de ${formatNumber(attrQ.data.kpi.new_signups)} pagaron`}
                     accent="amber" />
                   <MiniStat label="LTV 30d (cohort)" value={formatCurrency(attrQ.data.kpi.ltv_first_30d)}
                     hint={`ROAS atribuido ${attrQ.data.kpi.roas_attributed.toFixed(2)}x`}
-                    accent="emerald" />
+                    accent="emerald"
+                    onClick={() => setExplainMetric("meta-ltv-30d")} />
                 </div>
                 <div className="text-[10px] text-text-muted">
                   Cohort = users creados en el periodo. Revenue = PaymentIntent PROCESSED en sus primeros 30 días. Atribución temporal (ventana de creación).
@@ -632,11 +648,13 @@ export default function MetaAdsPage() {
                   <MiniStat label="ROAS 30d (cohort)"
                     value={mktQ.data.summary.roas_30d > 0 ? `${mktQ.data.summary.roas_30d.toFixed(2)}x` : "—"}
                     hint={`${formatCurrency(mktQ.data.summary.rev_30d)} / ${formatCurrency(mktQ.data.summary.spend)}`}
-                    accent="emerald" />
+                    accent="emerald"
+                    onClick={() => setExplainMetric("meta-roas-cohort")} />
                   <MiniStat label="LTV 30d promedio"
                     value={formatCurrency(mktQ.data.summary.avg_ltv_30d)}
                     hint={`CAC signup ${formatCurrency(mktQ.data.summary.avg_cac_signup)}`}
-                    accent="primary" />
+                    accent="primary"
+                    onClick={() => setExplainMetric("meta-ltv-30d")} />
                   <MiniStat label="Activation rate"
                     value={`${mktQ.data.summary.avg_activation_pct.toFixed(1)}%`}
                     hint={`${formatNumber(mktQ.data.summary.users_paid)} de ${formatNumber(mktQ.data.summary.signups)} pagaron`}
@@ -926,15 +944,19 @@ function Section({ title, subtitle, icon: Icon, children, accent }: {
   );
 }
 
-function KpiHero({ icon: Icon, label, value, hint, delta }: {
+function KpiHero({ icon: Icon, label, value, hint, delta, onClick }: {
   icon: typeof Eye; label: string; value: string; hint: string; delta?: number;
+  onClick?: () => void;
 }) {
   const showDelta = delta !== undefined && Number.isFinite(delta);
   const up = showDelta && (delta ?? 0) >= 0;
-  return (
-    <div className="bg-surface border border-border rounded-xl p-4">
+  const body = (
+    <>
       <div className="flex items-start justify-between mb-2">
-        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold flex items-center gap-1">
+          {label}
+          {onClick && <span className="text-[9px] text-primary/60 opacity-0 group-hover:opacity-100 transition">cálc →</span>}
+        </div>
         <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center shadow-md">
           <Icon size={14} />
         </div>
@@ -949,43 +971,69 @@ function KpiHero({ icon: Icon, label, value, hint, delta }: {
         )}
         <span className="truncate">{hint}</span>
       </div>
-    </div>
+    </>
+  );
+  if (!onClick) return <div className="bg-surface border border-border rounded-xl p-4">{body}</div>;
+  return (
+    <button onClick={onClick} className="group bg-surface border border-border rounded-xl p-4 text-left w-full hover:border-primary/40 hover:shadow-md transition cursor-pointer" title="Click para ver el cálculo">
+      {body}
+    </button>
   );
 }
 
-function KpiBoxCross({ icon: Icon, label, value, hint, accent }: {
+function KpiBoxCross({ icon: Icon, label, value, hint, accent, onClick }: {
   icon: typeof Eye; label: string; value: string; hint: string;
   accent: "primary" | "emerald" | "amber";
+  onClick?: () => void;
 }) {
   const accents: Record<"primary" | "emerald" | "amber", string> = {
     primary: "from-primary to-accent",
     emerald: "from-emerald-500 to-teal-500",
     amber: "from-amber-500 to-orange-500",
   };
-  return (
-    <div className="bg-surface border border-border rounded-lg p-3">
+  const body = (
+    <>
       <div className="flex items-start justify-between mb-1">
-        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+        <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold flex items-center gap-1">
+          {label}
+          {onClick && <span className="text-[9px] text-primary/60 opacity-0 group-hover:opacity-100 transition">cálc →</span>}
+        </div>
         <div className={`w-7 h-7 rounded-md bg-gradient-to-br ${accents[accent]} text-white flex items-center justify-center shadow-sm`}>
           <Icon size={12} />
         </div>
       </div>
       <div className="text-lg font-extrabold text-text tabular-nums truncate">{value}</div>
       <div className="text-[10px] text-text-muted mt-0.5 truncate">{hint}</div>
-    </div>
+    </>
+  );
+  if (!onClick) return <div className="bg-surface border border-border rounded-lg p-3">{body}</div>;
+  return (
+    <button onClick={onClick} className="group bg-surface border border-border rounded-lg p-3 text-left w-full hover:border-primary/40 hover:shadow-md transition cursor-pointer" title="Click para ver el cálculo">
+      {body}
+    </button>
   );
 }
 
-function MiniStat({ label, value, hint, accent }: {
+function MiniStat({ label, value, hint, accent, onClick }: {
   label: string; value: string; hint: string; accent?: "primary" | "emerald" | "amber";
+  onClick?: () => void;
 }) {
   const accentCls = accent === "emerald" ? "text-emerald-600" : accent === "primary" ? "text-primary" : accent === "amber" ? "text-amber-600" : "text-text";
-  return (
-    <div className="bg-soft/40 border border-border rounded-lg p-3">
-      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">{label}</div>
+  const body = (
+    <>
+      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold flex items-center gap-1">
+        {label}
+        {onClick && <span className="text-[9px] text-primary/60 opacity-0 group-hover:opacity-100 transition">cálc →</span>}
+      </div>
       <div className={`text-lg font-extrabold tabular-nums truncate ${accentCls}`}>{value}</div>
       <div className="text-[10px] text-text-muted mt-0.5 truncate">{hint}</div>
-    </div>
+    </>
+  );
+  if (!onClick) return <div className="bg-soft/40 border border-border rounded-lg p-3">{body}</div>;
+  return (
+    <button onClick={onClick} className="group bg-soft/40 border border-border rounded-lg p-3 text-left w-full hover:border-primary/40 hover:shadow-md transition cursor-pointer" title="Click para ver el cálculo">
+      {body}
+    </button>
   );
 }
 

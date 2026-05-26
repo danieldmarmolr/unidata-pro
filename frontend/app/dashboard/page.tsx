@@ -43,6 +43,8 @@ import { CategoryTable } from "@/components/generic-table";
 import { IntegrationHealthList } from "@/components/integration-health";
 import { AlertsPanel } from "@/components/alerts-panel";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { CalcExplainModal } from "@/components/calc-explain-modal";
+import { MetaEfficiencySection } from "@/components/meta-efficiency-section";
 import { ProfitConsolidatedChart, type ProfitConsolidatedResponse } from "@/components/profit-consolidated-chart";
 import { CommercialSection } from "@/components/commercial-section";
 import { api, getToken } from "@/lib/api";
@@ -250,13 +252,14 @@ function SectionHeader({
 }
 
 function HeroCard({
-  label, value, hint, variant = "default", icon: Icon,
+  label, value, hint, variant = "default", icon: Icon, onClick,
 }: {
   label: string;
   value: string;
   hint?: string;
   variant?: "default" | "success" | "warning" | "error";
   icon?: React.ComponentType<{ size?: number; className?: string }>;
+  onClick?: () => void;
 }) {
   const styles = {
     default: "from-primary/10 to-accent/10 border-primary/20 text-text",
@@ -264,24 +267,55 @@ function HeroCard({
     warning: "from-amber-50 to-amber-100 border-amber-200 text-amber-900",
     error: "from-rose-50 to-rose-100 border-rose-200 text-rose-900",
   }[variant];
-  return (
-    <div className={cn("bg-gradient-to-br border rounded-2xl p-5 shadow-sm", styles)}>
+  const content = (
+    <>
       <div className="flex items-center gap-2 mb-2">
         {Icon && <Icon size={14} className="opacity-70" />}
         <div className="text-[11px] uppercase tracking-wider font-bold opacity-70">{label}</div>
+        {onClick && <span className="ml-auto text-[10px] opacity-50 group-hover:opacity-100 transition">cálc →</span>}
       </div>
       <div className="text-3xl font-extrabold tracking-tight tabular-nums">{value}</div>
       {hint && <div className="text-xs mt-2 opacity-80">{hint}</div>}
-    </div>
+    </>
+  );
+  if (!onClick) {
+    return (
+      <div className={cn("bg-gradient-to-br border rounded-2xl p-5 shadow-sm", styles)}>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "bg-gradient-to-br border rounded-2xl p-5 shadow-sm text-left group hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer w-full",
+        styles,
+      )}
+      title="Click para ver el cálculo detallado"
+    >
+      {content}
+    </button>
   );
 }
 
+type ProfitRow = {
+  label: string;
+  value: number;
+  prefix?: string;
+  suffix?: string;
+  muted?: boolean;
+  negative?: boolean;
+  explainMetric?: string;
+};
+
 function UnitProfitCard({
-  title, color, rows,
+  title, color, rows, onExplain,
 }: {
   title: string;
   color: string;
-  rows: { label: string; value: number; prefix?: string; suffix?: string; muted?: boolean; negative?: boolean }[];
+  rows: ProfitRow[];
+  onExplain?: (metric: string) => void;
 }) {
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
@@ -289,17 +323,41 @@ function UnitProfitCard({
         <div className="w-2 h-7 rounded-full" style={{ backgroundColor: color }} />
         <div className="text-sm font-bold text-text">{title}</div>
       </div>
-      <div className="space-y-2.5">
-        {rows.map((r) => (
-          <div key={r.label} className="flex items-baseline justify-between gap-3">
-            <div className="text-xs text-text-muted">{r.label}</div>
-            <div className={cn("text-base font-bold tabular-nums", r.muted && "text-text-muted", r.negative && "text-error")}>
-              {r.prefix ?? ""}
-              {typeof r.value === "number" ? new Intl.NumberFormat("es-AR").format(Math.round(r.value)) : r.value}
-              {r.suffix ?? ""}
-            </div>
-          </div>
-        ))}
+      <div className="space-y-1">
+        {rows.map((r) => {
+          const isClickable = !!r.explainMetric && !!onExplain;
+          const valueText = (r.prefix ?? "") +
+            (typeof r.value === "number" ? new Intl.NumberFormat("es-AR").format(Math.round(r.value)) : r.value) +
+            (r.suffix ?? "");
+          const body = (
+            <>
+              <div className="text-xs text-text-muted flex items-center gap-1.5">
+                {r.label}
+                {isClickable && <span className="text-[9px] text-primary/70 opacity-0 group-hover/row:opacity-100 transition">cálc →</span>}
+              </div>
+              <div className={cn("text-base font-bold tabular-nums", r.muted && "text-text-muted", r.negative && "text-error")}>
+                {valueText}
+              </div>
+            </>
+          );
+          if (!isClickable) {
+            return (
+              <div key={r.label} className="flex items-baseline justify-between gap-3 px-1.5 py-1">
+                {body}
+              </div>
+            );
+          }
+          return (
+            <button
+              key={r.label}
+              onClick={() => onExplain!(r.explainMetric!)}
+              className="group/row w-full flex items-baseline justify-between gap-3 px-1.5 py-1 rounded hover:bg-soft/70 transition text-left cursor-pointer"
+              title="Click para ver el cálculo detallado"
+            >
+              {body}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -878,6 +936,7 @@ export default function GerenciaUnificadaPage() {
   const [generating, setGenerating] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<string | null>(null);
   const [opsOpen, setOpsOpen] = useState(false);
+  const [explainMetric, setExplainMetric] = useState<string | null>(null);
 
   const period = useGlobalFilters((s) => s.period);
   const customFrom = useGlobalFilters((s) => s.customFrom);
@@ -995,6 +1054,7 @@ export default function GerenciaUnificadaPage() {
                   hint={`sobre ${formatCurrency(gerencia.consolidado.revenue)} de revenue real`}
                   variant={gerencia.consolidado.ganancia_neta >= 0 ? "success" : "error"}
                   icon={Coins}
+                  onClick={() => setExplainMetric("ganancia-consolidada")}
                 />
                 <HeroCard
                   label="Margen Consolidado"
@@ -1002,6 +1062,7 @@ export default function GerenciaUnificadaPage() {
                   hint="(ganancia / revenue real)"
                   variant={gerencia.consolidado.margen_pct >= 10 ? "success" : gerencia.consolidado.margen_pct >= 0 ? "warning" : "error"}
                   icon={gerencia.consolidado.margen_pct >= 0 ? TrendingUp : TrendingDown}
+                  onClick={() => setExplainMetric("margen-consolidado")}
                 />
                 <HeroCard
                   label="Cobertura Costos Unistore"
@@ -1009,6 +1070,7 @@ export default function GerenciaUnificadaPage() {
                   hint={`${gerencia.unistore.skus_con_costo} con costo · ${gerencia.unistore.skus_sin_costo} sin cargar`}
                   variant={gerencia.consolidado.cobertura_costos_unistore_pct >= 75 ? "success" : gerencia.consolidado.cobertura_costos_unistore_pct >= 50 ? "warning" : "error"}
                   icon={ShieldCheck}
+                  onClick={() => setExplainMetric("cobertura-costos")}
                 />
                 <HeroCard
                   label="Deuda Talo pendiente"
@@ -1016,6 +1078,7 @@ export default function GerenciaUnificadaPage() {
                   hint="Subs PaymentIntent en PENDING"
                   variant={gerencia.deuda_talo_pendiente > 0 ? "warning" : "default"}
                   icon={Wallet}
+                  onClick={() => setExplainMetric("deuda-talo")}
                 />
               </>
             )}
@@ -1042,38 +1105,41 @@ export default function GerenciaUnificadaPage() {
                 <UnitProfitCard
                   title="Unistore (TN + ML)"
                   color="#5b8def"
+                  onExplain={(m) => setExplainMetric(m)}
                   rows={[
-                    { label: "Revenue total", value: gerencia.unistore.revenue, prefix: "$ " },
-                    { label: "Revenue con costo cargado", value: gerencia.unistore.revenue_con_costo, prefix: "$ ", muted: true },
-                    { label: "Costo de mercaderia (con IVA)", value: gerencia.unistore.costo, prefix: "$ ", muted: true },
-                    { label: "Ganancia neta", value: gerencia.unistore.ganancia_neta, prefix: "$ ", negative: gerencia.unistore.ganancia_neta < 0 },
-                    { label: "Margen", value: gerencia.unistore.margen_pct, suffix: " %", negative: gerencia.unistore.margen_pct < 0 },
+                    { label: "Revenue total", value: gerencia.unistore.revenue, prefix: "$ ", explainMetric: "unistore-revenue" },
+                    { label: "Revenue con costo cargado", value: gerencia.unistore.revenue_con_costo, prefix: "$ ", muted: true, explainMetric: "cobertura-costos" },
+                    { label: "Costo de mercaderia (con IVA)", value: gerencia.unistore.costo, prefix: "$ ", muted: true, explainMetric: "unistore-costo" },
+                    { label: "Ganancia neta", value: gerencia.unistore.ganancia_neta, prefix: "$ ", negative: gerencia.unistore.ganancia_neta < 0, explainMetric: "unistore-ganancia" },
+                    { label: "Margen", value: gerencia.unistore.margen_pct, suffix: " %", negative: gerencia.unistore.margen_pct < 0, explainMetric: "unistore-margen" },
                   ]}
                 />
                 <UnitProfitCard
                   title="Unidrop · volumen plataforma (ref)"
                   color="#94a3b8"
+                  onExplain={(m) => setExplainMetric(m)}
                   rows={[
-                    { label: "Facturacion TN paid", value: gerencia.unidrop.volumen_tn, prefix: "$ ", muted: true },
-                    { label: "Facturacion ML paid", value: gerencia.unidrop.volumen_ml, prefix: "$ ", muted: true },
-                    { label: "Volumen total", value: gerencia.unidrop.volumen_plataforma, prefix: "$ " },
-                    { label: "− Costo mercaderia (con IVA)", value: gerencia.unidrop.costo_mercaderia, prefix: "$ ", muted: true },
-                    { label: "Margen bruto plataforma", value: gerencia.unidrop.margen_bruto_plataforma, prefix: "$ " },
+                    { label: "Facturacion TN paid", value: gerencia.unidrop.volumen_tn, prefix: "$ ", muted: true, explainMetric: "unidrop-volumen" },
+                    { label: "Facturacion ML paid", value: gerencia.unidrop.volumen_ml, prefix: "$ ", muted: true, explainMetric: "unidrop-volumen" },
+                    { label: "Volumen total", value: gerencia.unidrop.volumen_plataforma, prefix: "$ ", explainMetric: "unidrop-volumen" },
+                    { label: "− Costo mercaderia (con IVA)", value: gerencia.unidrop.costo_mercaderia, prefix: "$ ", muted: true, explainMetric: "unidrop-costo-mercaderia" },
+                    { label: "Margen bruto plataforma", value: gerencia.unidrop.margen_bruto_plataforma, prefix: "$ ", explainMetric: "unidrop-margen-bruto" },
                     { label: "Ordenes pagadas", value: gerencia.unidrop.ordenes_pagadas, muted: true },
                   ]}
                 />
                 <UnitProfitCard
                   title="Unidrop · retencion neta"
                   color="#a855f7"
+                  onExplain={(m) => setExplainMetric(m)}
                   rows={[
-                    { label: "Comisiones Talo cobradas", value: gerencia.unidrop.comisiones, prefix: "$ " },
-                    { label: "Suscripciones MELI cobradas", value: gerencia.unidrop.suscripciones_cobradas, prefix: "$ " },
-                    { label: "Ganancia mayorista mercadería", value: gerencia.unidrop.ganancia_mayorista, prefix: "$ " },
-                    { label: "Ingresos Unidrop", value: gerencia.unidrop.ingresos_unidrop, prefix: "$ " },
-                    { label: "− Meta Ads Unidrop", value: gerencia.unidrop.meta_ads_spend, prefix: "$ ", muted: true },
-                    { label: "− Egresos operativos", value: gerencia.unidrop.egresos_operativos, prefix: "$ ", muted: true },
-                    { label: "Ganancia neta", value: gerencia.unidrop.ganancia_neta, prefix: "$ ", negative: gerencia.unidrop.ganancia_neta < 0 },
-                    { label: "Margen sobre retencion", value: gerencia.unidrop.margen_pct, suffix: " %", negative: gerencia.unidrop.margen_pct < 0 },
+                    { label: "Comisiones Talo cobradas", value: gerencia.unidrop.comisiones, prefix: "$ ", explainMetric: "unidrop-comisiones" },
+                    { label: "Suscripciones MELI cobradas", value: gerencia.unidrop.suscripciones_cobradas, prefix: "$ ", explainMetric: "unidrop-subs-meli" },
+                    { label: "Ganancia mayorista mercadería", value: gerencia.unidrop.ganancia_mayorista, prefix: "$ ", explainMetric: "unidrop-mayorista" },
+                    { label: "Ingresos Unidrop", value: gerencia.unidrop.ingresos_unidrop, prefix: "$ ", explainMetric: "unidrop-ingresos" },
+                    { label: "− Meta Ads Unidrop", value: gerencia.unidrop.meta_ads_spend, prefix: "$ ", muted: true, explainMetric: "unidrop-meta-ads" },
+                    { label: "− Egresos operativos", value: gerencia.unidrop.egresos_operativos, prefix: "$ ", muted: true, explainMetric: "unidrop-egresos" },
+                    { label: "Ganancia neta", value: gerencia.unidrop.ganancia_neta, prefix: "$ ", negative: gerencia.unidrop.ganancia_neta < 0, explainMetric: "unidrop-ganancia-neta" },
+                    { label: "Margen sobre retencion", value: gerencia.unidrop.margen_pct, suffix: " %", negative: gerencia.unidrop.margen_pct < 0, explainMetric: "unidrop-margen" },
                   ]}
                 />
               </>
@@ -1093,7 +1159,23 @@ export default function GerenciaUnificadaPage() {
               <ProfitConsolidatedChart data={consolidated} />
             </div>
           )}
+        </section>
 
+        {/* ============== § 2.5 EFICIENCIA META ADS · UNIDROP ============== */}
+        <section>
+          <SectionHeader
+            number="2.5"
+            emoji="📣"
+            title="Eficiencia Meta Ads · UNIDROP"
+            subtitle="Cruce spend × adquisición × revenue de la cohort · period-based vs cohort-attributed"
+          />
+          <MetaEfficiencySection
+            period={periodSimple}
+            onExplainSpend={() => setExplainMetric("unidrop-meta-ads")}
+          />
+        </section>
+
+        <section>
           {/* Top SKUs por ganancia / margen */}
           <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-3">
             Productos Unistore por ganancia
@@ -1350,6 +1432,16 @@ export default function GerenciaUnificadaPage() {
           </div>
         )}
       </div>
+
+      {explainMetric && (
+        <CalcExplainModal
+          metric={explainMetric}
+          period={periodSimple}
+          customFrom={customFrom}
+          customTo={customTo}
+          onClose={() => setExplainMetric(null)}
+        />
+      )}
     </>
   );
 }
