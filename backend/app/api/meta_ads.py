@@ -160,6 +160,36 @@ def get_same_time(
     return meta_svc.same_time_compare(period=period, unit=unit)
 
 
+@router.get("/today-vs-yesterday")
+def get_today_vs_yesterday(
+    _: Annotated[dict, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop", "unidev"] | None, Query()] = None,
+) -> dict:
+    """Hoy (parcial) vs Ayer (cerrado): spend / impressions / clicks + delta %."""
+    return meta_svc.today_vs_yesterday(unit=unit)
+
+
+@router.get("/spend-pace")
+def get_spend_pace(
+    _: Annotated[dict, Depends(current_user)],
+    unit: Annotated[Literal["unistore", "unidrop", "unidev"] | None, Query()] = None,
+) -> dict:
+    """Pace de spend por campaña activa: actual vs esperado linealizado por hora AR."""
+    items = meta_svc.spend_pace(unit=unit)
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/mkt-unidrop-relationship")
+def get_mkt_unidrop_relationship(
+    _: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["30d", "90d", "1y"], Query()] = "90d",
+) -> dict:
+    """Quality del cohort semana a semana + relacion con spend Meta:
+    CAC signup, CAC sub, LTV 30d, sub rate, activation, retention.
+    """
+    return meta_svc.mkt_unidrop_relationship(period=period)
+
+
 @router.post("/sync")
 def trigger_sync(
     user: Annotated[dict, Depends(require_admin)],

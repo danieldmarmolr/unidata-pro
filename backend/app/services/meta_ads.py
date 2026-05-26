@@ -1155,6 +1155,241 @@ def same_time_compare(period: str = "30d", unit: str | None = None) -> dict:
     }
 
 
+# ─── Today vs Yesterday + Spend Pace + MKT relationship ──────────────────────
+
+
+def today_vs_yesterday(unit: str | None = None) -> dict:
+    """Compara KPIs de HOY (parcial, dia en curso) vs AYER (cerrado).
+
+    Meta restate insights por varios dias — los numeros de "hoy" cambian
+    hasta el dia siguiente. Util para detectar overspend / underdelivery.
+    """
+    meta_ads_db.init()
+    where_unit = "AND a.unit = %s" if unit else ""
+    params: list = []
+    if unit:
+        params.append(unit)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f"""
+            SELECT i.date_start::text AS d,
+                   COALESCE(SUM(i.spend), 0)::float AS spend,
+                   COALESCE(SUM(i.impressions), 0)::bigint AS impressions,
+                   COALESCE(SUM(i.clicks), 0)::bigint AS clicks
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE i.date_start IN (CURRENT_DATE, CURRENT_DATE - 1)
+              {where_unit}
+            GROUP BY 1
+        """, params)
+        rows = {r["d"]: dict(r) for r in cur.fetchall()}
+    today_str = dt.date.today().isoformat()
+    yest_str = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    blank = {"spend": 0.0, "impressions": 0, "clicks": 0}
+    t = rows.get(today_str, blank)
+    y = rows.get(yest_str, blank)
+
+    def _d(a: float, b: float) -> float:
+        return ((a - b) / b * 100) if b else 0.0
+
+    t_spend = float(t.get("spend") or 0); y_spend = float(y.get("spend") or 0)
+    t_impr = int(t.get("impressions") or 0); y_impr = int(y.get("impressions") or 0)
+    t_clk = int(t.get("clicks") or 0); y_clk = int(y.get("clicks") or 0)
+    return {
+        "today": {"date": today_str, "spend": t_spend, "impressions": t_impr, "clicks": t_clk,
+                  "ctr": (t_clk / t_impr * 100) if t_impr > 0 else 0.0,
+                  "cpc": (t_spend / t_clk) if t_clk > 0 else 0.0},
+        "yesterday": {"date": yest_str, "spend": y_spend, "impressions": y_impr, "clicks": y_clk,
+                      "ctr": (y_clk / y_impr * 100) if y_impr > 0 else 0.0,
+                      "cpc": (y_spend / y_clk) if y_clk > 0 else 0.0},
+        "delta_pct": {
+            "spend": _d(t_spend, y_spend),
+            "impressions": _d(t_impr, y_impr),
+            "clicks": _d(t_clk, y_clk),
+        },
+        "note": "today es parcial - Meta restate por ~3d. Comparar como tendencia, no absoluto.",
+    }
+
+
+def spend_pace(unit: str | None = None) -> list[dict]:
+    """Por cada campaña activa con daily_budget: spend de hoy vs pace esperado
+    (linealizado por hora del dia AR).
+
+    delta_pct > 0 = overspending vs pace lineal
+    delta_pct < 0 = underdelivery (Meta no esta gastando el budget)
+    """
+    meta_ads_db.init()
+    where_unit = "AND a.unit = %s" if unit else ""
+    params: list = []
+    if unit:
+        params.append(unit)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(f"""
+            SELECT c.id, c.name, c.effective_status, c.status,
+                   c.daily_budget::float AS daily_budget,
+                   a.name AS account_name, a.unit, a.currency,
+                   COALESCE(SUM(i.spend) FILTER (WHERE i.date_start = CURRENT_DATE), 0)::float AS spend_today,
+                   COALESCE(SUM(i.spend) FILTER (WHERE i.date_start = CURRENT_DATE - 1), 0)::float AS spend_yesterday
+            FROM meta_campaigns c
+            INNER JOIN meta_ad_accounts a ON a.id = c.ad_account_id
+            LEFT JOIN meta_insights_daily i ON i.campaign_id = c.id
+                AND i.date_start IN (CURRENT_DATE, CURRENT_DATE - 1)
+            WHERE c.daily_budget > 0
+              AND UPPER(COALESCE(c.effective_status, c.status, '')) = 'ACTIVE'
+              {where_unit}
+            GROUP BY c.id, c.name, c.effective_status, c.status, c.daily_budget,
+                     a.name, a.unit, a.currency
+            ORDER BY daily_budget DESC NULLS LAST
+        """, params)
+        rows = [dict(r) for r in cur.fetchall()]
+
+    # Hora actual AR
+    ar_tz = dt.timezone(dt.timedelta(hours=-3))
+    now_ar = dt.datetime.now(ar_tz)
+    pct_day = (now_ar.hour + now_ar.minute / 60.0) / 24.0
+    out = []
+    for r in rows:
+        budget = float(r.get("daily_budget") or 0)
+        spent = float(r.get("spend_today") or 0)
+        expected = budget * pct_day
+        delta_pct = ((spent - expected) / expected * 100) if expected > 0 else 0.0
+        out.append({
+            "id": r["id"],
+            "name": r.get("name"),
+            "account_name": r.get("account_name"),
+            "currency": r.get("currency"),
+            "status": r.get("effective_status") or r.get("status"),
+            "daily_budget": budget,
+            "spend_today": spent,
+            "spend_yesterday": float(r.get("spend_yesterday") or 0),
+            "expected_now": expected,
+            "pace_pct": (spent / budget * 100) if budget > 0 else 0.0,
+            "expected_pct": pct_day * 100,
+            "delta_pct": delta_pct,
+        })
+    return out
+
+
+def mkt_unidrop_relationship(period: str = "90d") -> dict:
+    """Quality del cohort de signups Unidrop semana por semana vs spend Meta.
+
+    Para cada semana en el periodo, devuelve:
+    - signups
+    - subs (con start_date_subscription en la semana)
+    - users_paid (al menos 1 PaymentIntent PROCESSED en primeros 30d)
+    - active_now (subscription_status='active' hoy)
+    - rev_first_30d
+    - spend Meta esa semana
+    - CACs y LTV inicial derivados
+
+    Sirve para responder: "¿estamos mejorando la calidad del adquirido?
+    ¿Las campañas mas nuevas traen mejor LTV?"
+    """
+    from app.db.engines import get_engine
+    from app.services._utils import q
+    days = _period_days(period)
+    meta_ads_db.init()
+
+    # Spend Meta semanal (unidrop)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            SELECT date_trunc('week', i.date_start)::date::text AS week_start,
+                   COALESCE(SUM(i.spend), 0)::float AS spend,
+                   COALESCE(SUM(i.clicks), 0)::bigint AS clicks,
+                   COALESCE(SUM(i.impressions), 0)::bigint AS impressions
+            FROM meta_insights_daily i
+            INNER JOIN meta_ad_accounts a ON a.id = i.ad_account_id
+            WHERE a.unit = 'unidrop'
+              AND i.date_start >= CURRENT_DATE - make_interval(days => %s)
+            GROUP BY 1 ORDER BY 1
+        """, (days,))
+        meta_weeks = {r["week_start"]: dict(r) for r in cur.fetchall()}
+
+    eng = get_engine("unidrop")
+    cohort_rows = q(eng, """
+        WITH cohort AS (
+            SELECT u.id,
+                   date_trunc('week', u."createdAt")::date AS week_start,
+                   u."createdAt",
+                   u.subscription_status,
+                   u.start_date_subscription
+            FROM public."User" u
+            WHERE u."createdAt" >= NOW() - make_interval(days => :d)
+        ),
+        rev30 AS (
+            SELECT c.id AS user_id,
+                   COALESCE(SUM(pi."paidAmount"), 0)::float AS rev_30d,
+                   COUNT(pi.id)::int AS pi_count
+            FROM cohort c
+            INNER JOIN public."PaymentIntent" pi ON pi."userId" = c.id
+              AND pi.status = 'PROCESSED'
+              AND pi."createdAt" >= c."createdAt"
+              AND pi."createdAt" <= c."createdAt" + INTERVAL '30 days'
+            GROUP BY c.id
+        )
+        SELECT c.week_start::text AS week_start,
+               COUNT(*)::int AS signups,
+               COUNT(*) FILTER (WHERE c.start_date_subscription IS NOT NULL)::int AS subs,
+               COUNT(*) FILTER (WHERE c.subscription_status = 'active')::int AS active_now,
+               COUNT(DISTINCT r.user_id)::int AS users_paid,
+               COALESCE(SUM(r.rev_30d), 0)::float AS rev_30d
+        FROM cohort c
+        LEFT JOIN rev30 r ON r.user_id = c.id
+        GROUP BY c.week_start
+        ORDER BY c.week_start
+    """, {"d": days}) or []
+
+    weeks: list[dict] = []
+    totals = {"signups": 0, "subs": 0, "active_now": 0, "users_paid": 0,
+              "rev_30d": 0.0, "spend": 0.0}
+    for r in cohort_rows:
+        week = r[0]
+        signups = int(r[1] or 0)
+        subs = int(r[2] or 0)
+        active_now = int(r[3] or 0)
+        users_paid = int(r[4] or 0)
+        rev = float(r[5] or 0)
+        meta = meta_weeks.get(week, {})
+        spend = float(meta.get("spend") or 0)
+        clicks = int(meta.get("clicks") or 0)
+        weeks.append({
+            "week_start": week,
+            "spend": spend,
+            "clicks": clicks,
+            "signups": signups,
+            "subs": subs,
+            "active_now": active_now,
+            "users_paid": users_paid,
+            "rev_30d": rev,
+            "activation_pct": (users_paid / signups * 100) if signups > 0 else 0.0,
+            "sub_rate_pct": (subs / signups * 100) if signups > 0 else 0.0,
+            "retention_pct": (active_now / signups * 100) if signups > 0 else 0.0,
+            "ltv_first_30d": (rev / signups) if signups > 0 else 0.0,
+            "cac_signup": (spend / signups) if signups > 0 else 0.0,
+            "cac_sub": (spend / subs) if subs > 0 else 0.0,
+            "click_to_signup_pct": (signups / clicks * 100) if clicks > 0 else 0.0,
+        })
+        totals["signups"] += signups
+        totals["subs"] += subs
+        totals["active_now"] += active_now
+        totals["users_paid"] += users_paid
+        totals["rev_30d"] += rev
+        totals["spend"] += spend
+
+    s = totals["signups"]
+    summary = {
+        **totals,
+        "weeks_count": len(weeks),
+        "avg_cac_signup": (totals["spend"] / s) if s else 0.0,
+        "avg_cac_sub": (totals["spend"] / totals["subs"]) if totals["subs"] else 0.0,
+        "avg_ltv_30d": (totals["rev_30d"] / s) if s else 0.0,
+        "avg_activation_pct": (totals["users_paid"] / s * 100) if s else 0.0,
+        "avg_sub_rate_pct": (totals["subs"] / s * 100) if s else 0.0,
+        "avg_retention_pct": (totals["active_now"] / s * 100) if s else 0.0,
+        "roas_30d": (totals["rev_30d"] / totals["spend"]) if totals["spend"] else 0.0,
+    }
+    return {"period": period, "weeks": weeks, "summary": summary}
+
+
 # ─── Async dispatcher (background sync) ───────────────────────────────────────
 
 

@@ -1,30 +1,32 @@
 """
-Background scheduler para tareas recurrentes del modulo People.
+Background scheduler para tareas recurrentes.
 
 Tareas activas:
-- Auto-post de cumpleaños diario a las 09:00 hora Argentina.
-  Idempotente del dia (marker `[auto-cumple:user_id:YYYY-MM-DD]` en el content).
+- people_auto_birthdays: auto-post cumples diario 09:00 AR (idempotente).
+- meta_ads_core_sync: sync_all 7d cada 1h. Captura el restate de Meta para
+  los ultimos 7 dias (cuando la atribucion se va ajustando).
+- meta_ads_breakdowns_sync: sync_breakdowns 30d cada 6h. Heavier, menos
+  frecuente.
 
 El scheduler corre en el mismo proceso de FastAPI; si Railway escala
-multiples instancias, la idempotencia del marker evita duplicados.
+multiples instancias, la idempotencia (find_active del meta sync, marker
+del cumples) evita duplicados.
+
+Disable global: PEOPLE_SCHEDULER_DISABLED=1
+Disable solo Meta Ads: META_ADS_SCHEDULER_DISABLED=1
 """
 from __future__ import annotations
 
 import logging
 import os
 
-log = logging.getLogger("unidata.people.scheduler")
+log = logging.getLogger("unidata.scheduler")
 
 _scheduler = None
 
 
 def start_scheduler() -> None:
-    """Inicializa APScheduler una sola vez. Llamar desde startup de FastAPI.
-
-    Skip si:
-    - PEOPLE_SCHEDULER_DISABLED=1 (para tests / dev)
-    - Ya esta corriendo (idempotente)
-    """
+    """Inicializa APScheduler una sola vez. Llamar desde startup de FastAPI."""
     global _scheduler
     if _scheduler is not None:
         log.info("scheduler ya inicializado, skip")
@@ -56,9 +58,28 @@ def start_scheduler() -> None:
         id="people_auto_birthdays",
         replace_existing=True,
     )
+    jobs_added = ["auto_birthdays @ 09:00 AR"]
+
+    # Meta Ads sync
+    if os.environ.get("META_ADS_SCHEDULER_DISABLED") != "1":
+        # Core sync cada hora a :05 (7d incremental — captura restate Meta)
+        _scheduler.add_job(
+            _job_meta_ads_core_sync,
+            CronTrigger(minute=5),
+            id="meta_ads_core_sync",
+            replace_existing=True,
+        )
+        # Breakdowns cada 6h a :15 (30d — heavier, menos frecuente)
+        _scheduler.add_job(
+            _job_meta_ads_breakdowns_sync,
+            CronTrigger(hour="*/6", minute=15),
+            id="meta_ads_breakdowns_sync",
+            replace_existing=True,
+        )
+        jobs_added += ["meta_ads_core @ */1h:05", "meta_ads_breakdowns @ */6h:15"]
 
     _scheduler.start()
-    log.info("people scheduler started: 1 job (auto_birthdays @ 09:00 AR)")
+    log.info("scheduler started: %s", " | ".join(jobs_added))
 
 
 def _job_auto_birthdays() -> None:
@@ -74,6 +95,35 @@ def _job_auto_birthdays() -> None:
         )
     except Exception as e:
         log.exception("auto_birthdays job failed: %s", e)
+
+
+def _job_meta_ads_core_sync() -> None:
+    """Dispatcher idempotente: si ya hay un run activo, reusa."""
+    try:
+        from app.services import meta_ads
+        result = meta_ads.start_sync_async(
+            kind="sync_all",
+            historical_days=7,
+            started_by_id=None,
+            started_by_email="cron@unidata",
+        )
+        log.info("meta_ads core sync dispatched: %s", result)
+    except Exception as e:
+        log.exception("meta_ads core sync dispatch failed: %s", e)
+
+
+def _job_meta_ads_breakdowns_sync() -> None:
+    try:
+        from app.services import meta_ads
+        result = meta_ads.start_sync_async(
+            kind="sync_breakdowns",
+            historical_days=30,
+            started_by_id=None,
+            started_by_email="cron@unidata",
+        )
+        log.info("meta_ads breakdowns sync dispatched: %s", result)
+    except Exception as e:
+        log.exception("meta_ads breakdowns sync dispatch failed: %s", e)
 
 
 def stop_scheduler() -> None:

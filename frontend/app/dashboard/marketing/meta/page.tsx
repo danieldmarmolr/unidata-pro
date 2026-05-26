@@ -95,6 +95,61 @@ type TopProducts = {
   items: { sku: string; title: string | null; image: string | null; qty: number; revenue: number }[];
 };
 
+type TodayVsYesterday = {
+  today: { date: string; spend: number; impressions: number; clicks: number; ctr: number; cpc: number };
+  yesterday: { date: string; spend: number; impressions: number; clicks: number; ctr: number; cpc: number };
+  delta_pct: { spend: number; impressions: number; clicks: number };
+  note: string;
+};
+
+type SpendPaceItem = {
+  id: string; name: string | null; account_name: string | null; currency: string | null;
+  status: string | null;
+  daily_budget: number; spend_today: number; spend_yesterday: number;
+  expected_now: number; pace_pct: number; expected_pct: number; delta_pct: number;
+};
+
+type MktUnidropRelationship = {
+  period: string;
+  weeks: {
+    week_start: string;
+    spend: number; clicks: number;
+    signups: number; subs: number; active_now: number; users_paid: number; rev_30d: number;
+    activation_pct: number; sub_rate_pct: number; retention_pct: number;
+    ltv_first_30d: number; cac_signup: number; cac_sub: number;
+    click_to_signup_pct: number;
+  }[];
+  summary: {
+    weeks_count: number;
+    signups: number; subs: number; active_now: number; users_paid: number;
+    rev_30d: number; spend: number;
+    avg_cac_signup: number; avg_cac_sub: number; avg_ltv_30d: number;
+    avg_activation_pct: number; avg_sub_rate_pct: number; avg_retention_pct: number;
+    roas_30d: number;
+  };
+};
+
+type TopAdsResp = {
+  items: {
+    id: string; name: string; adset_id: string | null; campaign_id: string | null;
+    status: string | null; effective_status: string | null;
+    creative_summary: string | null; preview_url: string | null;
+    spend: number; impressions: number; clicks: number;
+  }[];
+  count: number;
+};
+
+type TopAdsetsResp = {
+  items: {
+    id: string; name: string; campaign_id: string | null; status: string | null;
+    effective_status: string | null; daily_budget: number | null; lifetime_budget: number | null;
+    optimization_goal: string | null; billing_event: string | null;
+    targeting_summary: string | null;
+    spend: number; impressions: number; clicks: number;
+  }[];
+  count: number;
+};
+
 type SyncRunStatus = "pending" | "running" | "done" | "error";
 type SyncRunKind = "sync_all" | "sync_breakdowns";
 type SyncAllSummary = {
@@ -132,7 +187,9 @@ export default function MetaAdsPage() {
   const me = getUser();
   const isAdmin = !!me?.is_admin || me?.role === "admin";
   const [period, setPeriod] = useState<"7d" | "30d" | "90d" | "1y">("30d");
-  const [unit, setUnit] = useState<"" | "unistore" | "unidrop" | "unidev">("");
+  // Default UNIDROP — por ahora solo esa unidad tiene Meta Ads conectado.
+  // Unistore queda placeholder (boton disabled) hasta que se desarrolle.
+  const [unit, setUnit] = useState<"unistore" | "unidrop">("unidrop");
   const [cpSort, setCpSort] = useState<{ col: keyof MetaCampaign; dir: "asc" | "desc" }>({ col: "spend", dir: "desc" });
   const [cpStatus, setCpStatus] = useState("");
   const [cpObjective, setCpObjective] = useState("");
@@ -141,79 +198,131 @@ export default function MetaAdsPage() {
   const showCross = !unit || unit === "unidrop";
   const qsBase = `period=${period}${unit ? `&unit=${unit}` : ""}`;
 
+  // Auto-refresh: el cron backend sincroniza data cada 1h. El frontend
+  // refetchea cada 5min asi el equipo Marketing ve la data fresca sin recargar.
+  const REFRESH_MS = 5 * 60 * 1000;
+
   const ovQ = useQuery<MetaOverview>({
     queryKey: ["meta-overview", period, unit],
     queryFn: () => api(`/api/marketing/meta/overview?${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const cpQ = useQuery<{ items: MetaCampaign[]; count: number }>({
     queryKey: ["meta-campaigns", period, unit],
     queryFn: () => api(`/api/marketing/meta/campaigns?${qsBase}&limit=200`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const impQ = useQuery<MetaImpact>({
     queryKey: ["meta-impact", period],
     queryFn: () => api(`/api/marketing/meta/unidrop-impact?period=${period}`),
     staleTime: 60_000,
     enabled: showCross,
+    refetchInterval: showCross ? REFRESH_MS : false,
   });
   const stQ = useQuery<SameTime>({
     queryKey: ["meta-same-time", period, unit],
     queryFn: () => api(`/api/marketing/meta/same-time?${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const ageQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "age", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=age&${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const genQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "gender", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=gender&${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const platQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "publisher_platform", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=publisher_platform&${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const posQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "platform_position", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=platform_position&${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const devQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "device_platform", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=device_platform&${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const regQ = useQuery<BreakdownResp>({
     queryKey: ["meta-bk", "region", period, unit],
     queryFn: () => api(`/api/marketing/meta/breakdown?type=region&${qsBase}&limit=15`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const hourQ = useQuery<HourlyResp>({
     queryKey: ["meta-hourly", period, unit],
     queryFn: () => api(`/api/marketing/meta/hourly?${qsBase}`),
     staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
   });
   const attrQ = useQuery<Attribution>({
     queryKey: ["meta-attr", period],
     queryFn: () => api(`/api/marketing/meta/sales-attribution?period=${period}`),
     staleTime: 60_000,
     enabled: showCross,
+    refetchInterval: showCross ? REFRESH_MS : false,
   });
   const retQ = useQuery<CohortRet>({
     queryKey: ["meta-ret", period],
     queryFn: () => api(`/api/marketing/meta/cohort-retention?period=${period === "7d" ? "30d" : period}`),
     staleTime: 60_000,
     enabled: showCross,
+    refetchInterval: showCross ? REFRESH_MS : false,
   });
   const topQ = useQuery<TopProducts>({
     queryKey: ["meta-top-products", period],
     queryFn: () => api(`/api/marketing/meta/top-products?period=${period}&limit=12`),
     staleTime: 60_000,
     enabled: showCross,
+    refetchInterval: showCross ? REFRESH_MS : false,
+  });
+
+  // Nuevas insights (Top Ads, Top Adsets, Today vs Yesterday, Spend Pace, MKT × UNIDROP)
+  const tvyQ = useQuery<TodayVsYesterday>({
+    queryKey: ["meta-today-vs-yesterday", unit],
+    queryFn: () => api(`/api/marketing/meta/today-vs-yesterday?unit=${unit}`),
+    staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
+  });
+  const paceQ = useQuery<{ items: SpendPaceItem[]; count: number }>({
+    queryKey: ["meta-spend-pace", unit],
+    queryFn: () => api(`/api/marketing/meta/spend-pace?unit=${unit}`),
+    staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
+  });
+  const topAdsQ = useQuery<TopAdsResp>({
+    queryKey: ["meta-top-ads", period],
+    queryFn: () => api(`/api/marketing/meta/ads?period=${period}&limit=12`),
+    staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
+  });
+  const topAdsetsQ = useQuery<TopAdsetsResp>({
+    queryKey: ["meta-top-adsets", period],
+    queryFn: () => api(`/api/marketing/meta/adsets?period=${period}&limit=12`),
+    staleTime: 60_000,
+    refetchInterval: REFRESH_MS,
+  });
+  const mktQ = useQuery<MktUnidropRelationship>({
+    queryKey: ["meta-mkt-unidrop", period],
+    // Para 7d/30d usamos 90d (necesitamos varias semanas para ver tendencia)
+    queryFn: () => api(`/api/marketing/meta/mkt-unidrop-relationship?period=${(period === "7d" || period === "30d") ? "90d" : period}`),
+    staleTime: 60_000,
+    enabled: showCross,
+    refetchInterval: showCross ? REFRESH_MS : false,
   });
 
   // Sync background-job pattern: POST dispara, retorna run_id, frontend pollea.
@@ -282,9 +391,18 @@ export default function MetaAdsPage() {
   const ov = ovQ.data;
   const isEmpty = !ovQ.isLoading && (!ov || ov.kpi.spend === 0);
 
+  // Freshness: timestamp mas reciente de last_synced_at entre las cuentas
+  const lastSyncedAt: string | null = (() => {
+    const ts = (ov?.accounts ?? [])
+      .map(a => a.last_synced_at)
+      .filter((x): x is string => !!x)
+      .sort();
+    return ts.length ? ts[ts.length - 1] : null;
+  })();
+
   return (
     <>
-      <Topbar title="Meta Ads · Comando central" subtitle="Performance, audiencia, atribución y orquestación cross-area" />
+      <Topbar title="Meta Ads · Comando central" subtitle="UNIDROP · auto-sync cada 1h · refresh UI cada 5min" />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-4 sm:py-6 overflow-y-auto">
         <TodayPanel unit="unistore" context="marketing" title="HOY · Meta Ads" />
         <Link href="/dashboard/marketing" className="inline-flex items-center gap-2 text-sm text-text-muted hover:text-primary mb-4">
@@ -302,18 +420,16 @@ export default function MetaAdsPage() {
             ))}
           </div>
           <div className="inline-flex bg-soft rounded-lg p-0.5 border border-border">
-            {[
-              { v: "", l: "Todas" },
-              { v: "unistore", l: "Unistore" },
-              { v: "unidrop", l: "Unidrop" },
-              { v: "unidev", l: "Unidev" },
-            ].map((u) => (
-              <button key={u.v} onClick={() => setUnit(u.v as "" | "unistore" | "unidrop" | "unidev")}
-                className={"px-3 py-1 text-xs font-bold rounded-md transition " + (unit === u.v ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
-                {u.l}
-              </button>
-            ))}
+            <button onClick={() => setUnit("unidrop")}
+              className={"px-3 py-1 text-xs font-bold rounded-md transition " + (unit === "unidrop" ? "bg-surface shadow text-text" : "text-text-muted hover:text-text")}>
+              Unidrop
+            </button>
+            <button disabled title="Proximamente — Meta Ads para Unistore aun no esta desarrollado"
+              className="px-3 py-1 text-xs font-bold rounded-md transition text-text-muted/50 cursor-not-allowed flex items-center gap-1">
+              Unistore <span className="text-[8px] uppercase tracking-wider opacity-70">prox.</span>
+            </button>
           </div>
+          <FreshnessPill lastSyncedAt={lastSyncedAt} isSyncing={isSyncing} />
           {isAdmin && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
               <button onClick={() => syncMut.mutate(30)} disabled={isSyncing || syncMut.isPending}
@@ -386,6 +502,27 @@ export default function MetaAdsPage() {
                 <KpiHero icon={TrendingUp} label="CPM" value={formatCurrency(ov.kpi.cpm)} hint="Costo por mil impresiones" />
               </div>
             </Section>
+
+            {/* ── Section 1b: Hoy vs Ayer ── */}
+            {tvyQ.data && (
+              <Section title="Hoy vs Ayer" icon={Clock} subtitle={`${tvyQ.data.today.date} (parcial · Meta restate ~3d) vs ${tvyQ.data.yesterday.date} (cerrado)`}>
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                  <TodayVsYesterdayBox label="Inversión"
+                    today={formatCurrency(tvyQ.data.today.spend)} yesterday={formatCurrency(tvyQ.data.yesterday.spend)}
+                    delta={tvyQ.data.delta_pct.spend} invertDelta={false} />
+                  <TodayVsYesterdayBox label="Impresiones"
+                    today={formatNumber(tvyQ.data.today.impressions)} yesterday={formatNumber(tvyQ.data.yesterday.impressions)}
+                    delta={tvyQ.data.delta_pct.impressions} invertDelta={false} />
+                  <TodayVsYesterdayBox label="Clicks"
+                    today={formatNumber(tvyQ.data.today.clicks)} yesterday={formatNumber(tvyQ.data.yesterday.clicks)}
+                    delta={tvyQ.data.delta_pct.clicks} invertDelta={false} />
+                  <TodayVsYesterdayBox label="CTR"
+                    today={`${tvyQ.data.today.ctr.toFixed(2)}%`} yesterday={`${tvyQ.data.yesterday.ctr.toFixed(2)}%`} />
+                  <TodayVsYesterdayBox label="CPC"
+                    today={formatCurrency(tvyQ.data.today.cpc)} yesterday={formatCurrency(tvyQ.data.yesterday.cpc)} />
+                </div>
+              </Section>
+            )}
 
             {/* ── Section 2: Impacto Unidrop (cross) ── */}
             {showCross && impQ.data && (
@@ -485,6 +622,34 @@ export default function MetaAdsPage() {
               </Section>
             )}
 
+            {/* ── Section 4b: MKT × UNIDROP — calidad del cohort semana a semana ── */}
+            {showCross && mktQ.data && mktQ.data.weeks.length > 0 && (
+              <Section title="MKT × UNIDROP · Calidad del cohort semana a semana"
+                icon={Activity}
+                subtitle={`${mktQ.data.weeks.length} semanas · ¿esta mejorando la calidad de lo adquirido?`}
+                accent>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <MiniStat label="ROAS 30d (cohort)"
+                    value={mktQ.data.summary.roas_30d > 0 ? `${mktQ.data.summary.roas_30d.toFixed(2)}x` : "—"}
+                    hint={`${formatCurrency(mktQ.data.summary.rev_30d)} / ${formatCurrency(mktQ.data.summary.spend)}`}
+                    accent="emerald" />
+                  <MiniStat label="LTV 30d promedio"
+                    value={formatCurrency(mktQ.data.summary.avg_ltv_30d)}
+                    hint={`CAC signup ${formatCurrency(mktQ.data.summary.avg_cac_signup)}`}
+                    accent="primary" />
+                  <MiniStat label="Activation rate"
+                    value={`${mktQ.data.summary.avg_activation_pct.toFixed(1)}%`}
+                    hint={`${formatNumber(mktQ.data.summary.users_paid)} de ${formatNumber(mktQ.data.summary.signups)} pagaron`}
+                    accent="amber" />
+                  <MiniStat label="Retention to today"
+                    value={`${mktQ.data.summary.avg_retention_pct.toFixed(1)}%`}
+                    hint={`${formatNumber(mktQ.data.summary.active_now)} activos / ${formatNumber(mktQ.data.summary.signups)} cohort`}
+                    accent="primary" />
+                </div>
+                <CohortWeeklyTable weeks={mktQ.data.weeks} />
+              </Section>
+            )}
+
             {/* ── Section 5: Top productos atribuidos (cross) ── */}
             {showCross && topQ.data && topQ.data.items.length > 0 && (
               <Section title="Top productos atribuidos al cohort" icon={ShoppingBag} subtitle="SKUs (ML + TN) vendidos por dropshippers firmados en el periodo · top 12 por revenue">
@@ -506,6 +671,20 @@ export default function MetaAdsPage() {
                     </Link>
                   ))}
                 </div>
+              </Section>
+            )}
+
+            {/* ── Section 5b: Top Ads (creativos) ── */}
+            {(topAdsQ.data?.items.length ?? 0) > 0 && (
+              <Section title="Top Ads (creativos)" icon={Eye} subtitle={`${topAdsQ.data!.items.length} ads ordenados por spend en el periodo · que creativo funciona mejor`}>
+                <TopAdsGrid items={topAdsQ.data!.items} />
+              </Section>
+            )}
+
+            {/* ── Section 5c: Top Adsets ── */}
+            {(topAdsetsQ.data?.items.length ?? 0) > 0 && (
+              <Section title="Top Adsets" icon={Layers} subtitle={`${topAdsetsQ.data!.items.length} adsets · targeting + optimization goal + performance`}>
+                <TopAdsetsTable items={topAdsetsQ.data!.items} />
               </Section>
             )}
 
@@ -564,6 +743,14 @@ export default function MetaAdsPage() {
                     ));
                   })()}
                 </div>
+              </Section>
+            )}
+
+            {/* ── Section 10b: Spend pace por campaña activa ── */}
+            {(paceQ.data?.items.length ?? 0) > 0 && (
+              <Section title="Spend pace · campañas activas" icon={Target}
+                subtitle={`Spend de hoy vs pace esperado (lineal por hora AR) · ${paceQ.data!.items.length} activas con daily_budget`}>
+                <SpendPaceTable items={paceQ.data!.items} />
               </Section>
             )}
 
@@ -908,6 +1095,255 @@ function HourlyChart({ data }: { data: HourlyResp["data"] }) {
 
 function Legend({ color, label }: { color: string; label: string }) {
   return <span className="inline-flex items-center gap-1"><span className={`w-2 h-2 rounded-sm ${color} inline-block`} /> {label}</span>;
+}
+
+function FreshnessPill({ lastSyncedAt, isSyncing }: { lastSyncedAt: string | null; isSyncing: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  if (!lastSyncedAt) {
+    return (
+      <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-text-muted">
+        <span className="w-1.5 h-1.5 rounded-full bg-text-muted/50" /> Sin sync aun
+      </span>
+    );
+  }
+  const ageMs = now - new Date(lastSyncedAt).getTime();
+  const ageMin = Math.max(0, Math.floor(ageMs / 60_000));
+  const tone = ageMin <= 70 ? "emerald" : ageMin <= 180 ? "amber" : "rose";
+  const dotCls = tone === "emerald" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
+  const txtCls = tone === "emerald" ? "text-emerald-700" : tone === "amber" ? "text-amber-700" : "text-rose-700";
+  const label = ageMin < 1 ? "hace menos de 1 min"
+    : ageMin < 60 ? `hace ${ageMin} min`
+    : `hace ${Math.floor(ageMin / 60)}h ${ageMin % 60}m`;
+  return (
+    <span className={`ml-2 inline-flex items-center gap-1.5 text-[10px] font-semibold ${txtCls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dotCls} ${isSyncing ? "animate-pulse" : ""}`} />
+      Última sync {label} · auto cada 1h
+    </span>
+  );
+}
+
+function TodayVsYesterdayBox({ label, today, yesterday, delta, invertDelta }: {
+  label: string; today: string; yesterday: string; delta?: number; invertDelta?: boolean;
+}) {
+  const hasDelta = delta !== undefined && Number.isFinite(delta);
+  const up = hasDelta && (delta ?? 0) >= 0;
+  const isGood = invertDelta ? !up : up;
+  return (
+    <div className="bg-surface border border-border rounded-lg p-3">
+      <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-1">{label}</div>
+      <div className="flex items-baseline gap-2">
+        <div className="text-lg font-extrabold tabular-nums text-text">{today}</div>
+        {hasDelta && (
+          <span className={"text-[10px] font-bold tabular-nums inline-flex items-center " + (isGood ? "text-emerald-600" : "text-rose-600")}>
+            {up ? <ArrowUpRight size={10} /> : <ArrowDownRight size={10} />}
+            {Math.abs(delta!).toFixed(1)}%
+          </span>
+        )}
+      </div>
+      <div className="text-[10px] text-text-muted mt-0.5">vs ayer: {yesterday}</div>
+    </div>
+  );
+}
+
+function TopAdsGrid({ items }: { items: TopAdsResp["items"] }) {
+  if (!items?.length) return null;
+  const maxSpend = Math.max(1, ...items.map(i => i.spend));
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {items.map((ad) => (
+        <div key={ad.id} className="bg-surface border border-border rounded-lg p-3 hover:border-primary/40 transition flex flex-col">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <CampaignStatusBadge status={ad.effective_status || ad.status || "—"} />
+            <span className="text-[9px] text-text-muted font-mono">{ad.id}</span>
+          </div>
+          <div className="font-semibold text-text text-xs truncate" title={ad.name}>{ad.name}</div>
+          {ad.creative_summary && (
+            <div className="text-[10px] text-text-muted mt-1 line-clamp-2" title={ad.creative_summary}>{ad.creative_summary}</div>
+          )}
+          <div className="mt-2 h-1.5 bg-soft rounded overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-primary to-accent" style={{ width: `${(ad.spend / maxSpend) * 100}%` }} />
+          </div>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] tabular-nums">
+            <div>
+              <div className="text-text-muted">Spend</div>
+              <div className="font-bold text-text">{formatCurrency(ad.spend)}</div>
+            </div>
+            <div>
+              <div className="text-text-muted">CTR</div>
+              <div className="font-bold text-text">{ad.impressions > 0 ? `${(ad.clicks / ad.impressions * 100).toFixed(2)}%` : "—"}</div>
+            </div>
+            <div>
+              <div className="text-text-muted">CPC</div>
+              <div className="font-bold text-text">{ad.clicks > 0 ? formatCurrency(ad.spend / ad.clicks) : "—"}</div>
+            </div>
+          </div>
+          {ad.preview_url && (
+            <a href={ad.preview_url} target="_blank" rel="noreferrer"
+              className="mt-2 text-[10px] text-primary hover:underline inline-flex items-center gap-1">
+              Ver preview en Meta <ArrowUpRight size={10} />
+            </a>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TopAdsetsTable({ items }: { items: TopAdsetsResp["items"] }) {
+  if (!items?.length) return null;
+  return (
+    <div className="overflow-x-auto -mx-3">
+      <table className="w-full text-xs">
+        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+          <tr>
+            <th className="text-left px-3 py-2">Adset</th>
+            <th className="text-left px-2 py-2">Estado</th>
+            <th className="text-left px-2 py-2">Targeting</th>
+            <th className="text-left px-2 py-2">Goal · Billing</th>
+            <th className="text-right px-2 py-2">Daily budget</th>
+            <th className="text-right px-2 py-2">Spend</th>
+            <th className="text-right px-2 py-2">Impr</th>
+            <th className="text-right px-2 py-2">Clicks</th>
+            <th className="text-right px-2 py-2">CTR</th>
+            <th className="text-right px-3 py-2">CPC</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((s) => (
+            <tr key={s.id} className="border-t border-border hover:bg-soft/40">
+              <td className="px-3 py-2 max-w-[260px] truncate font-semibold text-text" title={s.name}>{s.name}</td>
+              <td className="px-2 py-2"><CampaignStatusBadge status={s.effective_status || s.status || "—"} /></td>
+              <td className="px-2 py-2 text-[10px] text-text-muted max-w-[200px] truncate" title={s.targeting_summary ?? ""}>{s.targeting_summary || "—"}</td>
+              <td className="px-2 py-2 text-[10px] text-text-muted">
+                {(s.optimization_goal || "—").toLowerCase()}<br />
+                <span className="text-[9px]">{(s.billing_event || "").toLowerCase()}</span>
+              </td>
+              <td className="px-2 py-2 text-right tabular-nums">{s.daily_budget ? formatCurrency(s.daily_budget) : "—"}</td>
+              <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(s.spend)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(s.impressions)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(s.clicks)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{s.impressions > 0 ? `${(s.clicks / s.impressions * 100).toFixed(2)}%` : "—"}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{s.clicks > 0 ? formatCurrency(s.spend / s.clicks) : "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SpendPaceTable({ items }: { items: SpendPaceItem[] }) {
+  if (!items?.length) return <div className="text-xs text-text-muted py-4 text-center">Sin campañas activas con daily_budget</div>;
+  return (
+    <div className="overflow-x-auto -mx-3">
+      <table className="w-full text-xs">
+        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+          <tr>
+            <th className="text-left px-3 py-2">Campaña</th>
+            <th className="text-right px-2 py-2">Daily budget</th>
+            <th className="text-right px-2 py-2">Spend hoy</th>
+            <th className="text-right px-2 py-2">Pace esperado</th>
+            <th className="text-left px-3 py-2">% día consumido · esperado</th>
+            <th className="text-right px-3 py-2">Δ vs pace</th>
+            <th className="text-right px-3 py-2">Ayer</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((c) => {
+            const tone = Math.abs(c.delta_pct) <= 15 ? "emerald" : Math.abs(c.delta_pct) <= 35 ? "amber" : "rose";
+            const cls = tone === "emerald" ? "text-emerald-600" : tone === "amber" ? "text-amber-600" : "text-rose-600";
+            const barCls = tone === "emerald" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
+            const sign = c.delta_pct > 0 ? "+" : "";
+            return (
+              <tr key={c.id} className="border-t border-border hover:bg-soft/40">
+                <td className="px-3 py-2 max-w-[260px] truncate font-semibold text-text" title={c.name ?? ""}>{c.name ?? "—"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(c.daily_budget)}</td>
+                <td className="px-2 py-2 text-right tabular-nums font-bold">{formatCurrency(c.spend_today)}</td>
+                <td className="px-2 py-2 text-right tabular-nums text-text-muted">{formatCurrency(c.expected_now)}</td>
+                <td className="px-3 py-2 min-w-[180px]">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 relative h-2 bg-soft rounded overflow-hidden">
+                      {/* expected marker */}
+                      <div className="absolute top-0 left-0 h-full bg-zinc-300/70" style={{ width: `${Math.min(100, c.expected_pct)}%` }} />
+                      <div className={"absolute top-0 left-0 h-full " + barCls} style={{ width: `${Math.min(100, c.pace_pct)}%`, opacity: 0.85 }} />
+                    </div>
+                    <span className={"text-[10px] tabular-nums font-bold " + cls}>{c.pace_pct.toFixed(0)}%</span>
+                    <span className="text-[9px] tabular-nums text-text-muted">esp {c.expected_pct.toFixed(0)}%</span>
+                  </div>
+                </td>
+                <td className={"px-3 py-2 text-right tabular-nums font-bold " + cls}>{sign}{c.delta_pct.toFixed(1)}%</td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-muted">{formatCurrency(c.spend_yesterday)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="text-[10px] text-text-muted mt-2 px-3">
+        Pace lineal: a las 12:00 AR se espera consumir 50% del daily_budget. Δ {">"} 35% = overspend / underdelivery atencion.
+      </div>
+    </div>
+  );
+}
+
+function CohortWeeklyTable({ weeks }: { weeks: MktUnidropRelationship["weeks"] }) {
+  if (!weeks?.length) return null;
+  const maxLtv = Math.max(1, ...weeks.map(w => w.ltv_first_30d));
+  return (
+    <div className="overflow-x-auto -mx-3">
+      <table className="w-full text-xs">
+        <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
+          <tr>
+            <th className="text-left px-3 py-2">Semana</th>
+            <th className="text-right px-2 py-2">Spend</th>
+            <th className="text-right px-2 py-2">Clicks</th>
+            <th className="text-right px-2 py-2">Signups</th>
+            <th className="text-right px-2 py-2">Subs</th>
+            <th className="text-right px-2 py-2">CAC signup</th>
+            <th className="text-right px-2 py-2">CAC sub</th>
+            <th className="text-right px-2 py-2">Activation%</th>
+            <th className="text-right px-2 py-2">LTV 30d</th>
+            <th className="text-right px-3 py-2">Retention now</th>
+          </tr>
+        </thead>
+        <tbody>
+          {weeks.map((w) => (
+            <tr key={w.week_start} className="border-t border-border hover:bg-soft/40">
+              <td className="px-3 py-2 font-semibold text-text font-mono tabular-nums">{w.week_start}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatCurrency(w.spend)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(w.clicks)}</td>
+              <td className="px-2 py-2 text-right tabular-nums font-bold">{formatNumber(w.signups)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{formatNumber(w.subs)}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{w.cac_signup > 0 ? formatCurrency(w.cac_signup) : "—"}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{w.cac_sub > 0 ? formatCurrency(w.cac_sub) : "—"}</td>
+              <td className="px-2 py-2 text-right tabular-nums">{w.activation_pct.toFixed(1)}%</td>
+              <td className="px-2 py-2 text-right">
+                <div className="flex items-center gap-2 justify-end">
+                  <div className="w-16 h-1.5 bg-soft rounded overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-emerald-500 to-teal-500"
+                      style={{ width: `${(w.ltv_first_30d / maxLtv) * 100}%` }} />
+                  </div>
+                  <span className="tabular-nums font-bold text-text w-16 text-right">{formatCurrency(w.ltv_first_30d)}</span>
+                </div>
+              </td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                <span className={w.retention_pct >= 60 ? "text-emerald-600" : w.retention_pct >= 30 ? "text-amber-600" : "text-rose-600"}>
+                  {w.retention_pct.toFixed(1)}%
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="text-[10px] text-text-muted mt-2 px-3">
+        Cohort = users con createdAt en la semana. LTV 30d = revenue PI PROCESSED en primeros 30d / cohort_size.
+        Retention now = % con subscription_status=&apos;active&apos; HOY. Comparar tendencia entre semanas para detectar deterioro de calidad.
+      </div>
+    </div>
+  );
 }
 
 function SyncRunCard({ run, onDismiss }: { run: SyncRun | undefined; onDismiss: () => void }) {
