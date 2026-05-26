@@ -3,10 +3,10 @@
 import { useState, useMemo } from "react";
 import {
   Bar, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
-  CartesianGrid, Legend, Line, ReferenceLine, Area,
+  CartesianGrid, Legend, Line, ReferenceLine, Area, LabelList,
 } from "recharts";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { DollarSign, Package, Layers, BarChart3, Calendar } from "lucide-react";
+import { DollarSign, Package, Layers, BarChart3, Calendar, TrendingUp, TrendingDown, Minus, Award, AlertTriangle } from "lucide-react";
 
 // Grafico de evolucion del SKU en sus 4 canales con 3 ejes de configuracion:
 //   - Granularidad: mes / semana / dia (data viene de la page, no del componente)
@@ -172,6 +172,49 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
   const forecastSplitIdx = forecastApplies && showForecast && series.length > 0 ? series.length - 0.5 : null;
   const granOptions: Granularity[] = ["day", "week", "month"];
 
+  // Stats narrativos: promedio, total, mejor / peor periodo, trend %.
+  // Se calculan sobre la serie real (sin filas de forecast). Trend = comparar
+  // mitad final de la ventana vs mitad inicial.
+  const stats = useMemo(() => {
+    if (series.length === 0) return null;
+    const values = series.map((m) => {
+      let total = 0;
+      for (const ch of ALL_CHANNELS) {
+        if (!activeChannels.has(ch)) continue;
+        const key = metric === "revenue" ? (`rev_${ch}` as keyof SeriesRow) : (ch as keyof SeriesRow);
+        total += Number(m[key]) || 0;
+      }
+      return { period: m.period, total };
+    });
+    const totalSum = values.reduce((acc, v) => acc + v.total, 0);
+    const avg = totalSum / values.length;
+    const nonZero = values.filter((v) => v.total > 0);
+    const best = nonZero.length ? nonZero.reduce((a, b) => (b.total > a.total ? b : a)) : null;
+    const worst = nonZero.length ? nonZero.reduce((a, b) => (b.total < a.total ? b : a)) : null;
+
+    // Trend = primera mitad vs segunda mitad
+    const half = Math.floor(values.length / 2);
+    let firstHalf = 0;
+    let secondHalf = 0;
+    for (let i = 0; i < values.length; i++) {
+      if (i < half) firstHalf += values[i].total;
+      else secondHalf += values[i].total;
+    }
+    const trendPct = firstHalf > 0 ? ((secondHalf - firstHalf) / firstHalf) * 100 : 0;
+    const current = values[values.length - 1] ?? null;
+
+    return { totalSum, avg, best, worst, trendPct, current, count: values.length };
+  }, [series, metric, activeChannels]);
+
+  // Mostrar labels de total sobre cada barra solo si hay pocas barras (no se
+  // amontonan ilegibles). >40 buckets quedan apretados; tampoco mostramos en
+  // forecast rows (esos ya tienen el badge "forecast").
+  const showLabels = chartData.length <= 40 && mode === "stacked";
+
+  // Label del ultimo bucket real (para marcar el "hoy" / periodo actual)
+  const realRows = chartData.filter((r) => !r.__forecast);
+  const lastRealLabel = realRows[realRows.length - 1]?.label as string | undefined;
+
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
       <div className="flex items-baseline justify-between flex-wrap gap-3 mb-4">
@@ -255,6 +298,61 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
           )}
         </div>
       </div>
+
+      {/* Resumen narrativo del periodo: total / promedio / mejor / peor / trend.
+          Cuenta la historia del SKU sin necesidad de pasar el mouse. */}
+      {stats && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3 text-xs">
+          <div className="bg-soft/40 border border-border rounded-lg px-2.5 py-1.5">
+            <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Total ventana</div>
+            <div className="font-extrabold tabular-nums text-text">{fmtFull(stats.totalSum, metric)}</div>
+            <div className="text-[10px] text-text-muted">{stats.count} {GRAN_LABELS[granularity].toLowerCase()}{stats.count === 1 ? "" : "s"}</div>
+          </div>
+          <div className="bg-primary/5 border border-primary/30 rounded-lg px-2.5 py-1.5">
+            <div className="text-[9px] uppercase tracking-wider text-primary/80 font-bold">Promedio</div>
+            <div className="font-extrabold tabular-nums text-primary">{fmtFull(Math.round(stats.avg), metric)}</div>
+            <div className="text-[10px] text-text-muted">por {GRAN_LABELS[granularity].toLowerCase()}</div>
+          </div>
+          {stats.best && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+              <div className="text-[9px] uppercase tracking-wider text-emerald-800 font-bold flex items-center gap-1">
+                <Award size={9} /> Mejor
+              </div>
+              <div className="font-extrabold tabular-nums text-emerald-900">{fmtFull(stats.best.total, metric)}</div>
+              <div className="text-[10px] text-emerald-800 truncate">{stats.best.period}</div>
+            </div>
+          )}
+          {stats.worst && stats.worst.period !== stats.best?.period && (
+            <div className="bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+              <div className="text-[9px] uppercase tracking-wider text-rose-800 font-bold flex items-center gap-1">
+                <AlertTriangle size={9} /> Peor
+              </div>
+              <div className="font-extrabold tabular-nums text-rose-900">{fmtFull(stats.worst.total, metric)}</div>
+              <div className="text-[10px] text-rose-800 truncate">{stats.worst.period}</div>
+            </div>
+          )}
+          <div className={`border rounded-lg px-2.5 py-1.5 ${
+            stats.trendPct > 5 ? "bg-emerald-50 border-emerald-200" :
+            stats.trendPct < -5 ? "bg-rose-50 border-rose-200" :
+            "bg-soft/40 border-border"
+          }`}>
+            <div className={`text-[9px] uppercase tracking-wider font-bold flex items-center gap-1 ${
+              stats.trendPct > 5 ? "text-emerald-800" :
+              stats.trendPct < -5 ? "text-rose-800" : "text-text-muted"
+            }`}>
+              {stats.trendPct > 5 ? <TrendingUp size={9} /> : stats.trendPct < -5 ? <TrendingDown size={9} /> : <Minus size={9} />}
+              Tendencia
+            </div>
+            <div className={`font-extrabold tabular-nums ${
+              stats.trendPct > 5 ? "text-emerald-900" :
+              stats.trendPct < -5 ? "text-rose-900" : "text-text"
+            }`}>
+              {stats.trendPct >= 0 ? "+" : ""}{stats.trendPct.toFixed(0)}%
+            </div>
+            <div className="text-[10px] text-text-muted">2da vs 1ra mitad</div>
+          </div>
+        </div>
+      )}
 
       {/* Toggles de canal (chips) — solo relevantes en modo apilado */}
       {mode === "stacked" && (
@@ -342,9 +440,56 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
               label={{ value: "forecast →", position: "top", fontSize: 10, fill: "#6b7280" }}
             />
           )}
-          {mode === "stacked" && ALL_CHANNELS.map((ch) => (
-            <Bar key={ch} dataKey={ch} stackId="canal" fill={CHANNEL_COLORS[ch]} isAnimationActive={false} />
-          ))}
+          {/* Linea horizontal de promedio del periodo — referencia visual rapida */}
+          {stats && stats.avg > 0 && (
+            <ReferenceLine
+              y={stats.avg}
+              stroke="#7c3aed"
+              strokeDasharray="3 3"
+              strokeOpacity={0.5}
+              label={{
+                value: `prom ${fmt(stats.avg, metric)}`,
+                position: "insideTopRight",
+                fontSize: 10,
+                fill: "#7c3aed",
+                fontWeight: 600,
+              }}
+            />
+          )}
+          {/* Marca el bucket "actual" (ultimo dato real) para que el ojo lo encuentre */}
+          {lastRealLabel && (
+            <ReferenceLine
+              x={lastRealLabel}
+              stroke="#10b981"
+              strokeWidth={1.5}
+              strokeOpacity={0.4}
+              label={{ value: "actual", position: "top", fontSize: 9, fill: "#059669", fontWeight: 600 }}
+            />
+          )}
+          {mode === "stacked" && ALL_CHANNELS.map((ch, idx) => {
+            const isLast = idx === ALL_CHANNELS.length - 1;
+            return (
+              <Bar
+                key={ch}
+                dataKey={ch}
+                stackId="canal"
+                fill={CHANNEL_COLORS[ch]}
+                isAnimationActive={false}
+              >
+                {/* Solo dibujamos el label sobre el TOP del stack (ultimo bar) */}
+                {isLast && showLabels && (
+                  <LabelList
+                    dataKey="__total"
+                    position="top"
+                    fontSize={9}
+                    fill="#374151"
+                    fontWeight={600}
+                    formatter={(v: number) => (v > 0 ? fmt(Number(v), metric) : "")}
+                  />
+                )}
+              </Bar>
+            );
+          })}
           {mode === "total" && (
             <Area
               type="monotone"
@@ -355,7 +500,18 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
               strokeWidth={2}
               isAnimationActive={false}
               name="Total"
-            />
+            >
+              {chartData.length <= 40 && (
+                <LabelList
+                  dataKey="__total"
+                  position="top"
+                  fontSize={9}
+                  fill="#5b21b6"
+                  fontWeight={600}
+                  formatter={(v: number) => (v > 0 ? fmt(Number(v), metric) : "")}
+                />
+              )}
+            </Area>
           )}
           {mode === "stacked" && (
             <Line
