@@ -118,13 +118,13 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ALL,
     children: [
-      { label: "Vista general",       href: "/dashboard/cs",         icon: HeartHandshake },
-      { label: "Bandeja CS",          href: "/dashboard/cs-acciones",icon: Target         },
-      { label: "Performance",         href: "/dashboard/cs-performance", icon: TrendingUp },
-      { label: "Cohortes",            href: "/dashboard/cohortes",   icon: Users          },
-      { label: "Segmentacion RFM",    href: "/dashboard/rfm",        icon: Target         },
-      { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows", icon: Repeat        },
-      { label: "NLP Cancelaciones",     href: "/dashboard/cancel-nlp", icon: AlertTriangle },
+      { label: "Vista general",         href: "/dashboard/cs",             icon: HeartHandshake, subGroup: "Operación"    },
+      { label: "Bandeja CS",            href: "/dashboard/cs-acciones",    icon: Target,         subGroup: "Operación"    },
+      { label: "Performance",           href: "/dashboard/cs-performance", icon: TrendingUp,     subGroup: "Análisis"     },
+      { label: "Cohortes",              href: "/dashboard/cohortes",       icon: Users,          subGroup: "Análisis"     },
+      { label: "Segmentacion RFM",      href: "/dashboard/rfm",            icon: Target,         subGroup: "Análisis"     },
+      { label: "RFM Flows (migración)", href: "/dashboard/rfm-flows",      icon: Repeat,         subGroup: "Análisis"     },
+      { label: "NLP Cancelaciones",     href: "/dashboard/cancel-nlp",     icon: AlertTriangle,  subGroup: "Inteligencia" },
     ],
   },
   { label: "Ventas",           href: "/dashboard/ventas",         icon: TrendingUp,      group: "Cross", roles: ALL },
@@ -147,11 +147,11 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ALL,
     children: [
-      { label: "Vista general",            href: "/dashboard/finanzas",                                icon: Wallet     },
-      { label: "Facturas Suscripciones",   href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText   },
-      { label: "Dev. Suscripciones",       href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw  },
-      { label: "Churn Suscripciones",      href: "/dashboard/gerencia/churn-suscripciones",            icon: TrendingDown },
-      { label: "Flujo de Fondos",          href: "/dashboard/finanzas/flujo-fondos",                   icon: PiggyBank  },
+      { label: "Vista general",          href: "/dashboard/finanzas",                             icon: Wallet,       subGroup: "Resumen"       },
+      { label: "Facturas Suscripciones", href: "/dashboard/finanzas/facturas-suscripciones-meli", icon: FileText,     subGroup: "Suscripciones" },
+      { label: "Dev. Suscripciones",     href: "/dashboard/finanzas/dev-suscripciones",           icon: RotateCcw,    subGroup: "Suscripciones" },
+      { label: "Churn Suscripciones",    href: "/dashboard/gerencia/churn-suscripciones",         icon: TrendingDown, subGroup: "Suscripciones" },
+      { label: "Flujo de Fondos",        href: "/dashboard/finanzas/flujo-fondos",                icon: PiggyBank,    subGroup: "Tesorería"     },
     ],
   },
   { label: "Mapa de distribucion", href: "/dashboard/mapa",       icon: MapIcon,         group: "Cross", roles: ALL },
@@ -204,13 +204,13 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ALL,
     children: [
-      { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag },
-      { label: "Omnicanal mayorista", href: "/dashboard/productos/omnicanal", icon: Layers      },
-      { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers      },
-      { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles    },
-      { label: "Forecast demanda",    href: "/dashboard/forecast",            icon: TrendingUp  },
-      { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign  },
-      { label: "Heatmap stock",       href: "/dashboard/stock-heatmap",       icon: Warehouse   },
+      { label: "Vista general",       href: "/dashboard/productos",           icon: ShoppingBag, subGroup: "Catálogo"  },
+      { label: "Omnicanal mayorista", href: "/dashboard/productos/omnicanal", icon: Layers,      subGroup: "Catálogo"  },
+      { label: "Análisis ABC + más",  href: "/dashboard/productos/analytics", icon: Layers,      subGroup: "Catálogo"  },
+      { label: "SKU Optimizer",       href: "/dashboard/sku-optimizer",       icon: Sparkles,    subGroup: "Planning"  },
+      { label: "Forecast demanda",    href: "/dashboard/forecast",            icon: TrendingUp,  subGroup: "Planning"  },
+      { label: "Costos importacion",  href: "/dashboard/costos",              icon: DollarSign,  subGroup: "Operativa" },
+      { label: "Heatmap stock",       href: "/dashboard/stock-heatmap",       icon: Warehouse,   subGroup: "Operativa" },
     ],
   },
   // UNISTORE — todo lo que la BD de Unistore permite, locked a unistore_api
@@ -489,46 +489,87 @@ export function Sidebar({
                         )}
                         {showChildren && (
                           <div className="ml-4 pl-2 border-l border-white/10">
-                            {it.children!.map((c, idx) => {
-                              const CI = c.icon;
-                              const cActive = isActive(c.href);
-                              const prev = idx > 0 ? it.children![idx - 1] : null;
-                              const showSubHeader =
-                                !!c.subGroup && (!prev || prev.subGroup !== c.subGroup);
-                              const childClass = cn(
-                                "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
-                                cActive
-                                  ? "bg-white/15 text-white shadow-inner"
-                                  : "text-white/65 hover:text-white hover:bg-white/8",
-                              );
-                              const inner = c.external ? (
-                                <a
-                                  href={c.href}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className={childClass}
-                                >
-                                  <CI size={12} className="shrink-0 opacity-75" />
-                                  <span className="flex-1 truncate">{c.label}</span>
-                                  <ExternalLink size={11} className="shrink-0 opacity-60" />
-                                </a>
-                              ) : (
-                                <Link href={c.href} className={childClass}>
-                                  <CI size={12} className="shrink-0 opacity-75" />
-                                  <span className="flex-1 truncate">{c.label}</span>
-                                </Link>
-                              );
-                              return (
-                                <div key={c.href}>
-                                  {showSubHeader && (
-                                    <div className="px-2.5 pt-2 pb-0.5 text-[9px] uppercase tracking-wider font-bold text-white/40">
-                                      {c.subGroup}
+                            {(() => {
+                              // Agrupar children consecutivos por subGroup.
+                              const blocks: Array<{ subGroup: string | null; items: NavItem[] }> = [];
+                              for (const c of it.children!) {
+                                const sg = c.subGroup ?? null;
+                                const last = blocks[blocks.length - 1];
+                                if (last && last.subGroup === sg) last.items.push(c);
+                                else blocks.push({ subGroup: sg, items: [c] });
+                              }
+                              const renderChild = (c: NavItem) => {
+                                const CI = c.icon;
+                                const cActive = isActive(c.href);
+                                const childClass = cn(
+                                  "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
+                                  cActive
+                                    ? "bg-white/15 text-white shadow-inner"
+                                    : "text-white/65 hover:text-white hover:bg-white/8",
+                                );
+                                return c.external ? (
+                                  <a
+                                    key={c.href}
+                                    href={c.href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className={childClass}
+                                  >
+                                    <CI size={12} className="shrink-0 opacity-75" />
+                                    <span className="flex-1 truncate">{c.label}</span>
+                                    <ExternalLink size={11} className="shrink-0 opacity-60" />
+                                  </a>
+                                ) : (
+                                  <Link key={c.href} href={c.href} className={childClass}>
+                                    <CI size={12} className="shrink-0 opacity-75" />
+                                    <span className="flex-1 truncate">{c.label}</span>
+                                  </Link>
+                                );
+                              };
+                              return blocks.map((block, bIdx) => {
+                                if (!block.subGroup) {
+                                  return (
+                                    <div key={`flat-${it.href}-${bIdx}`}>
+                                      {block.items.map(renderChild)}
                                     </div>
-                                  )}
-                                  {inner}
-                                </div>
-                              );
-                            })}
+                                  );
+                                }
+                                const sgKey = `sub:${it.href}::${block.subGroup}`;
+                                const sgActive = block.items.some((c) => isActive(c.href));
+                                const sgCollapsed = collapsed[sgKey] ?? true;
+                                const showSgItems = !sgCollapsed || sgActive;
+                                return (
+                                  <div key={sgKey} className="mt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggle(sgKey)}
+                                      className={cn(
+                                        "w-full flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider transition",
+                                        sgActive
+                                          ? "text-white/80 bg-white/5"
+                                          : "text-white/40 hover:text-white/70 hover:bg-white/5",
+                                      )}
+                                      aria-expanded={!sgCollapsed}
+                                    >
+                                      <span className="flex-1 text-left truncate">{block.subGroup}</span>
+                                      <span className="text-[9px] text-white/30 normal-case font-semibold">
+                                        {block.items.length}
+                                      </span>
+                                      <ChevronDown
+                                        size={11}
+                                        className={cn(
+                                          "shrink-0 opacity-60 transition-transform",
+                                          sgCollapsed && "-rotate-90",
+                                        )}
+                                      />
+                                    </button>
+                                    {showSgItems && (
+                                      <div className="mt-0.5">{block.items.map(renderChild)}</div>
+                                    )}
+                                  </div>
+                                );
+                              });
+                            })()}
                           </div>
                         )}
                       </div>
