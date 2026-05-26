@@ -169,6 +169,11 @@ def _startup() -> None:
         _refund_telemetry_db.init()
     except Exception as e:
         logging.warning("refund_telemetry_db init: %s", e)
+    from app.db import churn_insights_db as _churn_insights_db
+    try:
+        _churn_insights_db.init()
+    except Exception as e:
+        logging.warning("churn_insights_db init: %s", e)
     # Background scheduler (auto-cumples diario)
     try:
         from app.jobs.scheduler import start_scheduler

@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   PieChart, Pie, Cell, Legend, LabelList,
 } from "recharts";
-import { TrendingDown, TrendingUp, ArrowRight, AlertTriangle, DollarSign, CheckCircle2, XCircle, Clock, ExternalLink, Sparkles, X } from "lucide-react";
+import { TrendingDown, TrendingUp, ArrowRight, AlertTriangle, DollarSign, CheckCircle2, XCircle, Clock, ExternalLink, Sparkles, X, Loader2 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
 import { api } from "@/lib/api";
@@ -53,6 +53,7 @@ type ChurnResp = {
     form_completion_rate_pct: number | null;
     pending_refund_arg: number;
     revenue_churned_arg: number;
+    revenue_churned_real_arg: number;
   };
   by_status: Record<string, number>;
   by_reason: Array<{ reason: string; count: number }>;
@@ -75,6 +76,53 @@ type ChurnResp = {
   }>;
   recent_requests: RequestRow[];
 };
+
+type InsightPattern = {
+  title: string;
+  evidence: string;
+  severity: "high" | "medium" | "low";
+  metric?: string;
+};
+
+type InsightTaxonomy = {
+  category: string;
+  subcategory?: string;
+  count: number;
+  examples?: string[];
+};
+
+type InsightAction = {
+  scope: "dropshipper" | "segment" | "product" | "process";
+  target_label: string;
+  target_dropshipper_id?: number;
+  target_dni?: string;
+  action: string;
+  urgency: "urgent" | "this_week" | "monitor";
+  reasoning: string;
+  expected_impact_arg?: number;
+};
+
+type InsightPayload = {
+  summary: string;
+  patterns: InsightPattern[];
+  taxonomy_breakdown: InsightTaxonomy[];
+  action_recommendations: InsightAction[];
+  _meta?: { model: string | null; duration_ms: number; saved_id: number | null };
+};
+
+type InsightResp =
+  | { has_insight: false; period: Period; granularity: Granularity }
+  | {
+      has_insight: true;
+      id: number;
+      period: Period;
+      granularity: Granularity;
+      payload: InsightPayload;
+      model: string | null;
+      generated_by_email: string | null;
+      duration_ms: number | null;
+      created_at: string;
+    };
 
 type DrillDownResp = {
   period_start: string;
@@ -241,6 +289,28 @@ export default function ChurnSuscripcionesPage() {
     staleTime: 120_000,
   });
 
+  const queryClient = useQueryClient();
+
+  const { data: insight } = useQuery<InsightResp>({
+    queryKey: ["gerencia-churn-insight", period, granularity],
+    queryFn: () => api<InsightResp>(
+      `/api/dashboards/gerencia/churn-suscripciones/insights?period=${period}&granularity=${granularity}`,
+    ),
+    staleTime: 300_000,
+  });
+
+  const analyzeMutation = useMutation<InsightPayload, Error, { force: boolean }>({
+    mutationFn: async ({ force }) => {
+      return api<InsightPayload>(
+        `/api/dashboards/gerencia/churn-suscripciones/analyze?period=${period}&granularity=${granularity}&force=${force}`,
+        { method: "POST" },
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["gerencia-churn-insight", period, granularity] });
+    },
+  });
+
   return (
     <>
       <Topbar title="Churn de Suscripciones" subtitle="Cancelaciones MELI y fricción del form" hidePeriod />
@@ -307,9 +377,17 @@ export default function ChurnSuscripcionesPage() {
               <KpiCard
                 icon={<DollarSign className="w-4 h-4" />}
                 label="Revenue churned"
-                value={fmtMoney(data.kpis.revenue_churned_arg)}
+                value={fmtMoney(data.kpis.revenue_churned_real_arg ?? data.kpis.revenue_churned_arg)}
                 accent="rose"
-                hint="Acumulado pagado por los dropshippers cancelando"
+                hint={
+                  data.kpis.revenue_churned_real_arg != null
+                    ? `Real Talo · declarado ${fmtMoney(data.kpis.revenue_churned_arg)}${
+                        data.kpis.revenue_churned_arg > 0
+                          ? ` (${((data.kpis.revenue_churned_real_arg / data.kpis.revenue_churned_arg - 1) * 100).toFixed(1)}%)`
+                          : ""
+                      }`
+                    : "Acumulado declarado al solicitar baja"
+                }
               />
               <KpiCard
                 icon={<Clock className="w-4 h-4" />}
@@ -529,20 +607,16 @@ export default function ChurnSuscripcionesPage() {
                     </tbody>
                   </table>
                 )}
-                <div className="mt-4 pt-3 border-t border-border">
-                  <div className="rounded-lg bg-violet-50 border border-violet-200 p-3 text-xs text-text">
-                    <div className="flex items-center gap-2 mb-1 font-semibold text-primary">
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Análisis IA — Iteración 2
-                    </div>
-                    <p className="text-text-muted">
-                      En la próxima iteración, Gemini clasifica las razones libres en taxonomía estable
-                      y sugiere acciones por dropshipper (retención con descuento, contacto CS, fix técnico).
-                    </p>
-                  </div>
-                </div>
               </div>
             </div>
+
+            <AIInsightCard
+              insight={insight}
+              loading={analyzeMutation.isPending}
+              error={analyzeMutation.error}
+              onAnalyze={(force: boolean) => analyzeMutation.mutate({ force })}
+              freshResult={analyzeMutation.data}
+            />
 
             <div className="bg-white rounded-xl border border-border overflow-hidden">
               <div className="px-5 py-3 border-b border-border flex items-center justify-between">
@@ -773,6 +847,201 @@ function DrillDownModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+const SEVERITY_META: Record<"high" | "medium" | "low", { label: string; bg: string; border: string; text: string; dot: string }> = {
+  high:   { label: "Alta",   bg: "bg-rose-50",    border: "border-rose-300",    text: "text-rose-700",    dot: "bg-rose-500"   },
+  medium: { label: "Media",  bg: "bg-amber-50",   border: "border-amber-300",   text: "text-amber-700",   dot: "bg-amber-500"  },
+  low:    { label: "Baja",   bg: "bg-zinc-50",    border: "border-zinc-300",    text: "text-zinc-700",    dot: "bg-zinc-400"   },
+};
+
+const URGENCY_META: Record<"urgent" | "this_week" | "monitor", { label: string; bg: string; text: string }> = {
+  urgent:    { label: "Urgente",       bg: "bg-rose-100",    text: "text-rose-700" },
+  this_week: { label: "Esta semana",   bg: "bg-amber-100",   text: "text-amber-700" },
+  monitor:   { label: "Monitorear",    bg: "bg-zinc-100",    text: "text-zinc-700" },
+};
+
+function AIInsightCard({
+  insight, loading, error, onAnalyze, freshResult,
+}: {
+  insight: InsightResp | undefined;
+  loading: boolean;
+  error: Error | null;
+  onAnalyze: (force: boolean) => void;
+  freshResult: InsightPayload | undefined;
+}) {
+  const payload: InsightPayload | null =
+    freshResult ??
+    (insight && insight.has_insight ? insight.payload : null);
+  const meta = insight && insight.has_insight ? insight : null;
+  const hasContent = !!payload && (!!payload.summary || (payload.patterns?.length ?? 0) > 0 || (payload.action_recommendations?.length ?? 0) > 0);
+
+  return (
+    <div className="bg-gradient-to-br from-violet-50 via-white to-violet-50/30 rounded-xl border border-violet-200 p-5 space-y-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center shadow-md shadow-primary/30">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-text">Análisis IA del churn</h2>
+            <p className="text-xs text-text-muted">
+              {meta
+                ? `Generado ${fmtDateTime(meta.created_at)} por ${meta.generated_by_email ?? "—"} · modelo ${meta.model ?? "—"}${meta.duration_ms ? ` · ${(meta.duration_ms / 1000).toFixed(1)}s` : ""}`
+                : "Gemini 2.5 Flash clasifica las razones libres y sugiere acciones por dropshipper."}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {hasContent && (
+            <button
+              onClick={() => onAnalyze(true)}
+              disabled={loading}
+              className="px-3 py-1.5 text-xs rounded-lg border border-violet-300 text-primary hover:bg-violet-50 transition disabled:opacity-60 font-semibold"
+            >
+              {loading ? (<><Loader2 className="w-3 h-3 inline animate-spin mr-1" /> Re-analizando...</>) : "Re-analizar"}
+            </button>
+          )}
+          {!hasContent && (
+            <button
+              onClick={() => onAnalyze(false)}
+              disabled={loading}
+              className="px-4 py-2 text-sm rounded-lg bg-gradient-to-r from-primary to-accent text-white font-semibold shadow-md shadow-primary/30 hover:shadow-lg transition disabled:opacity-60"
+            >
+              {loading ? (<><Loader2 className="w-4 h-4 inline animate-spin mr-2" /> Analizando con Gemini...</>) : "Analizar con IA"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-sm bg-rose-50 border border-rose-200 text-rose-700 rounded-lg px-3 py-2">
+          Falló el análisis: {error.message}
+        </div>
+      )}
+
+      {!hasContent && !loading && !error && (
+        <div className="rounded-lg bg-white/60 border border-violet-100 p-4 text-sm text-text-muted">
+          Todavía no hay análisis IA para este período + granularidad. Apretá <span className="font-semibold text-primary">Analizar con IA</span> para generar uno con las cancelaciones actuales. El resultado se persiste para verlo después sin re-generar.
+        </div>
+      )}
+
+      {payload?.summary && (
+        <div className="rounded-lg bg-white/80 border border-violet-100 p-4">
+          <div className="text-[11px] uppercase tracking-wider text-primary font-bold mb-1">Resumen ejecutivo</div>
+          <p className="text-sm text-text leading-relaxed">{payload.summary}</p>
+        </div>
+      )}
+
+      {(payload?.patterns?.length ?? 0) > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-2">
+            Hallazgos ({payload!.patterns.length})
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {payload!.patterns.map((p, i) => {
+              const sev = SEVERITY_META[p.severity];
+              return (
+                <div key={i} className={`rounded-lg border p-3 ${sev.bg} ${sev.border}`}>
+                  <div className="flex items-start justify-between gap-2 mb-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full ${sev.dot}`} />
+                      <span className="text-sm font-semibold text-text">{p.title}</span>
+                    </div>
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${sev.text}`}>{sev.label}</span>
+                  </div>
+                  <p className="text-xs text-text-muted">{p.evidence}</p>
+                  {p.metric && <div className="text-[10px] text-text-muted mt-1 font-mono">{p.metric}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(payload?.taxonomy_breakdown?.length ?? 0) > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-2">
+            Taxonomía (clasificación LLM del campo libre)
+          </div>
+          <div className="space-y-1.5">
+            {payload!.taxonomy_breakdown.map((t, i) => (
+              <div key={i} className="bg-white/60 rounded-lg border border-violet-100 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-text">
+                    {t.category}
+                    {t.subcategory && <span className="text-text-muted font-normal"> · {t.subcategory}</span>}
+                  </span>
+                  <span className="text-sm font-mono font-bold text-primary">{t.count}</span>
+                </div>
+                {t.examples && t.examples.length > 0 && (
+                  <div className="text-[11px] text-text-muted italic mt-0.5">
+                    {t.examples.slice(0, 2).map((e) => `"${e.slice(0, 80)}"`).join(" · ")}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(payload?.action_recommendations?.length ?? 0) > 0 && (
+        <div>
+          <div className="text-[11px] uppercase tracking-wider text-text-muted font-bold mb-2">
+            Recomendaciones de acción ({payload!.action_recommendations.length})
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wider text-text-muted border-b border-violet-100">
+                  <th className="text-left py-2 px-2 font-semibold">Urgencia</th>
+                  <th className="text-left py-2 px-2 font-semibold">Target</th>
+                  <th className="text-left py-2 px-2 font-semibold">Acción · razón</th>
+                  <th className="text-right py-2 px-2 font-semibold">Impacto $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payload!.action_recommendations.map((a, i) => {
+                  const urg = URGENCY_META[a.urgency];
+                  return (
+                    <tr key={i} className="border-b border-violet-100 last:border-0">
+                      <td className="py-2 px-2 align-top">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${urg.bg} ${urg.text}`}>
+                          {urg.label}
+                        </span>
+                      </td>
+                      <td className="py-2 px-2 align-top">
+                        <div className="text-[10px] uppercase tracking-wider text-text-muted">{a.scope}</div>
+                        {a.target_dropshipper_id ? (
+                          <Link
+                            href={`/dashboard/dropshipper/${a.target_dropshipper_id}`}
+                            target="_blank"
+                            className="text-text hover:text-primary hover:underline font-medium text-sm"
+                          >
+                            {a.target_label} <ExternalLink className="w-3 h-3 inline" />
+                          </Link>
+                        ) : (
+                          <span className="text-text font-medium text-sm">{a.target_label}</span>
+                        )}
+                        {a.target_dni && <div className="text-[10px] text-text-muted font-mono">DNI {a.target_dni}</div>}
+                      </td>
+                      <td className="py-2 px-2 align-top">
+                        <div className="text-sm text-text">{a.action}</div>
+                        <div className="text-[11px] text-text-muted mt-0.5 italic">{a.reasoning}</div>
+                      </td>
+                      <td className="py-2 px-2 text-right align-top font-mono text-text-muted text-sm whitespace-nowrap">
+                        {a.expected_impact_arg != null && a.expected_impact_arg > 0 ? fmtMoney(a.expected_impact_arg) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

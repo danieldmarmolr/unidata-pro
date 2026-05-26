@@ -13,6 +13,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import text
+
+from app.db.engines import get_engine
 from app.db.local_persistence import get_conn
 
 log = logging.getLogger("unidata.subscription_churn")
@@ -261,6 +264,12 @@ def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
     if total_form_errors + total_requests > 0:
         completion_rate = round(total_requests / (total_form_errors + total_requests) * 100, 1)
 
+    dropshipper_ids = sorted({int(r["dropshipper_user_id"]) for r in recent_requests if r.get("dropshipper_user_id")})
+    real_revenue_by_user, real_total = _real_revenue_from_talo(dropshipper_ids)
+    for r in recent_requests:
+        uid = r.get("dropshipper_user_id")
+        r["paid_subscription_total_real_arg"] = real_revenue_by_user.get(int(uid)) if uid else None
+
     return {
         "period": period,
         "granularity": granularity,
@@ -275,6 +284,7 @@ def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
             "form_completion_rate_pct": completion_rate,
             "pending_refund_arg": pending_refund_arg,
             "revenue_churned_arg": revenue_churned_arg,
+            "revenue_churned_real_arg": real_total,
         },
         "by_status": by_status,
         "by_reason": by_reason,
@@ -294,6 +304,36 @@ def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
         "failed_users": failed_users,
         "recent_requests": recent_requests,
     }
+
+
+def _real_revenue_from_talo(dropshipper_ids: list[int]) -> tuple[dict[int, float], float]:
+    """Cruza los dropshippers que pidieron baja contra PaymentIntentSubscription
+    en unidrop_api para obtener el revenue REAL pagado (status PROCESSED).
+    Devuelve (mapa user_id -> total, sumatoria total).
+    """
+    if not dropshipper_ids:
+        return {}, 0.0
+    try:
+        eng = get_engine("unidrop")
+        with eng.connect() as cx:
+            rows = cx.execute(
+                text("""
+                    SELECT "userId"::bigint AS user_id,
+                           COALESCE(SUM("paidAmount"), 0)::float AS total
+                    FROM public."PaymentIntentSubscription"
+                    WHERE status::text = 'PROCESSED'
+                      AND "userId" = ANY(:ids)
+                    GROUP BY "userId"
+                """),
+                {"ids": dropshipper_ids},
+            ).mappings().all()
+    except Exception as e:
+        log.warning("no se pudo cruzar PaymentIntentSubscription: %s", e)
+        return {}, 0.0
+
+    by_user = {int(r["user_id"]): float(r["total"] or 0) for r in rows}
+    total = sum(by_user.values())
+    return by_user, total
 
 
 def get_drill_down(period_start: str, period_end: str) -> dict:

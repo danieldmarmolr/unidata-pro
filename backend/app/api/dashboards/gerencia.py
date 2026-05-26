@@ -201,8 +201,6 @@ def get_gerencia_churn_drill(
     require_area(user, ["finanzas", "administracion", "cs"])
     return subscription_churn.get_drill_down(period_start=period_start, period_end=period_end)
 
-    return _build()
-
 
 @router.get("/gerencia/explain/{metric}")
 def get_gerencia_explain(
@@ -248,3 +246,38 @@ def get_gerencia_meta_explain(
         return explain_meta_unidrop(period=period)
 
     return _build()
+
+
+@router.post("/gerencia/churn-suscripciones/analyze")
+def post_gerencia_churn_analyze(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["30d", "90d", "6m", "1y"], Query()] = "30d",
+    granularity: Annotated[Literal["day", "week", "month", "quarter", "year"], Query()] = "week",
+    force: Annotated[bool, Query()] = False,
+) -> dict:
+    """Genera (o devuelve cache 1h) un analisis LLM Gemini sobre el churn del
+    periodo. Persiste en subscription_churn_insights. force=true ignora cache."""
+    require_area(user, ["finanzas", "administracion", "cs"])
+    from app.services import subscription_churn_llm
+    return subscription_churn_llm.analyze(
+        period=period,
+        granularity=granularity,
+        force=force,
+        generated_by_id=user.get("id"),
+        generated_by_email=user.get("email"),
+    )
+
+
+@router.get("/gerencia/churn-suscripciones/insights")
+def get_gerencia_churn_insights(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["30d", "90d", "6m", "1y"], Query()] = "30d",
+    granularity: Annotated[Literal["day", "week", "month", "quarter", "year"], Query()] = "week",
+) -> dict:
+    """Devuelve el ultimo analisis LLM persistido (sin regenerar)."""
+    require_area(user, ["finanzas", "administracion", "cs"])
+    from app.db import churn_insights_db
+    latest = churn_insights_db.get_latest(period=period, granularity=granularity)
+    if not latest:
+        return {"has_insight": False, "period": period, "granularity": granularity}
+    return {"has_insight": True, **latest}
