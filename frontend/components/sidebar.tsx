@@ -56,6 +56,10 @@ import {
   Search,
   CalendarClock,
   Calendar,
+  Inbox,
+  GraduationCap,
+  IdCard,
+  Folder,
 } from "lucide-react";
 
 type Role = "ceo" | "admin" | "user" | "gerencia" | "analista" | "lector";
@@ -77,6 +81,10 @@ type NavItem = {
   /** Si presente, colaboradores con esas areas (o gerentes/admin) lo ven. */
   areas?: AreaSlug[];
   children?: NavItem[];
+  /** Etiqueta de sub-grupo dentro del padre. Children con el mismo subGroup se
+   * renderizan agrupados con un header chiquito. Si nadie lo usa, se renderiza
+   * la lista plana como antes. */
+  subGroup?: string;
   /** Sub-app sincronizada que vive en otro subdominio (ej. flujo-fondos). Abre en nueva tab. */
   external?: boolean;
 };
@@ -152,20 +160,29 @@ const ITEMS: NavItem[] = [
     group: "Cross",
     roles: ALL,
     children: [
-      { label: "Feed",         href: "/dashboard/people",              icon: Megaphone },
-      { label: "Mensajes",     href: "/dashboard/people/dms",          icon: HeartHandshake },
-      { label: "Inbox",        href: "/dashboard/people/inbox",        icon: Bell      },
-      { label: "Buscar",       href: "/dashboard/people/search",       icon: Search    },
-      { label: "Bookmarks",    href: "/dashboard/people/bookmarks",    icon: BookOpen  },
-      { label: "Vacaciones",   href: "/dashboard/people/time-off",     icon: CalendarClock },
-      { label: "Eventos",      href: "/dashboard/people/events",       icon: Calendar },
-      { label: "1:1s",         href: "/dashboard/people/one-on-ones",  icon: UserCircle },
-      { label: "Onboarding",   href: "/dashboard/people/onboarding",   icon: Wand2     },
-      { label: "Encuestas",    href: "/dashboard/people/surveys",      icon: Sparkles  },
-      { label: "Directorio",   href: "/dashboard/people/directory",    icon: Users     },
-      { label: "Org Chart",    href: "/dashboard/people/org-chart",    icon: Network   },
-      { label: "Kudos",        href: "/dashboard/people/kudos",        icon: Award     },
-      { label: "Insights",     href: "/dashboard/people/insights",     icon: TrendingUp },
+      // Comunicación interna del equipo
+      { label: "Feed",         href: "/dashboard/people",          icon: Megaphone,     subGroup: "Comunicación" },
+      { label: "Bandeja",      href: "/dashboard/people/bandeja",  icon: Inbox,         subGroup: "Comunicación" },
+      { label: "Buscar",       href: "/dashboard/people/search",   icon: Search,        subGroup: "Comunicación" },
+      { label: "Bookmarks",    href: "/dashboard/people/bookmarks",icon: BookOpen,      subGroup: "Comunicación" },
+      // Mi gestión personal (RRHH del colaborador)
+      { label: "Mi legajo",    href: "/dashboard/people/legajo",       icon: IdCard,    subGroup: "Mi gestión personal" },
+      { label: "Documentos",   href: "/dashboard/people/documentos",   icon: Folder,    subGroup: "Mi gestión personal" },
+      { label: "Recibos sueldo", href: "/dashboard/people/recibos",    icon: Coins,     subGroup: "Mi gestión personal" },
+      { label: "Contratos",    href: "/dashboard/people/contratos",    icon: ScrollText,subGroup: "Mi gestión personal" },
+      // Equipo
+      { label: "Directorio",   href: "/dashboard/people/directory",    icon: Users,         subGroup: "Equipo" },
+      { label: "Org Chart",    href: "/dashboard/people/org-chart",    icon: Network,       subGroup: "Equipo" },
+      { label: "1:1s",         href: "/dashboard/people/one-on-ones",  icon: UserCircle,    subGroup: "Equipo" },
+      { label: "Kudos",        href: "/dashboard/people/kudos",        icon: Award,         subGroup: "Equipo" },
+      { label: "Encuestas",    href: "/dashboard/people/surveys",      icon: Sparkles,      subGroup: "Equipo" },
+      // Calendario del equipo
+      { label: "Vacaciones",   href: "/dashboard/people/time-off",     icon: CalendarClock, subGroup: "Calendario" },
+      { label: "Eventos",      href: "/dashboard/people/events",       icon: Calendar,      subGroup: "Calendario" },
+      // Capacitación
+      { label: "Aprende UNIDATA", href: "/dashboard/people/aprende",   icon: GraduationCap, subGroup: "Aprende UNIDATA" },
+      // Métricas People (solo gerencia/admin/people)
+      { label: "Insights",     href: "/dashboard/people/insights",     icon: TrendingUp,    subGroup: "Métricas" },
     ],
   },
   {
@@ -470,39 +487,44 @@ export function Sidebar({
                         )}
                         {showChildren && (
                           <div className="ml-4 pl-2 border-l border-white/10">
-                            {it.children!.map((c) => {
+                            {it.children!.map((c, idx) => {
                               const CI = c.icon;
                               const cActive = isActive(c.href);
+                              const prev = idx > 0 ? it.children![idx - 1] : null;
+                              const showSubHeader =
+                                !!c.subGroup && (!prev || prev.subGroup !== c.subGroup);
                               const childClass = cn(
                                 "flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg my-0.5 text-[13px] transition",
                                 cActive
                                   ? "bg-white/15 text-white shadow-inner"
                                   : "text-white/65 hover:text-white hover:bg-white/8",
                               );
-                              if (c.external) {
-                                return (
-                                  <a
-                                    key={c.href}
-                                    href={c.href}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className={childClass}
-                                  >
-                                    <CI size={12} className="shrink-0 opacity-75" />
-                                    <span className="flex-1 truncate">{c.label}</span>
-                                    <ExternalLink size={11} className="shrink-0 opacity-60" />
-                                  </a>
-                                );
-                              }
-                              return (
-                                <Link
-                                  key={c.href}
+                              const inner = c.external ? (
+                                <a
                                   href={c.href}
+                                  target="_blank"
+                                  rel="noreferrer"
                                   className={childClass}
                                 >
                                   <CI size={12} className="shrink-0 opacity-75" />
                                   <span className="flex-1 truncate">{c.label}</span>
+                                  <ExternalLink size={11} className="shrink-0 opacity-60" />
+                                </a>
+                              ) : (
+                                <Link href={c.href} className={childClass}>
+                                  <CI size={12} className="shrink-0 opacity-75" />
+                                  <span className="flex-1 truncate">{c.label}</span>
                                 </Link>
+                              );
+                              return (
+                                <div key={c.href}>
+                                  {showSubHeader && (
+                                    <div className="px-2.5 pt-2 pb-0.5 text-[9px] uppercase tracking-wider font-bold text-white/40">
+                                      {c.subGroup}
+                                    </div>
+                                  )}
+                                  {inner}
+                                </div>
                               );
                             })}
                           </div>

@@ -154,6 +154,16 @@ def _startup() -> None:
         _people_hr_db.init()
     except Exception as e:
         logging.warning("people_hr_db init: %s", e)
+    from app.db import aprende_db as _aprende_db
+    try:
+        _aprende_db.init()
+    except Exception as e:
+        logging.warning("aprende_db init: %s", e)
+    from app.db import personal_db as _personal_db
+    try:
+        _personal_db.init()
+    except Exception as e:
+        logging.warning("personal_db init: %s", e)
     # Background scheduler (auto-cumples diario)
     try:
         from app.jobs.scheduler import start_scheduler
@@ -232,6 +242,12 @@ app.include_router(people_api.router)
 
 from app.api import people_hr as people_hr_api
 app.include_router(people_hr_api.router)
+
+from app.api import aprende as aprende_api
+app.include_router(aprende_api.router)
+
+from app.api import personal as personal_api
+app.include_router(personal_api.router)
 
 
 @app.get("/api/health")
