@@ -1,13 +1,15 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
-  Bar, ComposedChart, Line, ReferenceLine, ResponsiveContainer,
+  Bar, ComposedChart, Line, ResponsiveContainer,
   Tooltip, XAxis, YAxis, CartesianGrid, LabelList,
 } from "recharts";
-import { formatCurrency, formatNumber } from "@/lib/utils";
+import { formatNumber } from "@/lib/utils";
 import {
-  Package, TrendingUp, TrendingDown, Minus, DollarSign, Calendar,
-  Wallet, ChevronRight, AlertTriangle, CheckCircle2,
+  Package, TrendingUp, TrendingDown, Minus, Calendar,
+  Wallet, ChevronRight, AlertTriangle, CheckCircle2, ArrowUpDown, ArrowDown, ArrowUp,
+  ExternalLink, Filter,
 } from "lucide-react";
 
 // Cruce lote x ventas omnicanal. Cada lote define un periodo (desde su
@@ -17,6 +19,7 @@ import {
 
 export type LoteConsumption = {
   lote: string | null;
+  lote_id: number | null;
   proveedor: string | null;
   fecha_ingreso: string;
   fecha_fin: string;
@@ -61,6 +64,12 @@ export type LotesConsumptionPayload = {
 
 type Props = { data: LotesConsumptionPayload | null | undefined; loading?: boolean };
 
+type SortKey =
+  | "fecha" | "costo_usd" | "costo_ars" | "units_sold" | "revenue"
+  | "ganancia" | "margen_pct" | "consumido_pct";
+type SortDir = "asc" | "desc";
+type EstadoFilter = "all" | "vigente" | "agotado" | "sin_ventas";
+
 function fmtShortAr(v: number): string {
   if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
@@ -73,7 +82,75 @@ function trendIcon(delta: number) {
   return { Icon: Minus, tone: "text-text-muted" };
 }
 
+function loteYear(fecha: string): string {
+  return fecha?.slice(0, 4) ?? "?";
+}
+
 export function SkuLotesConsumption({ data, loading }: Props) {
+  const [sortKey, setSortKey] = useState<SortKey>("fecha");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [estado, setEstado] = useState<EstadoFilter>("all");
+  const [proveedor, setProveedor] = useState<string>("all");
+  const [year, setYear] = useState<string>("all");
+
+  function clickSort(k: SortKey) {
+    if (sortKey === k) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(k);
+      setSortDir(k === "fecha" ? "desc" : "desc");
+    }
+  }
+
+  const proveedores = useMemo(() => {
+    if (!data) return [] as string[];
+    const set = new Set<string>();
+    for (const l of data.lotes) {
+      if (l.proveedor) set.add(l.proveedor);
+    }
+    return Array.from(set).sort();
+  }, [data]);
+
+  const years = useMemo(() => {
+    if (!data) return [] as string[];
+    const set = new Set<string>();
+    for (const l of data.lotes) {
+      set.add(loteYear(l.fecha_ingreso));
+    }
+    return Array.from(set).sort().reverse();
+  }, [data]);
+
+  const filteredLotes = useMemo(() => {
+    if (!data) return [];
+    let rows = [...data.lotes];
+
+    if (estado === "vigente") rows = rows.filter((l) => l.vigente);
+    if (estado === "agotado") rows = rows.filter((l) => !l.vigente && l.units_sold > 0);
+    if (estado === "sin_ventas") rows = rows.filter((l) => l.units_sold === 0);
+
+    if (proveedor !== "all") rows = rows.filter((l) => l.proveedor === proveedor);
+    if (year !== "all") rows = rows.filter((l) => loteYear(l.fecha_ingreso) === year);
+
+    rows.sort((a, b) => {
+      let va: number | string = 0;
+      let vb: number | string = 0;
+      switch (sortKey) {
+        case "fecha": va = a.fecha_ingreso ?? ""; vb = b.fecha_ingreso ?? ""; break;
+        case "costo_usd": va = a.costo_unit_usd ?? 0; vb = b.costo_unit_usd ?? 0; break;
+        case "costo_ars": va = a.costo_unit_ars ?? 0; vb = b.costo_unit_ars ?? 0; break;
+        case "units_sold": va = a.units_sold; vb = b.units_sold; break;
+        case "revenue": va = a.revenue; vb = b.revenue; break;
+        case "ganancia": va = a.ganancia; vb = b.ganancia; break;
+        case "margen_pct": va = a.margen_pct ?? -999; vb = b.margen_pct ?? -999; break;
+        case "consumido_pct": va = a.consumido_pct ?? -1; vb = b.consumido_pct ?? -1; break;
+      }
+      const cmp = typeof va === "string" ? va.localeCompare(String(vb)) : Number(va) - Number(vb);
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+    return rows;
+  }, [data, sortKey, sortDir, estado, proveedor, year]);
+
   if (loading) {
     return <div className="bg-surface border border-border rounded-xl p-5 h-[420px] animate-pulse mb-6" />;
   }
@@ -235,20 +312,98 @@ export function SkuLotesConsumption({ data, loading }: Props) {
         </div>
       </div>
 
+      {/* Barra de filtros */}
+      <div className="flex items-center gap-3 flex-wrap mb-3 text-xs">
+        <div className="inline-flex items-center gap-1 text-text-muted">
+          <Filter size={11} />
+          <span className="font-semibold">Filtros:</span>
+        </div>
+        {/* Estado chips */}
+        <div className="inline-flex rounded-lg border border-border bg-soft p-0.5">
+          {([
+            ["all", `Todos (${lotes.length})`],
+            ["vigente", `Vigente (${lotes.filter((l) => l.vigente).length})`],
+            ["agotado", `Agotado (${lotes.filter((l) => !l.vigente && l.units_sold > 0).length})`],
+            ["sin_ventas", `Sin ventas (${lotes.filter((l) => l.units_sold === 0).length})`],
+          ] as Array<[EstadoFilter, string]>).map(([k, lbl]) => (
+            <button
+              key={k}
+              onClick={() => setEstado(k)}
+              className={`px-2 py-0.5 rounded-md ${estado === k ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"}`}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+        {/* Proveedor */}
+        {proveedores.length > 1 && (
+          <div className="inline-flex items-center gap-1.5">
+            <span className="text-text-muted">Proveedor:</span>
+            <select
+              value={proveedor}
+              onChange={(e) => setProveedor(e.target.value)}
+              className="bg-soft border border-border rounded-md px-1.5 py-0.5 text-xs"
+            >
+              <option value="all">Todos</option>
+              {proveedores.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+        )}
+        {/* Año chips */}
+        {years.length > 1 && (
+          <div className="inline-flex items-center gap-1">
+            <span className="text-text-muted">Año:</span>
+            <div className="inline-flex rounded-lg border border-border bg-soft p-0.5">
+              <button
+                onClick={() => setYear("all")}
+                className={`px-1.5 py-0.5 rounded-md ${year === "all" ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"}`}
+              >
+                Todos
+              </button>
+              {years.map((y) => (
+                <button
+                  key={y}
+                  onClick={() => setYear(y)}
+                  className={`px-1.5 py-0.5 rounded-md ${year === y ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"}`}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {(estado !== "all" || proveedor !== "all" || year !== "all") && (
+          <button
+            onClick={() => { setEstado("all"); setProveedor("all"); setYear("all"); }}
+            className="text-[11px] text-primary hover:underline"
+          >
+            limpiar filtros
+          </button>
+        )}
+        <div className="text-text-muted ml-auto">
+          {filteredLotes.length} {filteredLotes.length === 1 ? "lote" : "lotes"} mostrando
+        </div>
+      </div>
+
       {/* Tabla detalle por lote */}
       <div className="border border-border rounded-lg overflow-hidden">
         <div className="bg-soft/60 px-3 py-2 grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wider text-text-muted font-bold">
-          <div className="col-span-3">Lote · Período</div>
-          <div className="col-span-1 text-right">Costo USD</div>
-          <div className="col-span-1 text-right">Costo ARS</div>
-          <div className="col-span-2 text-right">Vendidas · vel/d</div>
-          <div className="col-span-1 text-right">Revenue</div>
-          <div className="col-span-1 text-right">Ganancia</div>
-          <div className="col-span-1 text-right">Margen</div>
-          <div className="col-span-2">Consumido del lote</div>
+          <SortHeader col="col-span-3" sortKey="fecha" current={sortKey} dir={sortDir} onClick={clickSort}>Lote · Período</SortHeader>
+          <SortHeader col="col-span-1 text-right" sortKey="costo_usd" current={sortKey} dir={sortDir} onClick={clickSort}>Costo USD</SortHeader>
+          <SortHeader col="col-span-1 text-right" sortKey="costo_ars" current={sortKey} dir={sortDir} onClick={clickSort}>Costo ARS</SortHeader>
+          <SortHeader col="col-span-2 text-right" sortKey="units_sold" current={sortKey} dir={sortDir} onClick={clickSort}>Vendidas · vel/d</SortHeader>
+          <SortHeader col="col-span-1 text-right" sortKey="revenue" current={sortKey} dir={sortDir} onClick={clickSort}>Revenue</SortHeader>
+          <SortHeader col="col-span-1 text-right" sortKey="ganancia" current={sortKey} dir={sortDir} onClick={clickSort}>Ganancia</SortHeader>
+          <SortHeader col="col-span-1 text-right" sortKey="margen_pct" current={sortKey} dir={sortDir} onClick={clickSort}>Margen</SortHeader>
+          <SortHeader col="col-span-2" sortKey="consumido_pct" current={sortKey} dir={sortDir} onClick={clickSort}>Consumido del lote</SortHeader>
         </div>
         <div className="divide-y divide-border">
-          {lotes.map((l) => {
+          {filteredLotes.length === 0 && (
+            <div className="px-3 py-6 text-center text-text-muted text-xs italic">
+              Ningún lote coincide con los filtros aplicados.
+            </div>
+          )}
+          {filteredLotes.map((l) => {
             const consumed = l.consumido_pct ?? 0;
             const cap = Math.min(100, consumed);
             const over = consumed > 100;
@@ -257,16 +412,28 @@ export function SkuLotesConsumption({ data, loading }: Props) {
                 <div className="col-span-3 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <Package size={11} className="text-primary shrink-0" />
-                    <span className="font-mono text-xs font-bold truncate" title={l.lote ?? ""}>{l.lote ?? "?"}</span>
+                    {l.lote_id ? (
+                      <a
+                        href={`/dashboard/costos?lote_id=${l.lote_id}`}
+                        className="font-mono text-xs font-bold truncate text-primary hover:underline inline-flex items-center gap-1 group"
+                        title={`Ver detalle del lote ${l.lote ?? l.lote_id}`}
+                      >
+                        {l.lote ?? `#${l.lote_id}`}
+                        <ExternalLink size={9} className="opacity-50 group-hover:opacity-100" />
+                      </a>
+                    ) : (
+                      <span className="font-mono text-xs font-bold truncate" title={l.lote ?? ""}>{l.lote ?? "?"}</span>
+                    )}
                     {l.vigente && (
                       <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
                         <CheckCircle2 size={8} /> vigente
                       </span>
                     )}
                   </div>
-                  <div className="text-[10px] text-text-muted mt-0.5 flex items-center gap-1">
+                  <div className="text-[10px] text-text-muted mt-0.5 flex items-center gap-1 flex-wrap">
                     <Calendar size={9} />
                     {l.fecha_ingreso} → {l.fecha_fin} <span className="opacity-70">({l.dias}d)</span>
+                    {l.proveedor && <span className="opacity-70">· {l.proveedor}</span>}
                   </div>
                 </div>
                 <div className="col-span-1 text-right">
@@ -336,5 +503,30 @@ export function SkuLotesConsumption({ data, loading }: Props) {
         que las ventas del periodo cubrieron ese lote + saldo de lotes previos.
       </div>
     </div>
+  );
+}
+
+function SortHeader({
+  col, sortKey, current, dir, onClick, children,
+}: {
+  col: string;
+  sortKey: SortKey;
+  current: SortKey;
+  dir: SortDir;
+  onClick: (k: SortKey) => void;
+  children: React.ReactNode;
+}) {
+  const active = current === sortKey;
+  const Icon = !active ? ArrowUpDown : dir === "asc" ? ArrowUp : ArrowDown;
+  const isRight = col.includes("text-right");
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(sortKey)}
+      className={`${col} inline-flex items-center gap-1 ${isRight ? "justify-end" : ""} cursor-pointer hover:text-text transition ${active ? "text-primary" : ""}`}
+    >
+      {children}
+      <Icon size={9} className={active ? "" : "opacity-40"} />
+    </button>
   );
 }

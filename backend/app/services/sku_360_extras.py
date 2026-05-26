@@ -984,6 +984,7 @@ def lotes_consumption(sku: str) -> dict:
 
         out["lotes"].append({
             "lote": h.get("lote"),
+            "lote_id": h.get("lote_id"),
             "proveedor": h.get("proveedor"),
             "fecha_ingreso": from_d,
             "fecha_fin": to_d or today_iso,

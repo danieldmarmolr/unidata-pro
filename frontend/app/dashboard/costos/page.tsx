@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
@@ -378,6 +379,32 @@ function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => v
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [proveedorFilter, setProveedorFilter] = useState<string>("");
 
+  // Si llega ?lote_id=X (link desde el SKU 360 / consumo lote a lote), auto-expandir
+  // ese lote y scrollear a su fila para que el usuario llegue directamente al detalle.
+  const searchParams = useSearchParams();
+  const focusLoteId = searchParams?.get("lote_id");
+  const focusedLote = focusLoteId ? Number(focusLoteId) : null;
+
+  useEffect(() => {
+    if (!focusedLote || !data || data.length === 0) return;
+    const exists = data.some((l) => l.id === focusedLote);
+    if (!exists) return;
+    setExpanded((prev) => {
+      if (prev.has(focusedLote)) return prev;
+      const next = new Set(prev);
+      next.add(focusedLote);
+      return next;
+    });
+    // Scroll despues de un tick para que el panel ya este renderizado
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-lote-id="${focusedLote}"]`);
+      if (el && typeof el.scrollIntoView === "function") {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }, 150);
+    return () => clearTimeout(t);
+  }, [focusedLote, data]);
+
   const proveedores = useMemo(() => {
     const set = new Set<string>();
     (data ?? []).forEach((l) => { if (l.proveedor) set.add(l.proveedor); });
@@ -470,10 +497,14 @@ function LotesTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => v
           <tbody>
             {filtered.map((l) => {
               const isOpen = expanded.has(l.id);
+              const isFocused = focusedLote === l.id;
               return (
                 <Fragment key={l.id}>
                   <tr
-                    className="border-t border-border hover:bg-soft transition cursor-pointer"
+                    data-lote-id={l.id}
+                    className={`border-t border-border hover:bg-soft transition cursor-pointer ${
+                      isFocused ? "bg-primary/5 ring-2 ring-primary/40" : ""
+                    }`}
                     onClick={() => toggleExpand(l.id)}
                   >
                     <td className="px-2 py-2 text-text-muted">
