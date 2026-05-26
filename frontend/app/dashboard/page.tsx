@@ -45,7 +45,7 @@ import { AlertsPanel } from "@/components/alerts-panel";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { CalcExplainModal } from "@/components/calc-explain-modal";
 import { MetaEfficiencySection } from "@/components/meta-efficiency-section";
-import { ProfitConsolidatedChart, type ProfitConsolidatedResponse } from "@/components/profit-consolidated-chart";
+import { DailyMetricChart } from "@/components/daily-metric-chart";
 import { CommercialSection } from "@/components/commercial-section";
 import { api, getToken } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
@@ -962,13 +962,6 @@ export default function GerenciaUnificadaPage() {
     staleTime: 5 * 60_000,
   });
 
-  const { data: consolidated, isLoading: loadingConsolidated } = useQuery<ProfitConsolidatedResponse>({
-    queryKey: ["dashboards", "gerencia-consolidated", 90, 28],
-    queryFn: () => api<ProfitConsolidatedResponse>(`/api/dashboards/gerencia/profit-consolidated?days=90&horizon=28`),
-    staleTime: 10 * 60_000,
-    enabled: !!gerencia,
-  });
-
   const { data: d360, isLoading: loading360 } = useQuery<Gerencia360Response>({
     queryKey: ["dashboards", "gerencia360", periodSimple],
     queryFn: () => api<Gerencia360Response>(`/api/dashboards/gerencia/360?period=${periodSimple}`),
@@ -1151,14 +1144,10 @@ export default function GerenciaUnificadaPage() {
             <MayoristaDetailBlock breakdown={gerencia.unidrop.mayorista_breakdown} totalGanancia={gerencia.unidrop.ganancia_mayorista} />
           )}
 
-          {/* Chart consolidado con forecast multi-metodo */}
-          {loadingConsolidated || !consolidated ? (
-            <div className="h-[460px] bg-surface border border-border rounded-xl animate-pulse mb-6" />
-          ) : (
-            <div className="mb-6">
-              <ProfitConsolidatedChart data={consolidated} />
-            </div>
-          )}
+          {/* Chart consolidado multi-variable con forecast */}
+          <div className="mb-6">
+            <DailyMetricChart defaultVariable="revenue" defaultDays={90} horizon={28} />
+          </div>
         </section>
 
         {/* ============== § 2.5 EFICIENCIA META ADS · UNIDROP ============== */}

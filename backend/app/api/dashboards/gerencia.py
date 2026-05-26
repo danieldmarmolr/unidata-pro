@@ -15,6 +15,7 @@ from app.services.commercial_breakdown import commercial_breakdown
 from app.services import subscription_churn
 from app.services.gerencia_explain import explain_metric
 from app.services.meta_explain import explain_meta_unidrop
+from app.services.daily_metrics import daily_metric_series
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 
@@ -27,6 +28,7 @@ _cache_commercial: TTLCache = TTLCache(maxsize=32, ttl=600)
 _cache_churn: TTLCache = TTLCache(maxsize=8, ttl=180)
 _cache_explain: TTLCache = TTLCache(maxsize=128, ttl=300)
 _cache_meta_explain: TTLCache = TTLCache(maxsize=32, ttl=300)
+_cache_daily_metric: TTLCache = TTLCache(maxsize=48, ttl=600)
 
 
 @router.get("/gerencia")
@@ -127,50 +129,6 @@ def get_gerencia_commercial(
     return _build()
 
 
-@router.get("/gerencia/explain/{metric}")
-def get_gerencia_explain(
-    metric: str,
-    user: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
-    from_iso: Annotated[str | None, Query(alias="from")] = None,
-    to_iso: Annotated[str | None, Query(alias="to")] = None,
-) -> dict:
-    """Breakdown estructurado de cada KPI de Gerencia (formula + steps + fuentes + warnings).
-
-    Metricas soportadas: ganancia-consolidada · margen-consolidado · cobertura-costos ·
-    deuda-talo · unistore-{revenue,ganancia,costo,margen} · unidrop-{volumen,costo-mercaderia,
-    margen-bruto,comisiones,subs-meli,mayorista,meta-ads,egresos,ingresos,ganancia-neta,margen}."""
-    require_area(user, ["finanzas", "administracion"])
-
-    key = f"explain:{metric}:{period}:{from_iso}:{to_iso}"
-
-    @cached(_cache_explain, key=lambda: key)
-    def _build() -> dict:
-        return explain_metric(metric=metric, period=period, from_iso=from_iso, to_iso=to_iso)
-
-    return _build()
-
-
-@router.get("/gerencia/meta-explain")
-def get_gerencia_meta_explain(
-    user: Annotated[dict, Depends(current_user)],
-    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m"], Query()] = "30d",
-) -> dict:
-    """Cruce Meta Ads x Unidrop con los 2 modelos de atribucion lado a lado:
-    period-based (lo que hoy se resta en Gerencia) vs cohort-attributed
-    (revenue de la cohort firmada en el periodo en sus primeros 30d).
-    Devuelve KPIs comparativos + funnel + recomendacion textual."""
-    require_area(user, ["finanzas", "administracion"])
-
-    key = f"meta-explain:{period}"
-
-    @cached(_cache_meta_explain, key=lambda: key)
-    def _build() -> dict:
-        return explain_meta_unidrop(period=period)
-
-    return _build()
-
-
 @router.get("/gerencia/churn-suscripciones")
 def get_gerencia_churn(
     user: Annotated[dict, Depends(current_user)],
@@ -200,6 +158,27 @@ def get_gerencia_churn_drill(
     `period_end` es exclusivo. Sin cache (rangos arbitrarios)."""
     require_area(user, ["finanzas", "administracion", "cs"])
     return subscription_churn.get_drill_down(period_start=period_start, period_end=period_end)
+
+
+@router.get("/gerencia/daily-metric")
+def get_gerencia_daily_metric(
+    user: Annotated[dict, Depends(current_user)],
+    variable: Annotated[Literal["profit", "revenue", "units", "orders", "customers", "aov"], Query()] = "revenue",
+    days: Annotated[int, Query(ge=14, le=180)] = 90,
+    horizon: Annotated[int, Query(ge=7, le=60)] = 28,
+) -> dict:
+    """Serie diaria multi-canal (unistore_tn + unistore_ml + unidrop + total) para
+    cualquier variable de decision: profit, revenue, units, orders, customers, aov.
+    Incluye forecast multi-metodo comparativo sobre la serie total."""
+    require_area(user, ["finanzas", "administracion"])
+
+    key = f"daily-metric:{variable}:{days}:{horizon}"
+
+    @cached(_cache_daily_metric, key=lambda: key)
+    def _build() -> dict:
+        return daily_metric_series(variable=variable, days=days, horizon=horizon)
+
+    return _build()
 
 
 @router.get("/gerencia/explain/{metric}")
