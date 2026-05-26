@@ -53,12 +53,16 @@ def products_master_table(
     channel: str = "all",
     from_iso: str | None = None,
     to_iso: str | None = None,
+    unit: str = "unistore",
 ) -> dict:
     """Dataset completo por SKU con todas las dimensiones unidas.
 
     period: ventana para revenue, unidades, ordenes, growth (comparado vs misma ventana anterior).
     channel: 'all' | 'tn' | 'ml' (por ahora solo TN tiene cobertura completa).
+    unit: 'unistore' (default) o 'unidrop' (SKUs vendidos por dropshippers).
     """
+    if unit == "unidrop":
+        return _products_master_table_unidrop(period, from_iso, to_iso)
     win = resolve_window(period, from_iso, to_iso)
     days = win["days"]
     eng = get_engine("unistore")
@@ -323,6 +327,239 @@ def products_master_table(
     return {
         "period": period,
         "channel": channel,
+        "days": days,
+        "summary": summary,
+        "skus": items,
+        "generated_at": now_ar().isoformat(),
+    }
+
+
+def _products_master_table_unidrop(
+    period: str = "90d",
+    from_iso: str | None = None,
+    to_iso: str | None = None,
+) -> dict:
+    """Tabla maestra por SKU para Unidrop: agrega ML+TN dropshipper, calcula
+    ABC, XYZ, growth_30d, lifecycle y ganancia Unidrop (profit_for_subscription
+    asignado proporcionalmente al revenue del item dentro de la orden).
+
+    Stock / DoI / returns no aplican (Unidrop no tiene stock propio ni
+    devoluciones consolidadas)."""
+    win = resolve_window(period, from_iso, to_iso)
+    days = win["days"]
+    eng = get_engine("unidrop")
+    p = {"days": days}
+
+    # Base agregada por SKU del periodo (ML + TN union sumado)
+    rows = q(eng, """
+        WITH ml AS (
+            SELECT oi."sellerSku" AS sku,
+                   MAX(oi.title) AS name,
+                   SUM(oi.quantity)::int AS units,
+                   SUM(oi.quantity * oi."unitPrice")::float AS revenue,
+                   COUNT(DISTINCT oi."orderId")::int AS orders,
+                   COUNT(DISTINCT o."userId")::int AS dropshippers,
+                   MIN(o."dateCreated") AS first_sale,
+                   -- ganancia alocada: (item_rev / order_total) * profit_for_subscription
+                   SUM(
+                     CASE WHEN o."totalAmount" > 0 AND o."profit_for_subscription" IS NOT NULL
+                          THEN (oi.quantity * oi."unitPrice")::float / o."totalAmount"::float * o."profit_for_subscription"::float
+                          ELSE 0 END
+                   )::float AS ganancia_alloc,
+                   SUM(oi.quantity * COALESCE(oi."unitCost", 0))::float AS costo_ml
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - make_interval(days => :days)
+              AND oi."sellerSku" IS NOT NULL
+            GROUP BY oi."sellerSku"
+        ),
+        tn AS (
+            SELECT oi.sku AS sku,
+                   MAX(oi.name) AS name,
+                   SUM(oi.quantity)::int AS units,
+                   SUM(oi.quantity * oi.price)::float AS revenue,
+                   COUNT(DISTINCT tno.tienda_nube_id)::int AS orders,
+                   COUNT(DISTINCT tno.user_id)::int AS dropshippers,
+                   MIN(tno.created_at) AS first_sale,
+                   0::float AS ganancia_alloc,
+                   0::float AS costo_ml
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku
+        ),
+        u AS (
+            SELECT * FROM ml UNION ALL SELECT * FROM tn
+        )
+        SELECT sku,
+               MAX(name) AS name,
+               SUM(units)::int AS units,
+               SUM(revenue)::float AS revenue,
+               SUM(orders)::int AS orders,
+               SUM(dropshippers)::int AS dropshippers,
+               MIN(first_sale) AS first_sale,
+               SUM(ganancia_alloc)::float AS ganancia,
+               SUM(costo_ml)::float AS costo
+        FROM u
+        GROUP BY sku
+        ORDER BY SUM(revenue) DESC NULLS LAST
+    """, p) or []
+
+    # Periodo anterior identico para growth
+    prev_map: dict[str, float] = {}
+    for r in q(eng, """
+        WITH ml AS (
+            SELECT oi."sellerSku" AS sku, SUM(oi.quantity * oi."unitPrice")::float AS rev
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - make_interval(days => :days * 2)
+              AND o."dateCreated" <  NOW() - make_interval(days => :days)
+              AND oi."sellerSku" IS NOT NULL
+            GROUP BY oi."sellerSku"
+        ),
+        tn AS (
+            SELECT oi.sku AS sku, SUM(oi.quantity * oi.price)::float AS rev
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days * 2)
+              AND tno.created_at <  NOW() - make_interval(days => :days)
+              AND oi.sku IS NOT NULL
+            GROUP BY oi.sku
+        )
+        SELECT sku, SUM(rev)::float FROM (SELECT * FROM ml UNION ALL SELECT * FROM tn) z
+        GROUP BY sku
+    """, p) or []:
+        prev_map[r[0]] = float(r[1] or 0)
+
+    # XYZ stats: varianza de ventas diarias dentro del periodo
+    xyz_map: dict[str, dict] = {}
+    for r in q(eng, """
+        SELECT sku, COUNT(*) AS dias, AVG(qty_dia)::float AS mean_q, STDDEV_SAMP(qty_dia)::float AS std_q
+        FROM (
+            SELECT oi."sellerSku" AS sku,
+                   DATE(o."dateCreated" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
+                   SUM(oi.quantity)::float AS qty_dia
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - make_interval(days => :days)
+              AND oi."sellerSku" IS NOT NULL
+            GROUP BY 1, 2
+            UNION ALL
+            SELECT oi.sku,
+                   DATE(tno.created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'),
+                   SUM(oi.quantity)::float
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+              AND oi.sku IS NOT NULL
+            GROUP BY 1, 2
+        ) d
+        GROUP BY sku
+    """, p) or []:
+        xyz_map[r[0]] = {"dias": int(r[1] or 0), "mean": float(r[2] or 0), "std": float(r[3] or 0)}
+
+    total_rev = sum(float(r[3] or 0) for r in rows) or 1.0
+    cumulative = 0.0
+    items: list[dict] = []
+    for i, r in enumerate(rows):
+        sku, name, units, revenue, orders, dropshippers, first_sale, ganancia, costo = r
+        rev_f = float(revenue or 0)
+        units_i = int(units or 0)
+        ganancia_f = float(ganancia or 0)
+        costo_f = float(costo or 0)
+
+        cumulative += rev_f
+        pct_acum = cumulative / total_rev * 100
+        abc = "A" if pct_acum <= 80 else "B" if pct_acum <= 95 else "C"
+
+        x_stats = xyz_map.get(sku, {})
+        mean_q = float(x_stats.get("mean") or 0)
+        std_q = float(x_stats.get("std") or 0)
+        cv = (std_q / mean_q) if mean_q > 0 else None
+        xyz = None
+        if cv is not None:
+            xyz = "X" if cv < 0.25 else "Y" if cv < 0.50 else "Z"
+
+        ventas_dia_f = (units_i / days) if days > 0 else 0.0
+
+        rev_prev = prev_map.get(sku, 0.0)
+        growth_pct: float | None
+        if rev_prev > 0:
+            growth_pct = round((rev_f - rev_prev) / rev_prev * 100, 1)
+        elif rev_f > 0:
+            growth_pct = 100.0
+        else:
+            growth_pct = None
+
+        fs_days: int | None = None
+        if first_sale:
+            try:
+                fs_days = max(0, (now_ar().date() - first_sale.date()).days)
+            except Exception:
+                fs_days = None
+        lifecycle = _bucket_lifecycle(fs_days, growth_pct)
+
+        margen_pct = (ganancia_f / rev_f * 100) if rev_f > 0 else None
+        precio_avg = (rev_f / units_i) if units_i > 0 else 0.0
+
+        items.append({
+            "rank": i + 1,
+            "sku": sku,
+            "name": (name or sku or "?")[:120],
+            "brand": "",
+            "ean": "",
+            "imagen": "",
+            "units": units_i,
+            "revenue": round(rev_f, 0),
+            "orders": int(orders or 0),
+            "customers": int(dropshippers or 0),  # repurposed: dropshippers count
+            "precio_avg": round(precio_avg, 0),
+            "ganancia": round(ganancia_f, 0) if ganancia_f > 0 else None,
+            "margen_pct": round(margen_pct, 1) if margen_pct is not None else None,
+            "abc": abc,
+            "pct_acum": round(pct_acum, 2),
+            "xyz": xyz,
+            "cv": round(cv, 3) if cv is not None else None,
+            "lifecycle": lifecycle,
+            "doi": None,
+            "doi_bucket": None,
+            "stock_actual": 0,
+            "ventas_dia_avg": round(ventas_dia_f, 2),
+            "growth_30d_pct": growth_pct,
+            "revenue_prev": round(rev_prev, 0),
+            "returns_vendidas": None,
+            "returns_devueltas": None,
+            "returns_rate_pct": None,
+            "first_sale_days_ago": fs_days,
+            "is_new_7d": fs_days is not None and fs_days <= 7,
+            "is_stockout_risk_14d": False,
+        })
+
+    summary = {
+        "total_skus": len(items),
+        "total_revenue": round(total_rev, 0),
+        "total_ganancia": round(sum(it["ganancia"] or 0 for it in items), 0),
+        "skus_con_costo": sum(1 for it in items if it["ganancia"] is not None),
+        "skus_clase_a": sum(1 for it in items if it["abc"] == "A"),
+        "skus_clase_b": sum(1 for it in items if it["abc"] == "B"),
+        "skus_clase_c": sum(1 for it in items if it["abc"] == "C"),
+        "skus_growth": sum(1 for it in items if (it["growth_30d_pct"] or 0) >= 30),
+        "skus_declive": sum(1 for it in items if (it["growth_30d_pct"] or 0) <= -30),
+        "skus_nuevos_7d": sum(1 for it in items if it["is_new_7d"]),
+        "skus_stockout_risk": 0,
+    }
+
+    return {
+        "period": period,
+        "channel": "all",
+        "unit": "unidrop",
         "days": days,
         "summary": summary,
         "skus": items,

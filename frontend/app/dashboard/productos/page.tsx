@@ -16,7 +16,6 @@ import { ProductsTrendCharts, type ProductsUnit } from "@/components/products-tr
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import type { KpiCard as KpiCardT, CategoryValue } from "@/lib/types";
-import { Info } from "lucide-react";
 
 type Channel = "all" | "tn" | "ml";
 
@@ -62,17 +61,15 @@ export default function ProductosPage() {
   const isUnistore = unit === "unistore";
 
   const { data, isLoading, isFetching, error } = useQuery<ProductsResp>({
-    queryKey: ["dashboards", "products", period, customFrom, customTo, channel],
-    queryFn: () => api(`/api/dashboards/products?${_qs}&channel=${channel}`),
+    queryKey: ["dashboards", "products", period, customFrom, customTo, channel, unit],
+    queryFn: () => api(`/api/dashboards/products?${_qs}&channel=${channel}&unit=${unit}`),
     staleTime: 60_000,
-    enabled: isUnistore,
   });
 
   const { data: master, isLoading: masterLoading } = useQuery<MasterTableResp>({
-    queryKey: ["dashboards", "products-master", period, customFrom, customTo, channel],
-    queryFn: () => api(`/api/dashboards/products/master-table?${_qs}&channel=${channel}`),
+    queryKey: ["dashboards", "products-master", period, customFrom, customTo, channel, unit],
+    queryFn: () => api(`/api/dashboards/products/master-table?${_qs}&channel=${channel}&unit=${unit}`),
     staleTime: 60_000,
-    enabled: isUnistore,
   });
 
   const goSku = (r: CategoryValue) => {
@@ -132,85 +129,95 @@ export default function ProductosPage() {
           </div>
         )}
 
-        {/* Strip denso de KPIs - solo Unistore (Unidrop no tiene aun cards en /products) */}
-        {isUnistore && (
-          isLoading || !data ? (
-            <div className="flex flex-wrap gap-2 mb-6">
-              {Array.from({ length: 12 }).map((_, i) => (
-                <div key={i} className="bg-surface border border-border rounded-lg h-[68px] w-[140px] animate-pulse" />
-              ))}
-            </div>
-          ) : (
-            <KpiChipStrip
-              cards={data.cards}
-              getDrill={(label) => getCardDrill(label, { period, channel })}
-            />
-          )
-        )}
-
-        {!isUnistore && (
-          <div className="mb-6 bg-sky-50 border border-sky-200 rounded-xl px-4 py-3 text-sm text-sky-900 flex items-start gap-2">
-            <Info size={16} className="mt-0.5 shrink-0" />
-            <div>
-              <div className="font-bold">Vista Unidrop · SKUs vendidos por dropshippers</div>
-              <div className="text-xs opacity-80">
-                Cruza orders pagas de ML (DROP-{`{dni}`}-) y TN. KPIs detallados + tabla maestra solo disponibles para Unistore por ahora.
-              </div>
-            </div>
+        {/* Strip denso de KPIs (cards distintos segun unit) */}
+        {isLoading || !data ? (
+          <div className="flex flex-wrap gap-2 mb-6">
+            {Array.from({ length: 12 }).map((_, i) => (
+              <div key={i} className="bg-surface border border-border rounded-lg h-[68px] w-[140px] animate-pulse" />
+            ))}
           </div>
+        ) : (
+          <KpiChipStrip
+            cards={data.cards}
+            getDrill={isUnistore ? (label) => getCardDrill(label, { period, channel }) : undefined}
+          />
         )}
 
         {/* Graficos de tendencias con storytelling */}
         <ProductsTrendCharts unit={unit} />
 
-        {/* Tabla maestra por SKU + tablas operativas solo Unistore */}
-        {isUnistore && (
-          <>
-            <div className="mb-6">
-              {masterLoading || !master ? (
-                <div className="bg-surface border border-border rounded-xl h-[600px] animate-pulse" />
-              ) : (
-                <SkuMasterTable data={master.skus} summary={master.summary} />
-              )}
-            </div>
+        {/* Tabla maestra por SKU */}
+        <div className="mb-6">
+          {masterLoading || !master ? (
+            <div className="bg-surface border border-border rounded-xl h-[600px] animate-pulse" />
+          ) : (
+            <SkuMasterTable data={master.skus} summary={master.summary} />
+          )}
+        </div>
 
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-              {isLoading || !data ? (
-                <>
-                  <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-                  <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
-                </>
-              ) : (
-                <>
-                  <CategoryTable
-                    caption="Stock critico que se sigue vendiendo"
-                    subtitle="Stock <= 5 y con ventas en 30d. Alerta operativa"
-                    data={data.stock_critico_alerta}
-                    formatter="number"
-                    extraColumns={[
-                      { key: "sku", label: "SKU", format: "raw" },
-                      { key: "stock", label: "Stock", format: "number" },
-                    ]}
-                    showProgress={false}
-                    onRowClick={goSku}
-                  />
-                  <CategoryTable
-                    caption="Sin movimiento (>90d) con stock"
-                    subtitle="Top 20 SKUs en catalogo sin venta hace 90+ dias"
-                    data={data.sin_movimiento}
-                    formatter="number"
-                    extraColumns={[
-                      { key: "sku", label: "SKU", format: "raw" },
-                      { key: "stock", label: "Stock", format: "number" },
-                    ]}
-                    showProgress={false}
-                    onRowClick={goSku}
-                  />
-                </>
-              )}
-            </div>
-          </>
-        )}
+        {/* Tablas operativas: cambian segun unit */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          {isLoading || !data ? (
+            <>
+              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+              <div className="bg-surface border border-border rounded-xl p-5 h-[400px] animate-pulse" />
+            </>
+          ) : isUnistore ? (
+            <>
+              <CategoryTable
+                caption="Stock critico que se sigue vendiendo"
+                subtitle="Stock <= 5 y con ventas en 30d. Alerta operativa"
+                data={data.stock_critico_alerta}
+                formatter="number"
+                extraColumns={[
+                  { key: "sku", label: "SKU", format: "raw" },
+                  { key: "stock", label: "Stock", format: "number" },
+                ]}
+                showProgress={false}
+                onRowClick={goSku}
+              />
+              <CategoryTable
+                caption="Sin movimiento (>90d) con stock"
+                subtitle="Top 20 SKUs en catalogo sin venta hace 90+ dias"
+                data={data.sin_movimiento}
+                formatter="number"
+                extraColumns={[
+                  { key: "sku", label: "SKU", format: "raw" },
+                  { key: "stock", label: "Stock", format: "number" },
+                ]}
+                showProgress={false}
+                onRowClick={goSku}
+              />
+            </>
+          ) : (
+            <>
+              <CategoryTable
+                caption="SKUs en aceleracion"
+                subtitle="Revenue del periodo > 2x el periodo anterior. Productos despegando."
+                data={data.stock_critico_alerta}
+                formatter="currency"
+                extraColumns={[
+                  { key: "sku", label: "SKU", format: "raw" },
+                  { key: "growth_x", label: "Multiplo", format: "raw" },
+                ]}
+                showProgress={false}
+                onRowClick={goSku}
+              />
+              <CategoryTable
+                caption="Sin movimiento (>90d)"
+                subtitle="Top 20 SKUs Unidrop vendidos en 12m sin venta hace 90+ dias"
+                data={data.sin_movimiento}
+                formatter="currency"
+                extraColumns={[
+                  { key: "sku", label: "SKU", format: "raw" },
+                  { key: "units_12m", label: "Uds 12m", format: "number" },
+                ]}
+                showProgress={false}
+                onRowClick={goSku}
+              />
+            </>
+          )}
+        </div>
       </div>
     </>
   );

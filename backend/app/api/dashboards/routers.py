@@ -866,16 +866,17 @@ def get_products_master_table(
     user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "90d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     """Tabla maestra por SKU: revenue, ganancia, ABC, XYZ, lifecycle, DoI,
     returns%, growth 30d, stock. Union de todos los analisis en un dataset."""
     require_area(user, ["ventas", "compras"])
-    key = f"products-master:{period}:{channel}:{from_iso}:{to_iso}"
+    key = f"products-master:{unit}:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_master_svc.products_master_table(period, channel, from_iso, to_iso)
+        return products_master_svc.products_master_table(period, channel, from_iso, to_iso, unit=unit)
     return _b()
 
 
@@ -1347,14 +1348,15 @@ def get_products(
     user: Annotated[dict, Depends(current_user)],
     period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
     channel: Annotated[Literal["all", "tn", "ml"], Query()] = "all",
+    unit: Annotated[Literal["unistore", "unidrop"], Query()] = "unistore",
     from_iso: Annotated[str | None, Query(alias="from")] = None,
     to_iso: Annotated[str | None, Query(alias="to")] = None,
 ) -> dict:
     require_area(user, ["ventas", "compras"])
-    key = f"prod:{period}:{channel}:{from_iso}:{to_iso}"
+    key = f"prod:{unit}:{period}:{channel}:{from_iso}:{to_iso}"
     @cached(_cache, key=lambda: key)
     def _b() -> dict:
-        return products_svc.products_overview(period, channel, from_iso=from_iso, to_iso=to_iso)
+        return products_svc.products_overview(period, channel, from_iso=from_iso, to_iso=to_iso, unit=unit)
     return _b()
 
 

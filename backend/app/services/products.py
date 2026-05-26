@@ -27,7 +27,11 @@ PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
 # ===================== OVERVIEW =====================
 
-def products_overview(period: str = "30d", channel: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+def products_overview(period: str = "30d", channel: str = "all", from_iso: str | None = None, to_iso: str | None = None, unit: str = "unistore") -> dict:
+    """Vista global de productos. Dispatch por unidad: 'unistore' (default)
+    o 'unidrop' (orders pagas de dropshippers en ML+TN)."""
+    if unit == "unidrop":
+        return products_overview_unidrop(period, from_iso, to_iso)
     days = resolve_window(period, from_iso, to_iso)["days"]
     eng_uni = get_engine("unistore")
     p = {"days": days}
@@ -324,6 +328,398 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         "top_brands": top_brands_list,
         "sin_movimiento": sin_movimiento_list,
         "stock_critico_alerta": stock_critico_alerta,
+        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+
+
+# ===================== OVERVIEW UNIDROP =====================
+
+
+def products_overview_unidrop(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Vista global de productos del lado Unidrop: SKUs vendidos por dropshippers
+    cruzando OrderMercadoLibre (DROP-%) + tienda_nube_orders paid.
+    Stock-related cards no aplican (Unidrop no tiene stock propio); se reemplazan
+    por KPIs de dropshippers activos + ganancia Unidrop."""
+    days = resolve_window(period, from_iso, to_iso)["days"]
+    eng = get_engine("unidrop")
+    p = {"days": days}
+    cards: list[dict] = []
+
+    # SKUs distintos vendidos en periodo (ML DROP-% + TN paid)
+    skus_vendidos_ml = int(scalar(eng, """
+        SELECT COUNT(DISTINCT oi."sellerSku")
+        FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+        JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+        WHERE o."status" = 'paid'
+          AND o."number" LIKE 'DROP-%'
+          AND o."dateCreated" >= NOW() - make_interval(days => :days)
+          AND oi."sellerSku" IS NOT NULL
+    """, p) or 0)
+
+    skus_vendidos_tn = int(scalar(eng, """
+        SELECT COUNT(DISTINCT oi.sku)
+        FROM public.tienda_nube_order_items oi
+        JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= NOW() - make_interval(days => :days)
+          AND oi.sku IS NOT NULL
+    """, p) or 0)
+
+    # Universo SKUs (vendidos en 12m, no hay Product.published en Unidrop)
+    total_skus_12m = int(scalar(eng, """
+        WITH base AS (
+            SELECT oi."sellerSku" AS sku
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid'
+              AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - INTERVAL '12 months'
+              AND oi."sellerSku" IS NOT NULL
+            UNION
+            SELECT oi.sku
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - INTERVAL '12 months'
+              AND oi.sku IS NOT NULL
+        )
+        SELECT COUNT(DISTINCT sku) FROM base
+    """) or 0) or 1
+
+    # SKUs sin movimiento (vendidos en 12m pero no en 90d)
+    sin_movimiento_count = int(scalar(eng, """
+        WITH v12 AS (
+            SELECT oi."sellerSku" AS sku
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - INTERVAL '12 months'
+              AND oi."sellerSku" IS NOT NULL
+            UNION
+            SELECT oi.sku
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - INTERVAL '12 months'
+              AND oi.sku IS NOT NULL
+        ),
+        v90 AS (
+            SELECT oi."sellerSku" AS sku
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - INTERVAL '90 days'
+              AND oi."sellerSku" IS NOT NULL
+            UNION
+            SELECT oi.sku
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - INTERVAL '90 days'
+              AND oi.sku IS NOT NULL
+        )
+        SELECT COUNT(*) FROM (SELECT sku FROM v12 EXCEPT SELECT sku FROM v90) z
+    """) or 0)
+
+    # Unidades vendidas (period)
+    units_ml = int(scalar(eng, """
+        SELECT COALESCE(SUM(oi.quantity), 0)::bigint
+        FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+        JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+        WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+          AND o."dateCreated" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    units_tn = int(scalar(eng, """
+        SELECT COALESCE(SUM(oi.quantity), 0)::bigint
+        FROM public.tienda_nube_order_items oi
+        JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    units_periodo = units_ml + units_tn
+
+    # Ordenes pagas
+    orders_ml = int(scalar(eng, """
+        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "status" = 'paid' AND "number" LIKE 'DROP-%'
+          AND "dateCreated" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    orders_tn = int(scalar(eng, """
+        SELECT COUNT(*) FROM public.tienda_nube_orders
+        WHERE payment_status::text = 'paid'
+          AND created_at >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    ordenes_periodo = orders_ml + orders_tn
+
+    # Dropshippers activos (KPI propio Unidrop)
+    drop_activos = int(scalar(eng, """
+        WITH d AS (
+            SELECT o."userId" AS uid
+            FROM mercado_libre_dev."OrderMercadoLibre" o
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - make_interval(days => :days)
+              AND o."userId" IS NOT NULL
+            UNION
+            SELECT tno.user_id AS uid
+            FROM public.tienda_nube_orders tno
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+              AND tno.user_id IS NOT NULL
+        )
+        SELECT COUNT(DISTINCT uid) FROM d
+    """, p) or 0)
+
+    # Nuevos SKUs (primera venta en ultimos 7d cruzando ambos canales)
+    nuevos_7d = int(scalar(eng, """
+        WITH primera AS (
+            SELECT sku, MIN(fecha) AS fp FROM (
+                SELECT oi."sellerSku" AS sku, o."dateCreated" AS fecha
+                FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+                JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+                WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%' AND oi."sellerSku" IS NOT NULL
+                UNION ALL
+                SELECT oi.sku, tno.created_at
+                FROM public.tienda_nube_order_items oi
+                JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+                WHERE tno.payment_status::text = 'paid' AND oi.sku IS NOT NULL
+            ) u
+            GROUP BY sku
+        )
+        SELECT COUNT(*) FROM primera WHERE fp >= NOW() - INTERVAL '7 days'
+    """) or 0)
+
+    # Skus distintos vendidos en periodo (unique across channels)
+    skus_distintos = int(scalar(eng, """
+        WITH s AS (
+            SELECT oi."sellerSku" AS sku
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+              AND o."dateCreated" >= NOW() - make_interval(days => :days)
+              AND oi."sellerSku" IS NOT NULL
+            UNION
+            SELECT oi.sku
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+              AND oi.sku IS NOT NULL
+        )
+        SELECT COUNT(*) FROM s
+    """, p) or 0)
+
+    # GMV + ganancia Unidrop del periodo
+    gmv_periodo = float(scalar(eng, """
+        SELECT
+            COALESCE((SELECT SUM("totalAmount")::float
+                      FROM mercado_libre_dev."OrderMercadoLibre"
+                      WHERE "status" = 'paid' AND "number" LIKE 'DROP-%'
+                        AND "dateCreated" >= NOW() - make_interval(days => :days)), 0)
+          + COALESCE((SELECT SUM(total)::float FROM public.tienda_nube_orders
+                      WHERE payment_status::text = 'paid'
+                        AND created_at >= NOW() - make_interval(days => :days)), 0)
+    """, p) or 0)
+    ganancia_periodo = float(scalar(eng, """
+        SELECT COALESCE(SUM("profit_for_subscription")::float, 0)
+        FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "status" = 'paid' AND "number" LIKE 'DROP-%'
+          AND "dateCreated" >= NOW() - make_interval(days => :days)
+    """, p) or 0)
+    margen_periodo = (ganancia_periodo / gmv_periodo * 100) if gmv_periodo > 0 else 0
+
+    ticket_unidades = (units_periodo / ordenes_periodo) if ordenes_periodo > 0 else 0.0
+    catalogo_activo_pct = (skus_distintos / total_skus_12m * 100) if total_skus_12m > 0 else 0.0
+
+    cards.append({"label": "SKUs vendidos en 12m", "value": total_skus_12m, "hint": "Universo Unidrop · base del catalogo activo"})
+    cards.append({"label": f"SKUs vendidos ({period})", "value": skus_distintos, "hint": "Distintos en orders pagas TN+ML"})
+    cards.append({"label": "Unidades vendidas", "value": units_periodo, "hint": "TN+ML orders pagas"})
+    cards.append({"label": "Ordenes pagas", "value": ordenes_periodo, "hint": "OML DROP-% + TN paid del periodo"})
+    cards.append({"label": "Ticket de unidades", "value": round(ticket_unidades, 2), "hint": "Unidades / ordenes paid"})
+    cards.append({"label": "Dropshippers activos", "value": drop_activos, "hint": "Distintos vendiendo en el periodo"})
+    cards.append({"label": "Catalogo activo", "value": round(catalogo_activo_pct, 1), "suffix": "%", "hint": "SKUs vendidos / universo 12m"})
+    cards.append({"label": "Nuevos 7d", "value": nuevos_7d, "hint": "SKUs con primera venta en ultimos 7 dias"})
+    cards.append({"label": "Sin movimiento (>90d)", "value": sin_movimiento_count, "hint": "SKUs en 12m sin venta hace 90+ dias"})
+    cards.append({"label": "GMV omnicanal", "value": round(gmv_periodo, 0), "prefix": "$ ", "hint": "TN + ML del periodo"})
+    cards.append({"label": f"Ganancia Unidrop ({period})", "value": round(ganancia_periodo, 0), "prefix": "$ ",
+                  "hint": f"profit_for_subscription · margen {margen_periodo:.1f}%"})
+    cards.append({"label": "Margen Unidrop", "value": round(margen_periodo, 1), "suffix": "%",
+                  "hint": "Ganancia / GMV"})
+
+    # Top SKUs por GMV (TN+ML agregado)
+    top_ml = q(eng, """
+        SELECT oi."sellerSku" AS sku,
+               MAX(oi.title) AS name,
+               SUM(oi.quantity)::int AS units,
+               SUM(oi.quantity * oi."unitPrice")::float AS revenue,
+               COUNT(DISTINCT o.id)::int AS orders,
+               COUNT(DISTINCT o."userId")::int AS dropshippers
+        FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+        JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+        WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+          AND o."dateCreated" >= NOW() - make_interval(days => :days)
+          AND oi."sellerSku" IS NOT NULL
+        GROUP BY oi."sellerSku"
+    """, p) or []
+    top_tn = q(eng, """
+        SELECT oi.sku,
+               MAX(oi.name) AS name,
+               SUM(oi.quantity)::int AS units,
+               SUM(oi.quantity * oi.price)::float AS revenue,
+               COUNT(DISTINCT tno.tienda_nube_id)::int AS orders,
+               COUNT(DISTINCT tno.user_id)::int AS dropshippers
+        FROM public.tienda_nube_order_items oi
+        JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+        WHERE tno.payment_status::text = 'paid'
+          AND tno.created_at >= NOW() - make_interval(days => :days)
+          AND oi.sku IS NOT NULL
+        GROUP BY oi.sku
+    """, p) or []
+    agg: dict[str, dict] = {}
+    for sku, name, units, revenue, orders, drops in top_ml + top_tn:
+        if not sku:
+            continue
+        rec = agg.setdefault(sku, {"name": name, "units": 0, "revenue": 0.0, "orders": 0, "dropshippers": set()})
+        if not rec["name"] and name:
+            rec["name"] = name
+        rec["units"] += int(units or 0)
+        rec["revenue"] += float(revenue or 0)
+        rec["orders"] += int(orders or 0)
+        if drops:
+            for _ in range(int(drops or 0)):
+                rec["dropshippers"].add(_)  # crude — replaced below
+
+    # Para dropshippers reales contamos via dni de la order; aproximamos con orders.
+    top_products = sorted(agg.items(), key=lambda kv: -kv[1]["revenue"])[:20]
+    top_products_list = [{
+        "category": (rec["name"] or sku or "?")[:60],
+        "value": rec["revenue"],
+        "extra": {
+            "sku": sku,
+            "units": rec["units"],
+            "orders": rec["orders"],
+            "imagen": "",
+        },
+    } for sku, rec in top_products]
+
+    # Top dropshippers por GMV (reemplaza top_brands)
+    top_sellers = q(eng, """
+        SELECT u.id, COALESCE(u.name,'(sin nombre)') AS name, u.dni,
+               COUNT(DISTINCT o.id)::int AS orders,
+               SUM(o."totalAmount")::float AS gmv,
+               SUM(o."profit_for_subscription")::float AS ganancia
+        FROM mercado_libre_dev."OrderMercadoLibre" o
+        JOIN public."User" u ON u.id = o."userId"
+        WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%'
+          AND o."dateCreated" >= NOW() - make_interval(days => :days)
+        GROUP BY u.id
+        ORDER BY gmv DESC NULLS LAST
+        LIMIT 10
+    """, p) or []
+    top_sellers_list = [{
+        "category": r[1] or f"Drop #{r[0]}",
+        "value": float(r[4] or 0),
+        "extra": {"dropshipper_id": r[0], "dni": r[2], "orders": int(r[3] or 0), "ganancia": round(float(r[5] or 0), 0)},
+    } for r in top_sellers]
+
+    # SKUs sin movimiento listado (vendieron en 12m, no en 90d)
+    sm_rows = q(eng, """
+        WITH v12 AS (
+            SELECT oi."sellerSku" AS sku, MAX(o."dateCreated") AS ult, MAX(oi.title) AS name,
+                   SUM(oi.quantity)::int AS units_12m, SUM(oi.quantity * oi."unitPrice")::float AS rev_12m
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%' AND oi."sellerSku" IS NOT NULL
+              AND o."dateCreated" >= NOW() - INTERVAL '12 months'
+            GROUP BY oi."sellerSku"
+            UNION ALL
+            SELECT oi.sku, MAX(tno.created_at), MAX(oi.name),
+                   SUM(oi.quantity)::int, SUM(oi.quantity * oi.price)::float
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid' AND oi.sku IS NOT NULL
+              AND tno.created_at >= NOW() - INTERVAL '12 months'
+            GROUP BY oi.sku
+        )
+        SELECT sku, MAX(name) AS name, MAX(ult) AS ult_venta,
+               SUM(units_12m)::int AS units_12m, SUM(rev_12m)::float AS rev_12m
+        FROM v12
+        GROUP BY sku
+        HAVING MAX(ult) < NOW() - INTERVAL '90 days'
+        ORDER BY rev_12m DESC NULLS LAST
+        LIMIT 20
+    """) or []
+    sin_movimiento_list = [{
+        "category": (r[1] or r[0])[:60],
+        "value": float(r[4] or 0),
+        "extra": {"sku": r[0], "units_12m": int(r[3] or 0), "ultima_venta": r[2].isoformat() if r[2] else None},
+    } for r in sm_rows]
+
+    # Aceleracion: SKUs cuyo revenue del periodo es >2x el periodo anterior (reemplazo de stock_critico)
+    accel_rows = q(eng, """
+        WITH actual AS (
+            SELECT oi."sellerSku" AS sku, MAX(oi.title) AS name,
+                   SUM(oi.quantity * oi."unitPrice")::float AS rev
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%' AND oi."sellerSku" IS NOT NULL
+              AND o."dateCreated" >= NOW() - make_interval(days => :days)
+            GROUP BY 1
+            UNION ALL
+            SELECT oi.sku, MAX(oi.name), SUM(oi.quantity * oi.price)::float
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid' AND oi.sku IS NOT NULL
+              AND tno.created_at >= NOW() - make_interval(days => :days)
+            GROUP BY 1
+        ),
+        previo AS (
+            SELECT oi."sellerSku" AS sku, SUM(oi.quantity * oi."unitPrice")::float AS rev
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE o."status" = 'paid' AND o."number" LIKE 'DROP-%' AND oi."sellerSku" IS NOT NULL
+              AND o."dateCreated" >= NOW() - make_interval(days => :days * 2)
+              AND o."dateCreated" <  NOW() - make_interval(days => :days)
+            GROUP BY 1
+            UNION ALL
+            SELECT oi.sku, SUM(oi.quantity * oi.price)::float
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE tno.payment_status::text = 'paid' AND oi.sku IS NOT NULL
+              AND tno.created_at >= NOW() - make_interval(days => :days * 2)
+              AND tno.created_at <  NOW() - make_interval(days => :days)
+            GROUP BY 1
+        )
+        SELECT a.sku, MAX(a.name) AS name,
+               SUM(a.rev)::float AS rev_actual,
+               COALESCE(SUM(pr.rev),0)::float AS rev_prev
+        FROM actual a
+        LEFT JOIN previo pr ON pr.sku = a.sku
+        GROUP BY a.sku
+        HAVING SUM(a.rev) > 0
+           AND (COALESCE(SUM(pr.rev),0) = 0 OR SUM(a.rev) > 2 * COALESCE(SUM(pr.rev),0))
+        ORDER BY rev_actual DESC NULLS LAST
+        LIMIT 15
+    """, p) or []
+    aceleracion_list = [{
+        "category": (r[1] or r[0])[:60],
+        "value": float(r[2] or 0),
+        "extra": {
+            "sku": r[0],
+            "revenue_prev": round(float(r[3] or 0), 0),
+            "growth_x": (round(float(r[2] or 0) / float(r[3]), 1) if r[3] and r[3] > 0 else None),
+        },
+    } for r in accel_rows]
+
+    return {
+        "period": period,
+        "channel": "all",
+        "unit": "unidrop",
+        "cards": cards,
+        "top_products": top_products_list,
+        "top_ganancia": [],
+        "top_brands": top_sellers_list,           # repurposed: top dropshippers
+        "sin_movimiento": sin_movimiento_list,
+        "stock_critico_alerta": aceleracion_list, # repurposed: SKUs en aceleracion
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }
 
