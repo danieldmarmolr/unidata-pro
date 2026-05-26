@@ -164,6 +164,11 @@ def _startup() -> None:
         _personal_db.init()
     except Exception as e:
         logging.warning("personal_db init: %s", e)
+    from app.db import refund_telemetry_db as _refund_telemetry_db
+    try:
+        _refund_telemetry_db.init()
+    except Exception as e:
+        logging.warning("refund_telemetry_db init: %s", e)
     # Background scheduler (auto-cumples diario)
     try:
         from app.jobs.scheduler import start_scheduler

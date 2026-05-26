@@ -16,6 +16,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from app.db import refund_requests_db
+from app.db import refund_telemetry_db
 from app.services.refund_requests.dropshipper_lookup import find_dropshipper
 
 log = logging.getLogger("unidata.api.public_refund_requests")
@@ -206,6 +207,72 @@ def submit(request: Request, body: SubmitBody) -> dict:
             created_at_iso=created["created_at"],
         ),
     }
+
+
+_VALID_TELEMETRY_KINDS = (
+    "network_error",     # TypeError fetch (DNS, CORS, mixed content, adblock)
+    "http_error",        # respuesta HTTP no-2xx (con http_status)
+    "parse_error",       # JSON malformado del backend
+    "validation_error",  # cliente capturo error de validacion del backend
+    "client_exception",  # excepcion JS no esperada en el handler
+)
+
+
+class TelemetryBody(BaseModel):
+    correlation_id: str = Field(..., min_length=1, max_length=64)
+    kind: str = Field(..., min_length=1, max_length=40)
+    message: str | None = Field(default=None, max_length=2000)
+    endpoint: str | None = Field(default=None, max_length=300)
+    http_status: int | None = Field(default=None, ge=0, le=999)
+    api_base: str | None = Field(default=None, max_length=300)
+    page_origin: str | None = Field(default=None, max_length=300)
+    referrer: str | None = Field(default=None, max_length=500)
+    dni: str | None = Field(default=None, max_length=20)
+    email: str | None = Field(default=None, max_length=200)
+    extra: dict | None = None
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v: str) -> str:
+        v = (v or "").strip()
+        if v not in _VALID_TELEMETRY_KINDS:
+            raise ValueError(f"kind invalido. Validos: {', '.join(_VALID_TELEMETRY_KINDS)}")
+        return v
+
+
+@router.post("/telemetry", status_code=202)
+@limiter.limit("30/minute")
+def telemetry(request: Request, body: TelemetryBody) -> dict:
+    """Captura errores client-side del form publico para diagnosticar Failed to
+    fetch / CORS / 5xx en usuarios reales. Fire-and-forget desde el frontend.
+    Devuelve 202 incluso si el insert falla, para no romper UX del usuario."""
+    user_agent = (request.headers.get("user-agent") or "")[:500]
+    submitter_ip = request.client.host if request.client else None
+    try:
+        rec_id = refund_telemetry_db.record(
+            correlation_id=body.correlation_id.strip()[:64],
+            kind=body.kind,
+            message=(body.message or "").strip()[:2000] or None,
+            endpoint=body.endpoint,
+            http_status=body.http_status,
+            api_base=body.api_base,
+            user_agent=user_agent or None,
+            page_origin=body.page_origin,
+            referrer=body.referrer,
+            dni=(body.dni or "").strip() or None,
+            email=(body.email or "").strip().lower() or None,
+            submitter_ip=submitter_ip,
+            extra=body.extra,
+        )
+        log.warning(
+            "refund_form_telemetry kind=%s endpoint=%s status=%s corr=%s dni=%s ua=%s",
+            body.kind, body.endpoint, body.http_status, body.correlation_id,
+            body.dni, user_agent[:80],
+        )
+        return {"ok": True, "id": rec_id}
+    except Exception as e:
+        log.exception("telemetry insert failed: %s", e)
+        return {"ok": False}
 
 
 def _format_display_code(*, dni: str, plan: str | None, created_at_iso: str) -> str:

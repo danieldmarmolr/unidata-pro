@@ -2,7 +2,72 @@
 
 import { useState } from "react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const PROD_API = "https://api.unidatacenter.com.ar";
+
+function resolveApiUrl(): string {
+  if (typeof window === "undefined") return PROD_API;
+  const isLocal = /^(localhost|127\.0\.0\.1)(:|$)/.test(window.location.host);
+  if (isLocal) {
+    return process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+  }
+  return PROD_API;
+}
+
+const API_URL = resolveApiUrl();
+
+function newCorrelationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `inc-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function incidentCode(corrId: string): string {
+  const tail = corrId.replace(/-/g, "").slice(-8).toUpperCase();
+  return `INC-${tail}`;
+}
+
+type TelemetryKind =
+  | "network_error"
+  | "http_error"
+  | "parse_error"
+  | "validation_error"
+  | "client_exception";
+
+function sendTelemetry(payload: {
+  correlation_id: string;
+  kind: TelemetryKind;
+  message?: string;
+  endpoint?: string;
+  http_status?: number;
+  dni?: string;
+  email?: string;
+  extra?: Record<string, unknown>;
+}): void {
+  if (typeof window === "undefined") return;
+  const body = JSON.stringify({
+    ...payload,
+    api_base: API_URL,
+    page_origin: window.location.origin,
+    referrer: document.referrer || null,
+  });
+  try {
+    const blob = new Blob([body], { type: "application/json" });
+    if (navigator.sendBeacon?.(`${API_URL}/api/public/refund-requests/telemetry`, blob)) {
+      return;
+    }
+  } catch {
+    // sendBeacon no disponible o blocked - cae a fetch keepalive
+  }
+  fetch(`${API_URL}/api/public/refund-requests/telemetry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch(() => {
+    // fire-and-forget - si tambien falla, no podemos hacer nada
+  });
+}
 
 type Dropshipper = {
   name: string;
@@ -91,30 +156,124 @@ const BANCOS_AR = [
   "Otro",
 ];
 
-async function fetchJson<T>(path: string, body: unknown): Promise<T> {
+class FormError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: TelemetryKind,
+    public readonly correlationId: string,
+    public readonly httpStatus?: number,
+  ) {
+    super(message);
+  }
+}
+
+async function fetchJsonOnce<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${API_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await res.json().catch(() => ({}));
+  let data: Record<string, unknown> = {};
+  try {
+    data = await res.json();
+  } catch {
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`) as Error & { __status: number };
+      err.__status = res.status;
+      throw err;
+    }
+  }
   if (!res.ok) {
     let detail = "";
-    if (typeof data?.detail === "string") {
-      detail = data.detail;
-    } else if (Array.isArray(data?.detail)) {
-      detail = data.detail
+    const d = (data as { detail?: unknown }).detail;
+    if (typeof d === "string") {
+      detail = d;
+    } else if (Array.isArray(d)) {
+      detail = d
         .map((e: { loc?: unknown[]; msg?: string }) => {
           const loc = Array.isArray(e?.loc) ? e.loc.join(".") : "";
           return loc ? `${loc}: ${e?.msg ?? "error"}` : e?.msg ?? "error";
         })
         .join("; ");
     } else {
-      detail = data?.message ?? `HTTP ${res.status}`;
+      detail = (data as { message?: string }).message ?? `HTTP ${res.status}`;
     }
-    throw new Error(detail);
+    const err = new Error(detail) as Error & { __status: number };
+    err.__status = res.status;
+    throw err;
   }
   return data as T;
+}
+
+async function fetchJson<T>(
+  path: string,
+  body: unknown,
+  opts: { dni?: string; email?: string } = {},
+): Promise<T> {
+  const correlationId = newCorrelationId();
+
+  const isNetworkError = (e: unknown): boolean =>
+    e instanceof TypeError || (e instanceof Error && /failed to fetch|networkerror/i.test(e.message));
+
+  try {
+    return await fetchJsonOnce<T>(path, body);
+  } catch (e1) {
+    if (isNetworkError(e1)) {
+      await new Promise((r) => setTimeout(r, 800));
+      try {
+        return await fetchJsonOnce<T>(path, body);
+      } catch (e2) {
+        if (isNetworkError(e2)) {
+          sendTelemetry({
+            correlation_id: correlationId,
+            kind: "network_error",
+            message: e2 instanceof Error ? e2.message : String(e2),
+            endpoint: path,
+            dni: opts.dni,
+            email: opts.email,
+            extra: { retried: true, first_error: e1 instanceof Error ? e1.message : String(e1) },
+          });
+          throw new FormError(
+            `No pudimos conectarnos al servidor. Verificá tu conexión a internet y reintentá. Si seguís sin poder enviar, escribinos por WhatsApp con este código: ${incidentCode(correlationId)}`,
+            "network_error",
+            correlationId,
+          );
+        }
+        e1 = e2;
+      }
+    }
+    const status = (e1 as Error & { __status?: number }).__status;
+    const msg = e1 instanceof Error ? e1.message : String(e1);
+    if (typeof status === "number" && status >= 500) {
+      sendTelemetry({
+        correlation_id: correlationId,
+        kind: "http_error",
+        message: msg,
+        endpoint: path,
+        http_status: status,
+        dni: opts.dni,
+        email: opts.email,
+      });
+      throw new FormError(
+        `Tuvimos un problema procesando tu solicitud (HTTP ${status}). Reintentá en unos minutos. Código: ${incidentCode(correlationId)}`,
+        "http_error",
+        correlationId,
+        status,
+      );
+    }
+    if (typeof status === "number" && status >= 400 && status !== 422) {
+      sendTelemetry({
+        correlation_id: correlationId,
+        kind: "validation_error",
+        message: msg,
+        endpoint: path,
+        http_status: status,
+        dni: opts.dni,
+        email: opts.email,
+      });
+    }
+    throw e1 instanceof Error ? e1 : new Error(msg);
+  }
 }
 
 export default function DevSuscripcionPage() {
@@ -162,6 +321,7 @@ export default function DevSuscripcionPage() {
     try {
       const data = await fetchJson<ValidateResp>(
         "/api/public/refund-requests/validate",
+        { dni: cleanDni, email: email.trim() },
         { dni: cleanDni, email: email.trim() },
       );
       setDni(cleanDni);
@@ -262,6 +422,7 @@ export default function DevSuscripcionPage() {
           abandonment_reason: abandonmentReason,
           reason: reason.trim() || null,
         },
+        { dni, email: email.trim() },
       );
       setRequestId(data.id);
       setDisplayCode(data.display_code ?? null);
