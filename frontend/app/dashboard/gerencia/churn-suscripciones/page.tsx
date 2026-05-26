@@ -323,8 +323,7 @@ export default function ChurnSuscripcionesPage() {
               Churn de Suscripciones MELI
             </h1>
             <p className="text-sm text-text-muted mt-1">
-              Cancelaciones formales · errores del form · razones agregadas.{" "}
-              <span className="text-xs">(Iteración 1 — sin análisis IA todavía)</span>
+              Cancelaciones formales · revenue real Talo · análisis IA con Gemini · click en una barra del chart para drill-down al período.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -449,16 +448,7 @@ export default function ChurnSuscripcionesPage() {
                     <div className="h-full flex items-center justify-center text-sm text-text-muted">Sin datos</div>
                   ) : (
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={data.evolution.series}
-                        onClick={(e) => {
-                          const payload = (e as unknown as { activePayload?: Array<{ payload?: EvolutionBucket }> })?.activePayload?.[0]?.payload;
-                          if (payload?.period_start && payload?.period_end) {
-                            setDrillRange({ start: payload.period_start, end: payload.period_end });
-                          }
-                        }}
-                        style={{ cursor: "pointer" }}
-                      >
+                      <BarChart data={data.evolution.series} style={{ cursor: "pointer" }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                         <XAxis
                           dataKey="period_start"
@@ -469,21 +459,34 @@ export default function ChurnSuscripcionesPage() {
                         <Tooltip
                           contentStyle={{ fontSize: 12, borderRadius: 8 }}
                           labelFormatter={(label) => fmtBucketLong(String(label), data.granularity)}
+                          cursor={{ fill: "rgba(162, 89, 255, 0.08)" }}
                         />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
-                        <Bar dataKey="pending"               stackId="s" name="Pendiente"     fill={STATUS_META.pending.color} />
-                        <Bar dataKey="transferred"           stackId="s" name="Transferido"   fill={STATUS_META.transferred.color} />
-                        <Bar dataKey="integration_cancelled" stackId="s" name="Cancel. MELI"  fill={STATUS_META.integration_cancelled.color} />
-                        <Bar dataKey="rejected"              stackId="s" name="Rechazada"     fill={STATUS_META.rejected.color}>
-                          <LabelList
-                            dataKey="total"
-                            position="top"
-                            fill="#0f172a"
-                            fontSize={11}
-                            fontWeight={600}
-                            formatter={(v) => (typeof v === "number" && v > 0 ? String(v) : "")}
-                          />
-                        </Bar>
+                        {(() => {
+                          const handleBarClick = (entry: unknown) => {
+                            const p = (entry as { payload?: EvolutionBucket; period_start?: string; period_end?: string });
+                            const ps = p?.payload?.period_start ?? p?.period_start;
+                            const pe = p?.payload?.period_end ?? p?.period_end;
+                            if (ps && pe) setDrillRange({ start: ps, end: pe });
+                          };
+                          return (
+                            <>
+                              <Bar dataKey="pending"               stackId="s" name="Pendiente"     fill={STATUS_META.pending.color}               onClick={handleBarClick} style={{ cursor: "pointer" }} />
+                              <Bar dataKey="transferred"           stackId="s" name="Transferido"   fill={STATUS_META.transferred.color}           onClick={handleBarClick} style={{ cursor: "pointer" }} />
+                              <Bar dataKey="integration_cancelled" stackId="s" name="Cancel. MELI"  fill={STATUS_META.integration_cancelled.color} onClick={handleBarClick} style={{ cursor: "pointer" }} />
+                              <Bar dataKey="rejected"              stackId="s" name="Rechazada"     fill={STATUS_META.rejected.color}              onClick={handleBarClick} style={{ cursor: "pointer" }}>
+                                <LabelList
+                                  dataKey="total"
+                                  position="top"
+                                  fill="#0f172a"
+                                  fontSize={11}
+                                  fontWeight={600}
+                                  formatter={(v) => (typeof v === "number" && v > 0 ? String(v) : "")}
+                                />
+                              </Bar>
+                            </>
+                          );
+                        })()}
                       </BarChart>
                     </ResponsiveContainer>
                   )}
