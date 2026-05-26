@@ -12,6 +12,7 @@ from app.services.executive_profit import (
 )
 from app.services.executive_360 import gerencia_360_blocks
 from app.services.commercial_breakdown import commercial_breakdown
+from app.services import subscription_churn
 
 router = APIRouter(prefix="/api/dashboards", tags=["dashboards"])
 
@@ -21,6 +22,7 @@ _cache_360: TTLCache = TTLCache(maxsize=64, ttl=300)
 _cache_series: TTLCache = TTLCache(maxsize=8, ttl=600)  # serie 90d: TTL largo, es muy cara
 _cache_consolidated: TTLCache = TTLCache(maxsize=8, ttl=600)
 _cache_commercial: TTLCache = TTLCache(maxsize=32, ttl=600)
+_cache_churn: TTLCache = TTLCache(maxsize=8, ttl=180)
 
 
 @router.get("/gerencia")
@@ -117,5 +119,23 @@ def get_gerencia_commercial(
             top_n_skus=top_n_skus,
             top_n_customers=top_n_customers,
         )
+
+    return _build()
+
+
+@router.get("/gerencia/churn-suscripciones")
+def get_gerencia_churn(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["30d", "90d", "6m", "1y"], Query()] = "30d",
+) -> dict:
+    """Churn de suscripciones MELI: cancelaciones, errores del form y razones.
+    Iteracion 1 — sin LLM ni cruce con PaymentIntentSubscription todavia."""
+    require_area(user, ["finanzas", "administracion", "cs"])
+
+    key = f"churn:{period}"
+
+    @cached(_cache_churn, key=lambda: key)
+    def _build() -> dict:
+        return subscription_churn.get_churn_overview(period=period)
 
     return _build()

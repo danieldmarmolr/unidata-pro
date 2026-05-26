@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
   TrendingUp,
+  TrendingDown,
   Truck,
   Wallet,
   Megaphone,
@@ -149,6 +150,7 @@ const ITEMS: NavItem[] = [
       { label: "Vista general",            href: "/dashboard/finanzas",                                icon: Wallet     },
       { label: "Facturas Suscripciones",   href: "/dashboard/finanzas/facturas-suscripciones-meli",    icon: FileText   },
       { label: "Dev. Suscripciones",       href: "/dashboard/finanzas/dev-suscripciones",              icon: RotateCcw  },
+      { label: "Churn Suscripciones",      href: "/dashboard/gerencia/churn-suscripciones",            icon: TrendingDown },
       { label: "Flujo de Fondos",          href: "/dashboard/finanzas/flujo-fondos",                   icon: PiggyBank  },
     ],
   },
