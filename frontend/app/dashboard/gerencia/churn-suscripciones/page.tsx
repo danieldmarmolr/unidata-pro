@@ -314,8 +314,8 @@ export default function ChurnSuscripcionesPage() {
   return (
     <>
       <Topbar title="Churn de Suscripciones" subtitle="Cancelaciones MELI y fricción del form" hidePeriod />
-      <TodayPanel />
-      <div className="px-6 py-6 max-w-[1400px] mx-auto space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <TodayPanel />
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold text-text flex items-center gap-2">
