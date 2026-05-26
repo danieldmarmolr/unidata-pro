@@ -269,6 +269,132 @@ def _monthly_by_channel(eng_uni, eng_uni_dropper, sku: str) -> list[dict]:
     return [{"mes": m, **vals} for m, vals in sorted(months.items())]
 
 
+# Mapeo granularidad -> bucket trunc (PG) + formato de salida.
+# day  -> date_trunc('day',  ts), formato YYYY-MM-DD
+# week -> date_trunc('week', ts), formato YYYY-MM-DD (lunes de la semana)
+# month -> date_trunc('month', ts), formato YYYY-MM
+_GRAN_CFG = {
+    "day": ("day", "YYYY-MM-DD"),
+    "week": ("week", "YYYY-MM-DD"),
+    "month": ("month", "YYYY-MM"),
+}
+
+
+def series_by_channel(sku: str, granularity: str = "day", days: int = 90) -> dict:
+    """Serie agregada por bucket (dia / semana / mes) en los 4 canales del SKU.
+
+    Generaliza _monthly_by_channel para granularidades mas finas. Devuelve la
+    misma forma de fila que el endpoint mensual (`{period, unistore_tn,
+    unidrop_meli, ..., rev_unistore_tn, ...}`) para que el grafico apilado del
+    frontend pueda reutilizar la misma logica.
+
+    Args:
+        sku: SKU canonico.
+        granularity: 'day' | 'week' | 'month'.
+        days: ventana hacia atras desde NOW().
+    """
+    if not sku:
+        return {"sku": "", "granularity": granularity, "days": days, "rows": []}
+    if granularity not in _GRAN_CFG:
+        granularity = "day"
+    bucket, fmt = _GRAN_CFG[granularity]
+
+    eng_uni = get_engine("unistore")
+    eng_drp = get_engine("unidrop")
+
+    series: dict[str, dict[str, float]] = {}
+
+    def _add(period: str, channel: str, units: int, revenue: float) -> None:
+        if period not in series:
+            series[period] = {
+                "unistore_tn": 0, "unistore_meli": 0, "unidrop_tn": 0, "unidrop_meli": 0,
+                "rev_unistore_tn": 0.0, "rev_unistore_meli": 0.0,
+                "rev_unidrop_tn": 0.0, "rev_unidrop_meli": 0.0,
+            }
+        series[period][channel] = series[period].get(channel, 0) + int(units or 0)
+        rev_key = "rev_" + channel
+        series[period][rev_key] = series[period].get(rev_key, 0.0) + float(revenue or 0)
+
+    days_int = max(1, int(days or 90))
+
+    # Unistore TN
+    try:
+        rows = q(eng_uni, f"""
+            SELECT to_char(date_trunc('{bucket}', o."createdAt"), '{fmt}'),
+                   SUM(oi.quantity)::int,
+                   SUM(oi.quantity * oi.price)::float
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            WHERE oi.sku = :sku AND o."paymentStatus" = 'paid'
+              AND o."createdAt" >= NOW() - make_interval(days => :d)
+            GROUP BY 1
+        """, {"sku": sku, "d": days_int}) or []
+        for r in rows:
+            _add(r[0], "unistore_tn", r[1], r[2])
+    except Exception as e:
+        log.warning("series unistore_tn fail: %s", e)
+
+    # Unistore MELI
+    try:
+        rows = q(eng_uni, f"""
+            SELECT to_char(date_trunc('{bucket}', mo.date_created), '{fmt}'),
+                   SUM(mi.quantity)::int,
+                   SUM(mi.quantity * mi.unit_price)::float
+            FROM meli.meli_order_items mi
+            JOIN meli.meli_orders mo ON mo.id = mi.order_id
+            WHERE mi.seller_sku = :sku
+              AND mo.status IN ('paid','confirmed','shipped','delivered')
+              AND mo.date_created >= NOW() - make_interval(days => :d)
+            GROUP BY 1
+        """, {"sku": sku, "d": days_int}) or []
+        for r in rows:
+            _add(r[0], "unistore_meli", r[1], r[2])
+    except Exception as e:
+        log.warning("series unistore_meli fail: %s", e)
+
+    # Unidrop TN
+    try:
+        rows = q(eng_drp, f"""
+            SELECT to_char(date_trunc('{bucket}', tno.created_at), '{fmt}'),
+                   SUM(oi.quantity)::int,
+                   SUM(oi.quantity * oi.price)::float
+            FROM public.tienda_nube_order_items oi
+            JOIN public.tienda_nube_orders tno ON tno.tienda_nube_id = oi.tienda_nube_order_id
+            WHERE oi.sku = :sku AND tno.payment_status::text = 'paid'
+              AND tno.created_at >= NOW() - make_interval(days => :d)
+            GROUP BY 1
+        """, {"sku": sku, "d": days_int}) or []
+        for r in rows:
+            _add(r[0], "unidrop_tn", r[1], r[2])
+    except Exception as e:
+        log.warning("series unidrop_tn fail: %s", e)
+
+    # Unidrop MELI
+    try:
+        rows = q(eng_drp, f"""
+            SELECT to_char(date_trunc('{bucket}', o."dateCreated"), '{fmt}'),
+                   SUM(oi.quantity)::int,
+                   SUM(oi.quantity * oi."unitPrice")::float
+            FROM mercado_libre_dev."OrderItemMercadoLibre" oi
+            JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = oi."orderId"
+            WHERE oi."sellerSku" = :sku
+              AND (o.status IN ('paid','confirmed','shipped','delivered') OR o."paidAmount" > 0)
+              AND o."dateCreated" >= NOW() - make_interval(days => :d)
+            GROUP BY 1
+        """, {"sku": sku, "d": days_int}) or []
+        for r in rows:
+            _add(r[0], "unidrop_meli", r[1], r[2])
+    except Exception as e:
+        log.warning("series unidrop_meli fail: %s", e)
+
+    return {
+        "sku": sku,
+        "granularity": granularity,
+        "days": days_int,
+        "rows": [{"period": p, **vals} for p, vals in sorted(series.items())],
+    }
+
+
 def sku_omnichannel(sku: str) -> dict:
     """Devuelve agregados del SKU en los 4 canales + serie mensual + alertas
     de inconsistencia."""

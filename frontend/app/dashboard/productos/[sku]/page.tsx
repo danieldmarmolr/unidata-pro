@@ -1,6 +1,6 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/topbar";
@@ -8,11 +8,12 @@ import { CategoryTable } from "@/components/generic-table";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { ExportButtons } from "@/components/export-buttons";
 import { SkuOmnichannel, type UnidropPricingPayload } from "@/components/sku-omnichannel";
-import { SkuStackedEvolution } from "@/components/sku-stacked-evolution";
+import { SkuStackedEvolution, type SeriesRow, type Granularity } from "@/components/sku-stacked-evolution";
 import { SkuStockDetail } from "@/components/sku-stock-detail";
 import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
 import { SkuKpiStrip } from "@/components/sku-kpi-strip";
 import { SkuDigipArticulo, type DigipArticuloInfo } from "@/components/sku-digip-articulo";
+import { SkuStockVsDemand } from "@/components/sku-stock-vs-demand";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -42,6 +43,21 @@ type CostInfo = {
   legacy_lote?: boolean;
 } | null;
 
+type StockBreakdown = {
+  available: boolean;
+  disponibles: number;
+  reservadas: number;
+  bloqueadas: number;
+  a_despachar: number;
+  en_recepcion: number;
+  transito_interno: number;
+  vencidas: number;
+  pedidas: number;
+  total_fisico: number;
+  total_pipeline: number;
+  updated_at: string | null;
+};
+
 type StockDetailPayload = {
   sku: string;
   total: number;
@@ -54,6 +70,7 @@ type StockDetailPayload = {
     last_movement: string | null;
     movements_count: number;
   }>;
+  breakdown?: StockBreakdown | null;
 };
 
 type ChannelForecast = {
@@ -147,6 +164,14 @@ type OmnichannelResp = {
   }>;
 };
 
+// Shape del endpoint /api/dashboards/sku-omnichannel/{sku}/series
+type SeriesResp = {
+  sku: string;
+  granularity: Granularity;
+  days: number;
+  rows: SeriesRow[];
+};
+
 export default function ProductDetailPage({ params }: { params: Promise<{ sku: string }> }) {
   const { sku: skuRaw } = use(params);
   const sku = decodeURIComponent(skuRaw);
@@ -208,6 +233,17 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
     queryKey: ["sku-digip-info", sku],
     queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/digip-info`),
     staleTime: 5 * 60_000,
+    enabled: !!sku,
+  });
+
+  // Granularidad del grafico (dia / semana / mes). Day arranca con ventana 90d,
+  // week con 365d, month con 365d (los meses agrupan a 12 buckets).
+  const [granularity, setGranularity] = useState<Granularity>("month");
+  const seriesDays = granularity === "day" ? 90 : granularity === "week" ? 365 : 365;
+  const { data: seriesData, isLoading: seriesLoading } = useQuery<SeriesResp>({
+    queryKey: ["sku-omni-series", sku, granularity, seriesDays],
+    queryFn: () => api(`/api/dashboards/sku-omnichannel/${encodeURIComponent(sku)}/series?granularity=${granularity}&days=${seriesDays}`),
+    staleTime: 3 * 60_000,
     enabled: !!sku,
   });
 
@@ -328,8 +364,15 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           </div>
         )}
 
-        {/* Maestro DIGIP: vista espejo de digip.Articulo + UnidadMedida + Codigos */}
+        {/* Maestro DIGIP: vista espejo de digip.Articulo + UnidadMedida + Codigos (colapsable) */}
         <SkuDigipArticulo data={digipInfoData} loading={digipInfoLoading} />
+
+        {/* Stock vs Demanda omnicanal — la pregunta clave del catalogo:
+            cuanto stock tengo vs cuanto consume la demanda real */}
+        <SkuStockVsDemand
+          breakdown={stockDetailData?.breakdown ?? null}
+          forecast={forecastData ?? null}
+        />
 
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl h-[68px] mb-6 animate-pulse" />
@@ -337,17 +380,16 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           <SkuKpiStrip cards={data.cards} />
         )}
 
-        {/* Forecast hero: barras apiladas por canal + linea forecast 30d/60d */}
-        {omni?.monthly_by_channel ? (
-          <div className="mb-6">
-            <SkuStackedEvolution
-              monthly={omni.monthly_by_channel}
-              forecast={forecastData ?? null}
-            />
-          </div>
-        ) : (
-          <div className="mb-6 bg-surface border border-border rounded-xl p-5 h-[440px] animate-pulse" />
-        )}
+        {/* Evolucion temporal con granularidad configurable (dia / semana / mes) */}
+        <div className="mb-6">
+          <SkuStackedEvolution
+            series={seriesData?.rows ?? []}
+            forecast={forecastData ?? null}
+            granularity={granularity}
+            onGranularityChange={setGranularity}
+            loading={seriesLoading}
+          />
+        </div>
 
         {/* Vista omnicanal del SKU: 4 fuentes (Unistore TN/MELI + Unidrop TN/MELI)
             + pricing mayorista enriquecido en las cards Unidrop */}

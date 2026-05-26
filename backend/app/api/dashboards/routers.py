@@ -672,6 +672,24 @@ def get_sku_omnichannel(
     return _b()
 
 
+@router.get("/sku-omnichannel/{sku}/series")
+def get_sku_omnichannel_series(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+    granularity: Annotated[Literal["day", "week", "month"], Query()] = "day",
+    days: Annotated[int, Query(ge=1, le=730)] = 90,
+) -> dict:
+    """Serie temporal del SKU por canal en granularidad diaria, semanal o mensual.
+    Reutilizable desde el grafico apilado del SKU 360 cuando el usuario quiere
+    ver el detalle dia a dia en vez de mes a mes."""
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-omni-series-{sku}-{granularity}-{days}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku_omni_svc.series_by_channel(sku, granularity=granularity, days=days)
+    return _b()
+
+
 @router.get("/sku-optimizer")
 def get_sku_optimizer(
     user: Annotated[dict, Depends(current_user)],

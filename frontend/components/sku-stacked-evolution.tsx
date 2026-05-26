@@ -3,17 +3,20 @@
 import { useState, useMemo } from "react";
 import {
   Bar, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
-  CartesianGrid, Legend, Line, ReferenceLine,
+  CartesianGrid, Legend, Line, ReferenceLine, Area,
 } from "recharts";
 import { formatCurrency, formatNumber } from "@/lib/utils";
-import { BarChart2, DollarSign, Package } from "lucide-react";
+import { DollarSign, Package, Layers, BarChart3, Calendar } from "lucide-react";
 
-// Reusa los datos que ya entrega /api/dashboards/sku-omnichannel/{sku} →
-// monthly_by_channel + forecast_per_channel del product_detail.
-// El usuario alterna entre Revenue / Unidades, y opcionalmente el forecast 30/60.
+// Grafico de evolucion del SKU en sus 4 canales con 3 ejes de configuracion:
+//   - Granularidad: mes / semana / dia (data viene de la page, no del componente)
+//   - Metrica: revenue / unidades
+//   - Modo: apilado por canal / total unico
+// El forecast 30d/60d solo aplica en modo mensual (Para los demas no tiene
+// sentido proyectar a 30d en buckets de 1 dia).
 
-type MonthlyRow = {
-  mes: string;
+export type SeriesRow = {
+  period: string;
   unistore_tn: number;
   unistore_meli: number;
   unidrop_tn: number;
@@ -40,9 +43,14 @@ type ForecastPayload = {
   total: { forecast_30d: number; forecast_60d: number; revenue_forecast_30d: number };
 };
 
+export type Granularity = "day" | "week" | "month";
+
 type Props = {
-  monthly: MonthlyRow[];
+  series: SeriesRow[];
   forecast: ForecastPayload | null;
+  granularity: Granularity;
+  onGranularityChange?: (g: Granularity) => void;
+  loading?: boolean;
 };
 
 const CHANNEL_COLORS: Record<string, string> = {
@@ -62,6 +70,7 @@ const CHANNEL_LABELS: Record<string, string> = {
 const ALL_CHANNELS = ["unistore_tn", "unistore_meli", "unidrop_tn", "unidrop_meli"] as const;
 
 type Metric = "units" | "revenue";
+type Mode = "stacked" | "total";
 
 function fmt(v: number, metric: Metric) {
   if (metric === "revenue") {
@@ -77,12 +86,25 @@ function fmtFull(v: number, metric: Metric) {
   return metric === "revenue" ? formatCurrency(v) : formatNumber(v);
 }
 
-export function SkuStackedEvolution({ monthly, forecast }: Props) {
+const GRAN_LABELS: Record<Granularity, string> = {
+  day: "Día",
+  week: "Semana",
+  month: "Mes",
+};
+
+function periodLabel(p: string, gran: Granularity): string {
+  if (gran === "month") return p; // YYYY-MM
+  // YYYY-MM-DD → DD/MM (compacto) si dia / semana
+  const parts = p.split("-");
+  if (parts.length === 3) return `${parts[2]}/${parts[1]}`;
+  return p;
+}
+
+export function SkuStackedEvolution({ series, forecast, granularity, onGranularityChange, loading }: Props) {
   const [metric, setMetric] = useState<Metric>("revenue");
+  const [mode, setMode] = useState<Mode>("stacked");
   const [showForecast, setShowForecast] = useState(true);
-  const [activeChannels, setActiveChannels] = useState<Set<string>>(
-    new Set(ALL_CHANNELS),
-  );
+  const [activeChannels, setActiveChannels] = useState<Set<string>>(new Set(ALL_CHANNELS));
 
   function toggleChannel(ch: string) {
     const next = new Set(activeChannels);
@@ -91,12 +113,18 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
     setActiveChannels(next);
   }
 
+  // Forecast solo aplica en modo mensual (calculado para 30d/60d)
+  const forecastApplies = granularity === "month";
+
   const chartData = useMemo(() => {
-    const rows = monthly.map((m) => {
-      const fields: Record<string, unknown> = { mes: m.mes };
+    const rows = series.map((m) => {
+      const fields: Record<string, unknown> = {
+        period: m.period,
+        label: periodLabel(m.period, granularity),
+      };
       let total = 0;
       for (const ch of ALL_CHANNELS) {
-        const key = metric === "revenue" ? (`rev_${ch}` as keyof MonthlyRow) : (ch as keyof MonthlyRow);
+        const key = metric === "revenue" ? (`rev_${ch}` as keyof SeriesRow) : (ch as keyof SeriesRow);
         const v = Number(m[key]) || 0;
         fields[ch] = activeChannels.has(ch) ? v : 0;
         if (activeChannels.has(ch)) total += v;
@@ -105,30 +133,23 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
       return fields;
     });
 
-    // Proyeccion: agregamos 2 puntos virtuales (30d y 60d) si forecast disponible
-    if (showForecast && forecast && rows.length > 0) {
-      const lastMes = monthly[monthly.length - 1]?.mes ?? "";
+    if (forecastApplies && showForecast && forecast && rows.length > 0) {
+      const lastMes = series[series.length - 1]?.period ?? "";
       const [y, mo] = lastMes.split("-").map((x) => parseInt(x, 10));
       const next = (offset: number) => {
         let yy = y;
         let mm = mo + offset;
-        while (mm > 12) {
-          mm -= 12;
-          yy += 1;
-        }
+        while (mm > 12) { mm -= 12; yy += 1; }
         return `${yy}-${String(mm).padStart(2, "0")}`;
       };
 
-      // Forecast 30d como mes proximo (offset 1), 60d como offset 2.
-      const f30Row: Record<string, unknown> = { mes: next(1), __forecast: true };
-      const f60Row: Record<string, unknown> = { mes: next(2), __forecast: true };
+      const f30Row: Record<string, unknown> = { period: next(1), label: next(1), __forecast: true };
+      const f60Row: Record<string, unknown> = { period: next(2), label: next(2), __forecast: true };
       let total30 = 0;
       let total60 = 0;
       for (const ch of ALL_CHANNELS) {
         if (!activeChannels.has(ch)) {
-          f30Row[ch] = 0;
-          f60Row[ch] = 0;
-          continue;
+          f30Row[ch] = 0; f60Row[ch] = 0; continue;
         }
         const fc = forecast[ch];
         const v30 = metric === "revenue" ? (fc?.revenue_forecast_30d ?? 0) : (fc?.forecast_30d ?? 0);
@@ -146,22 +167,62 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
     }
 
     return rows;
-  }, [monthly, metric, activeChannels, showForecast, forecast]);
+  }, [series, metric, activeChannels, showForecast, forecast, forecastApplies, granularity]);
 
-  // Punto donde empieza el forecast (para la linea separadora)
-  const forecastSplitIdx = showForecast && monthly.length > 0 ? monthly.length - 0.5 : null;
+  const forecastSplitIdx = forecastApplies && showForecast && series.length > 0 ? series.length - 0.5 : null;
+  const granOptions: Granularity[] = ["day", "week", "month"];
 
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
       <div className="flex items-baseline justify-between flex-wrap gap-3 mb-4">
         <div>
-          <h3 className="text-sm font-bold text-text">Evolución apilada · 12 meses + forecast</h3>
+          <h3 className="text-sm font-bold text-text">
+            Evolución {mode === "stacked" ? "apilada" : "total"} · {GRAN_LABELS[granularity]}
+            {forecastApplies && showForecast ? " + forecast" : ""}
+          </h3>
           <p className="text-[11px] text-text-muted mt-0.5">
-            Mensual por canal · tooltip muestra valor y % del mix · forecast 30d/60d proyectado a 90d velocity + trend
+            {granularity === "day"
+              ? "Detalle diario · ventana 90d · cada barra = 1 día"
+              : granularity === "week"
+              ? "Detalle semanal · ventana 365d · cada barra = 1 semana (lun-dom)"
+              : "Mensual por canal · 12 meses · forecast 30d/60d via 90d velocity + trend"}
           </p>
         </div>
-        <div className="flex items-center gap-2 text-xs">
-          {/* Toggle metrica */}
+        <div className="flex items-center gap-2 text-xs flex-wrap">
+          {/* Granularidad */}
+          <div className="inline-flex rounded-lg border border-border bg-soft p-0.5">
+            {granOptions.map((g) => (
+              <button
+                key={g}
+                onClick={() => onGranularityChange?.(g)}
+                className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 ${
+                  granularity === g ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"
+                }`}
+              >
+                <Calendar size={11} /> {GRAN_LABELS[g]}
+              </button>
+            ))}
+          </div>
+          {/* Modo */}
+          <div className="inline-flex rounded-lg border border-border bg-soft p-0.5">
+            <button
+              onClick={() => setMode("stacked")}
+              className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 ${
+                mode === "stacked" ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"
+              }`}
+            >
+              <Layers size={11} /> Apilado
+            </button>
+            <button
+              onClick={() => setMode("total")}
+              className={`px-2.5 py-1 rounded-md inline-flex items-center gap-1 ${
+                mode === "total" ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"
+              }`}
+            >
+              <BarChart3 size={11} /> Total
+            </button>
+          </div>
+          {/* Metrica */}
           <div className="inline-flex rounded-lg border border-border bg-soft p-0.5">
             <button
               onClick={() => setMetric("revenue")}
@@ -169,7 +230,7 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
                 metric === "revenue" ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"
               }`}
             >
-              <DollarSign size={12} /> Revenue
+              <DollarSign size={11} /> Revenue
             </button>
             <button
               onClick={() => setMetric("units")}
@@ -177,51 +238,58 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
                 metric === "units" ? "bg-surface text-primary font-bold shadow-sm" : "text-text-muted"
               }`}
             >
-              <Package size={12} /> Unidades
+              <Package size={11} /> Unidades
             </button>
           </div>
-          {/* Toggle forecast */}
-          <button
-            onClick={() => setShowForecast(!showForecast)}
-            className={`px-2.5 py-1 rounded-lg border text-xs ${
-              showForecast
-                ? "bg-primary/10 border-primary/40 text-primary font-bold"
-                : "bg-soft border-border text-text-muted"
-            }`}
-          >
-            Forecast {showForecast ? "ON" : "OFF"}
-          </button>
+          {forecastApplies && (
+            <button
+              onClick={() => setShowForecast(!showForecast)}
+              className={`px-2.5 py-1 rounded-lg border text-xs ${
+                showForecast
+                  ? "bg-primary/10 border-primary/40 text-primary font-bold"
+                  : "bg-soft border-border text-text-muted"
+              }`}
+            >
+              Forecast {showForecast ? "ON" : "OFF"}
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Toggles de canal (chips) */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        {ALL_CHANNELS.map((ch) => {
-          const active = activeChannels.has(ch);
-          return (
-            <button
-              key={ch}
-              onClick={() => toggleChannel(ch)}
-              className={`text-[11px] inline-flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${
-                active
-                  ? "bg-surface border-border text-text"
-                  : "bg-soft/40 border-border/40 text-text-muted line-through"
-              }`}
-            >
-              <span
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ background: CHANNEL_COLORS[ch] }}
-              />
-              {CHANNEL_LABELS[ch]}
-            </button>
-          );
-        })}
-      </div>
+      {/* Toggles de canal (chips) — solo relevantes en modo apilado */}
+      {mode === "stacked" && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {ALL_CHANNELS.map((ch) => {
+            const active = activeChannels.has(ch);
+            return (
+              <button
+                key={ch}
+                onClick={() => toggleChannel(ch)}
+                className={`text-[11px] inline-flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${
+                  active
+                    ? "bg-surface border-border text-text"
+                    : "bg-soft/40 border-border/40 text-text-muted line-through"
+                }`}
+              >
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: CHANNEL_COLORS[ch] }} />
+                {CHANNEL_LABELS[ch]}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
+      {loading && series.length === 0 ? (
+        <div className="h-[340px] animate-pulse bg-soft/40 rounded" />
+      ) : series.length === 0 ? (
+        <div className="h-[340px] flex items-center justify-center text-text-muted text-sm">
+          Sin ventas registradas en el periodo seleccionado.
+        </div>
+      ) : (
       <ResponsiveContainer width="100%" height={340}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-          <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
           <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => fmt(v, metric)} />
           <Tooltip
             content={({ active, payload, label }) => {
@@ -239,71 +307,73 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
                       </span>
                     )}
                   </div>
-                  {ALL_CHANNELS.map((ch) => {
+                  {mode === "stacked" && ALL_CHANNELS.map((ch) => {
                     const v = Number(row[ch]) || 0;
                     if (v === 0) return null;
                     const pct = total > 0 ? (v / total) * 100 : 0;
                     return (
                       <div key={ch} className="flex items-center justify-between gap-3 py-0.5">
                         <span className="inline-flex items-center gap-1.5">
-                          <span
-                            className="w-2 h-2 rounded-sm"
-                            style={{ background: CHANNEL_COLORS[ch] }}
-                          />
+                          <span className="w-2 h-2 rounded-sm" style={{ background: CHANNEL_COLORS[ch] }} />
                           <span className="text-text-muted">{CHANNEL_LABELS[ch]}</span>
                         </span>
                         <span className="font-bold tabular-nums text-text">
-                          {fmtFull(v, metric)}{" "}
-                          <span className="text-[10px] text-text-muted">({pct.toFixed(1)}%)</span>
+                          {fmtFull(v, metric)} <span className="text-[10px] text-text-muted">({pct.toFixed(1)}%)</span>
                         </span>
                       </div>
                     );
                   })}
-                  <div className="border-t border-border mt-2 pt-2 flex justify-between font-bold text-text">
-                    <span>Total mes</span>
+                  <div className={`flex justify-between font-bold text-text ${mode === "stacked" ? "border-t border-border mt-2 pt-2" : ""}`}>
+                    <span>Total</span>
                     <span className="tabular-nums">{fmtFull(total, metric)}</span>
                   </div>
                 </div>
               );
             }}
           />
-          <Legend
-            wrapperStyle={{ fontSize: "11px", paddingTop: 8 }}
-            formatter={(value) => CHANNEL_LABELS[value as string] || value}
-          />
+          {mode === "stacked" && (
+            <Legend wrapperStyle={{ fontSize: "11px", paddingTop: 8 }} formatter={(value) => CHANNEL_LABELS[value as string] || value} />
+          )}
           {forecastSplitIdx !== null && (
             <ReferenceLine
-              x={chartData[Math.floor(forecastSplitIdx)]?.mes as string}
+              x={chartData[Math.floor(forecastSplitIdx)]?.label as string}
               stroke="#9ca3af"
               strokeDasharray="4 4"
               label={{ value: "forecast →", position: "top", fontSize: 10, fill: "#6b7280" }}
             />
           )}
-          {ALL_CHANNELS.map((ch) => (
-            <Bar
-              key={ch}
-              dataKey={ch}
-              stackId="canal"
-              fill={CHANNEL_COLORS[ch]}
-              radius={[0, 0, 0, 0]}
+          {mode === "stacked" && ALL_CHANNELS.map((ch) => (
+            <Bar key={ch} dataKey={ch} stackId="canal" fill={CHANNEL_COLORS[ch]} isAnimationActive={false} />
+          ))}
+          {mode === "total" && (
+            <Area
+              type="monotone"
+              dataKey="__total"
+              fill="#7c3aed"
+              fillOpacity={0.15}
+              stroke="#7c3aed"
+              strokeWidth={2}
+              isAnimationActive={false}
+              name="Total"
+            />
+          )}
+          {mode === "stacked" && (
+            <Line
+              type="monotone"
+              dataKey="__total"
+              stroke="#111827"
+              strokeWidth={2}
+              dot={{ r: 2 }}
+              activeDot={{ r: 4 }}
+              name="Total"
               isAnimationActive={false}
             />
-          ))}
-          {/* Linea = total */}
-          <Line
-            type="monotone"
-            dataKey="__total"
-            stroke="#111827"
-            strokeWidth={2}
-            dot={{ r: 2 }}
-            activeDot={{ r: 4 }}
-            name="Total"
-            isAnimationActive={false}
-          />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
+      )}
 
-      {forecast && (
+      {forecastApplies && forecast && (
         <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-text-muted">
           {ALL_CHANNELS.map((ch) => {
             const fc = forecast[ch];
@@ -312,14 +382,8 @@ export function SkuStackedEvolution({ monthly, forecast }: Props) {
             const trendColor =
               fc.trend_pct > 5 ? "text-emerald-700" : fc.trend_pct < -5 ? "text-rose-700" : "text-text-muted";
             return (
-              <div
-                key={ch}
-                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-soft/40"
-              >
-                <span
-                  className="w-2 h-2 rounded-sm"
-                  style={{ background: CHANNEL_COLORS[ch] }}
-                />
+              <div key={ch} className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-soft/40">
+                <span className="w-2 h-2 rounded-sm" style={{ background: CHANNEL_COLORS[ch] }} />
                 <strong className="text-text">{CHANNEL_LABELS[ch]}</strong>
                 <span>30d: {formatNumber(fc.forecast_30d)} u</span>
                 <span className={trendColor}>

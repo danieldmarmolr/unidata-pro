@@ -83,11 +83,14 @@ function eanKindTone(kind: string | null | undefined): string {
 }
 
 export function SkuDigipArticulo({ data, loading }: Props) {
+  // Colapsado por default — la info maestra es contexto, no la prioridad de la
+  // pagina. Daniel pidio que no robe la atencion del bloque "Stock vs Demanda".
+  const [collapsed, setCollapsed] = useState(true);
   const [showAllArticulo, setShowAllArticulo] = useState(false);
   const [expandedUM, setExpandedUM] = useState<Set<number>>(new Set());
 
   if (loading) {
-    return <div className="bg-surface border border-border rounded-xl p-5 h-[260px] animate-pulse mb-6" />;
+    return <div className="bg-surface border border-border rounded-xl p-5 h-[64px] animate-pulse mb-6" />;
   }
   if (!data || !data.available || !data.articulo) {
     return null;
@@ -113,31 +116,53 @@ export function SkuDigipArticulo({ data, loading }: Props) {
     (c) => !ARTICULO_PRETTY_COLS.some((p) => p.key === c),
   );
 
+  const activo = Boolean(a["Activo"]);
+  const descripcion = (a["Descripcion"] as string) || "";
+
   return (
-    <div className="bg-surface border border-border rounded-xl p-5 mb-6">
-      <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
-            <Database size={18} />
+    <div className="bg-surface border border-border rounded-xl mb-6">
+      <button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        className="w-full flex items-center justify-between flex-wrap gap-2 px-5 py-3 hover:bg-soft/30 transition rounded-xl"
+      >
+        <div className="flex items-center gap-3 text-left">
+          <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+            <Database size={16} />
           </div>
-          <div>
-            <h3 className="text-sm font-bold text-text">Maestro DIGIP del articulo</h3>
-            <p className="text-[11px] text-text-muted">
-              Fuente de verdad: digip.Articulo + digip.ArticuloUnidadMedida + digip.ArticuloUnidadMedidaCodigo
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              {collapsed ? <ChevronRight size={14} className="text-text-muted" /> : <ChevronDown size={14} className="text-text-muted" />}
+              <h3 className="text-sm font-bold text-text">Maestro DIGIP del articulo</h3>
+            </div>
+            <p className="text-[11px] text-text-muted truncate">
+              {descripcion ? `${descripcion} · ` : ""}
+              Fuente: digip.Articulo + UnidadMedida + Codigo · click para {collapsed ? "expandir" : "colapsar"}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-4 text-right">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Unidades de medida</div>
-            <div className="text-xl font-extrabold text-text tabular-nums">{data.unidades_medida.length}</div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold">Codigos GS1</div>
-            <div className="text-xl font-extrabold text-primary tabular-nums">{totalCodigos}</div>
-          </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {activo && (
+            <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
+              <CheckCircle2 size={9} /> activo
+            </span>
+          )}
+          <span className="text-[11px] text-text-muted">
+            <span className="font-extrabold text-text">{data.unidades_medida.length}</span> UM
+          </span>
+          <span className="text-[11px] text-text-muted">
+            <span className="font-extrabold text-primary">{totalCodigos}</span> GS1
+          </span>
+          {data.ean_principal && (
+            <span className="font-mono text-[11px] text-text-muted hidden md:inline">
+              EAN <span className="font-bold text-text">{data.ean_principal}</span>
+            </span>
+          )}
         </div>
-      </div>
+      </button>
+
+      {!collapsed && (
+      <div className="px-5 pb-5">
 
       {/* Pretty grid */}
       {prettyRows.length > 0 && (
@@ -348,6 +373,8 @@ export function SkuDigipArticulo({ data, loading }: Props) {
             </span>
           )}
         </div>
+      )}
+      </div>
       )}
     </div>
   );
