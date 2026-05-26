@@ -1,22 +1,27 @@
 """
 SKU 360 extras - vistas enriquecidas para la pagina /dashboard/productos/[sku].
 
-Agrupa 3 vistas independientes que se inyectan en product_detail():
+Agrupa varias vistas independientes que se inyectan en product_detail():
 
 1. stock_detail()     - DIGIP stock area -> ubicaciones[] con unidades y ultimo
                         movimiento (MovimientoAjuste.fecha) por (sku, area).
-                        Cubre la mitad del prompt 'investigar bien en el stock
-                        de DIGIP por SKU y traeme todo lo que tengas'.
 
-2. forecast_per_channel() - velocity + trend per canal x 4. Reusa el motor
-                            simple de forecast_batch (90d velocity + 30v30 trend
-                            acotado a [-0.5, 0.5]). Devuelve forecast 30d/60d
-                            de unidades y revenue por canal.
+2. forecast_per_channel() - velocity + trend per canal x 4.
 
-3. unidrop_pricing()  - cost_avg + price_retail_avg + markup + stddev por
-                        canal Unidrop (TN + MELI). Extrae la logica de
-                        wholesale_elasticity.py para 1 solo SKU. Permite ver
-                        si el dropshipper paga consistente o hay outliers.
+3. unidrop_pricing()  - cost_avg + price_retail_avg + markup + stddev por canal
+                        Unidrop (TN + MELI).
+
+4. lotes_history()    - todos los lotes en los que aparece el SKU.
+
+5. digip_articulo_info() - Vista ESPEJO de las 3 tablas maestras de DIGIP que
+                            definen el articulo:
+                              - digip.Articulo (1 row, atributos del SKU)
+                              - digip.ArticuloUnidadMedida (N rows, unidades
+                                de medida: unidad / caja / pallet ...)
+                              - digip.ArticuloUnidadMedidaCodigo (N rows por
+                                unidad, codigos escaneables - EAN, UPC, etc)
+                            Descubre las columnas via information_schema, asi
+                            que toma TODO lo que digip tenga (no hardcodea).
 
 NOTA: cada funcion captura sus excepciones - una falla no rompe la pagina.
 Si DIGIP esta caido, stock_detail vuelve vacio pero el resto sigue.
@@ -83,7 +88,10 @@ def _digip_stock_summary(eng, sku: str) -> dict:
             log.warning("digip.Stock: no SKU column found, available cols=%s", sorted(cols))
             return out
 
-        # Construir SELECT solo con las columnas que existen
+        # digip.Stock es 1 row por SKU (resumen consolidado). Por eso no usamos
+        # GROUP BY ni aggregates - SELECT simple sobre 1 fila. Si llegara a
+        # haber duplicados, tomamos la primera (no debiera pasar segun el
+        # diseno de digip).
         select_parts = []
         col_map = {}  # nombre canonico -> nombre real
         canonical_to_db = {
@@ -102,10 +110,9 @@ def _digip_stock_summary(eng, sku: str) -> dict:
                     col_map[canonical] = cand
                     select_parts.append(f'COALESCE("{cand}", 0)::int AS {canonical}')
                     break
-        # updated_at
         upd_col = "updatedAt" if "updatedAt" in cols else ("updated_at" if "updated_at" in cols else None)
         if upd_col:
-            select_parts.append(f'MAX("{upd_col}") AS upd')
+            select_parts.append(f'"{upd_col}" AS upd')
 
         if not select_parts:
             return out
@@ -114,7 +121,7 @@ def _digip_stock_summary(eng, sku: str) -> dict:
             SELECT {", ".join(select_parts)}
             FROM digip."Stock"
             WHERE "{sku_col}" = :sku
-            GROUP BY "{sku_col}"
+            LIMIT 1
         '''
         rows = q(eng, sql, {"sku": sku}) or []
         if not rows:
@@ -521,6 +528,247 @@ def _aggregate_pricing(rows: list) -> dict:
         "markup_pct": markup_pct,
         "pricing_consistency": consistency,
     }
+
+
+# ============================================================
+# LOTES HISTORY: passthrough enriquecido de cost_by_sku.history
+# ============================================================
+
+# ============================================================
+# DIGIP ARTICULO INFO: vista espejo de las 3 tablas maestras
+# ============================================================
+
+# Columnas con datos sensibles o ruido que no aportan al usuario final.
+# Se filtran del payload aunque existan en la tabla.
+_ARTICULO_HIDE_COLS = {
+    "createdBy", "updatedBy", "deletedBy",
+    "deletedAt", "isDeleted",
+    # digip serializa el payload completo en `raw` (str dict), redundante
+    # con el resto de las columnas y muy ruidoso para la UI
+    "raw",
+}
+
+
+def _digip_table_columns(eng, table: str) -> list[str]:
+    """Devuelve las columnas reales de digip.<table> usando information_schema.
+    Respeta el orden ordinal (que es el orden visible en pgAdmin / DBeaver).
+    """
+    try:
+        rows = q(eng, """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'digip' AND table_name = :t
+            ORDER BY ordinal_position
+        """, {"t": table}) or []
+        return [r[0] for r in rows]
+    except Exception as e:
+        log.warning("_digip_table_columns(%s) fail: %s", table, e)
+        return []
+
+
+def _serialize_value(v):
+    """Convierte tipos PG a json-friendly. Datetimes -> ISO str. Decimal -> float.
+    bool -> bool. None -> None. Resto -> str."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, dt.datetime):
+        try:
+            return v.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(v)
+    if isinstance(v, dt.date):
+        return v.isoformat()
+    # decimal.Decimal y otros numericos
+    try:
+        from decimal import Decimal
+        if isinstance(v, Decimal):
+            return float(v)
+    except Exception:
+        pass
+    return str(v)
+
+
+def _row_to_dict(cols: list[str], row) -> dict:
+    """Mapea posicionalmente una row tupla a {col_name: serialized_value},
+    filtrando columnas en _ARTICULO_HIDE_COLS."""
+    out: dict = {}
+    for i, c in enumerate(cols):
+        if c in _ARTICULO_HIDE_COLS:
+            continue
+        try:
+            out[c] = _serialize_value(row[i])
+        except Exception:
+            out[c] = None
+    return out
+
+
+def _ean_kind(codigo: str | None) -> str | None:
+    """Detecta tipo de codigo escaneable por longitud (heuristica GS1).
+    El campo `tipo` no siempre esta cargado, asi que damos un hint."""
+    if not codigo:
+        return None
+    s = str(codigo).strip()
+    if not s.isdigit():
+        return "OTRO"
+    L = len(s)
+    if L == 13:
+        return "EAN-13"
+    if L == 12:
+        return "UPC-A"
+    if L == 8:
+        return "EAN-8"
+    if L == 14:
+        return "GTIN-14"
+    return "OTRO"
+
+
+def digip_articulo_info(sku: str) -> dict:
+    """Vista ESPEJO de las 3 tablas maestras DIGIP que definen el articulo.
+
+    Devuelve TODO lo que digip tenga del SKU, descubriendo las columnas via
+    information_schema (no hardcodea schema porque cambia).
+
+    Estructura:
+        {
+            "sku": str,
+            "available": bool,
+            "articulo": {col: val, ...} | None,   # 1 row de digip.Articulo
+            "articulo_columns": [str],            # orden visible
+            "unidades_medida": [                  # N rows
+                {
+                    "id": int,
+                    ... (resto de columnas),
+                    "codigos": [                  # N codigos escaneables
+                        {"id": int, "Codigo": str, "ean_kind": "EAN-13"|..., ...}
+                    ]
+                }
+            ],
+            "unidad_medida_columns": [str],
+            "codigo_columns": [str],
+            "ean_principal": str | None,          # EAN-13 mejor candidato
+            "ean_principal_kind": str | None,
+        }
+    """
+    out = {
+        "sku": sku,
+        "available": False,
+        "articulo": None,
+        "articulo_columns": [],
+        "unidades_medida": [],
+        "unidad_medida_columns": [],
+        "codigo_columns": [],
+        "ean_principal": None,
+        "ean_principal_kind": None,
+    }
+    try:
+        eng = get_engine("unistore")
+    except Exception as e:
+        log.warning("digip_articulo_info engine fail: %s", e)
+        return out
+
+    # 1) digip.Articulo (1 row)
+    art_cols = _digip_table_columns(eng, "Articulo")
+    if not art_cols:
+        return out
+
+    visible_art_cols = [c for c in art_cols if c not in _ARTICULO_HIDE_COLS]
+    out["articulo_columns"] = visible_art_cols
+
+    try:
+        quoted = ", ".join(f'"{c}"' for c in art_cols)
+        rows = q(eng, f'''
+            SELECT {quoted}
+            FROM digip."Articulo"
+            WHERE "CodigoArticulo" = :sku
+            LIMIT 1
+        ''', {"sku": sku}) or []
+        if rows:
+            out["articulo"] = _row_to_dict(art_cols, rows[0])
+            out["available"] = True
+    except Exception as e:
+        log.warning("digip_articulo_info articulo fail sku=%s err=%s", sku, e)
+
+    # 2) digip.ArticuloUnidadMedida (N rows: unidad / caja / pallet ...)
+    um_cols = _digip_table_columns(eng, "ArticuloUnidadMedida")
+    cod_cols = _digip_table_columns(eng, "ArticuloUnidadMedidaCodigo")
+    out["unidad_medida_columns"] = [c for c in um_cols if c not in _ARTICULO_HIDE_COLS]
+    out["codigo_columns"] = [c for c in cod_cols if c not in _ARTICULO_HIDE_COLS]
+
+    um_by_id: dict = {}
+    if um_cols:
+        try:
+            quoted = ", ".join(f'"{c}"' for c in um_cols)
+            # ordering preferente: principal/unidad antes que pallet/caja si existe el flag
+            order_clause = "id ASC"
+            if "esPrincipal" in um_cols:
+                order_clause = '"esPrincipal" DESC NULLS LAST, id ASC'
+            elif "factor" in um_cols:
+                order_clause = "factor ASC NULLS FIRST, id ASC"
+            rows = q(eng, f'''
+                SELECT {quoted}
+                FROM digip."ArticuloUnidadMedida"
+                WHERE "articuloCodigo" = :sku
+                ORDER BY {order_clause}
+            ''', {"sku": sku}) or []
+            for r in rows:
+                d = _row_to_dict(um_cols, r)
+                d["codigos"] = []
+                if "id" in d and d["id"] is not None:
+                    um_by_id[int(d["id"])] = d
+                    out["unidades_medida"].append(d)
+            if rows:
+                out["available"] = True
+        except Exception as e:
+            log.warning("digip_articulo_info unidad_medida fail sku=%s err=%s", sku, e)
+
+    # 3) digip.ArticuloUnidadMedidaCodigo (N rows por unidad: EAN / UPC / interno)
+    if cod_cols and um_by_id:
+        try:
+            quoted = ", ".join(f'c."{c}"' for c in cod_cols)
+            rows = q(eng, f'''
+                SELECT {quoted}
+                FROM digip."ArticuloUnidadMedidaCodigo" c
+                JOIN digip."ArticuloUnidadMedida" u ON u.id = c."unidadMedidaId"
+                WHERE u."articuloCodigo" = :sku
+                ORDER BY c.id ASC
+            ''', {"sku": sku}) or []
+            for r in rows:
+                d = _row_to_dict(cod_cols, r)
+                cod_val = d.get("Codigo") or d.get("codigo")
+                d["ean_kind"] = _ean_kind(cod_val)
+                um_id = d.get("unidadMedidaId")
+                if um_id is not None:
+                    try:
+                        um_id_int = int(um_id)
+                    except (TypeError, ValueError):
+                        um_id_int = None
+                    if um_id_int is not None and um_id_int in um_by_id:
+                        um_by_id[um_id_int]["codigos"].append(d)
+        except Exception as e:
+            log.warning("digip_articulo_info codigos fail sku=%s err=%s", sku, e)
+
+    # 4) EAN principal: prioriza EAN-13 > UPC-A > EAN-8 > GTIN-14 > resto.
+    #    Mismo criterio que sku_enrichment.enrich_skus_unistore para que sea
+    #    consistente con el codigo de barras que muestra el header del SKU 360.
+    priority_kind = {"EAN-13": 0, "UPC-A": 1, "EAN-8": 2, "GTIN-14": 3, "OTRO": 4}
+    candidates: list[tuple[int, str, str]] = []
+    for um in out["unidades_medida"]:
+        for cod in um.get("codigos", []):
+            v = cod.get("Codigo") or cod.get("codigo")
+            if not v:
+                continue
+            kind = cod.get("ean_kind") or "OTRO"
+            candidates.append((priority_kind.get(kind, 99), str(v), kind))
+    if candidates:
+        candidates.sort()
+        out["ean_principal"] = candidates[0][1]
+        out["ean_principal_kind"] = candidates[0][2]
+
+    return out
 
 
 # ============================================================

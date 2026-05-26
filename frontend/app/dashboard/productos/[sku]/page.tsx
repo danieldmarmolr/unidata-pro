@@ -12,6 +12,7 @@ import { SkuStackedEvolution } from "@/components/sku-stacked-evolution";
 import { SkuStockDetail } from "@/components/sku-stock-detail";
 import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
 import { SkuKpiStrip } from "@/components/sku-kpi-strip";
+import { SkuDigipArticulo, type DigipArticuloInfo } from "@/components/sku-digip-articulo";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -203,6 +204,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
     staleTime: 5 * 60_000,
     enabled: !!sku,
   });
+  const { data: digipInfoData, isLoading: digipInfoLoading } = useQuery<DigipArticuloInfo>({
+    queryKey: ["sku-digip-info", sku],
+    queryFn: () => api(`/api/dashboards/products/sku/${encodeURIComponent(sku)}/digip-info`),
+    staleTime: 5 * 60_000,
+    enabled: !!sku,
+  });
 
   return (
     <>
@@ -320,6 +327,9 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             </div>
           </div>
         )}
+
+        {/* Maestro DIGIP: vista espejo de digip.Articulo + UnidadMedida + Codigos */}
+        <SkuDigipArticulo data={digipInfoData} loading={digipInfoLoading} />
 
         {isLoading || !data ? (
           <div className="bg-surface border border-border rounded-xl h-[68px] mb-6 animate-pulse" />

@@ -455,10 +455,32 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
     units_30 = int(last_30[0][0] or 0) if last_30 else 0
     rev_30 = float(last_30[0][1] or 0) if last_30 else 0
 
-    stock_total = int(scalar(eng, """
-        SELECT SUM(unidades)::int FROM digip."StockDetalle"
-        WHERE "articuloCodigo" = :sku
-    """, {"sku": sku}) or 0)
+    # Stock "actual" para la KPI: lo que REALMENTE esta libre para vender.
+    # Fuente: digip.Stock.unidadesDisponibles (panorama consolidado del SKU).
+    # No usamos SUM(StockDetalle.unidades) porque ese total mete reservadas,
+    # bloqueadas, vencidas, etc -> sobreestima el stock vendible.
+    # Si digip.Stock no contesta, caemos al sum de StockDetalle como fallback.
+    from app.services.sku_360_extras import _digip_stock_summary
+    stock_breakdown = _digip_stock_summary(eng, sku)
+    if stock_breakdown.get("available"):
+        stock_disponibles = stock_breakdown["disponibles"]
+        stock_total_fisico = stock_breakdown["total_fisico"]
+        stock_hint = (
+            f"reservadas {stock_breakdown['reservadas']} · "
+            f"bloqueadas {stock_breakdown['bloqueadas']} · "
+            f"a despachar {stock_breakdown['a_despachar']} · "
+            f"en recepcion {stock_breakdown['en_recepcion']} · "
+            f"transito {stock_breakdown['transito_interno']} · "
+            f"vencidas {stock_breakdown['vencidas']} · "
+            f"pedidas {stock_breakdown['pedidas']}"
+        )
+    else:
+        stock_disponibles = int(scalar(eng, """
+            SELECT SUM(unidades)::int FROM digip."StockDetalle"
+            WHERE "articuloCodigo" = :sku
+        """, {"sku": sku}) or 0)
+        stock_total_fisico = stock_disponibles
+        stock_hint = "Fallback: suma de digip.StockDetalle (sin breakdown)"
 
     cards.append({"label": "Revenue total (lifetime)", "value": round(total_rev, 0), "prefix": "$ "})
     cards.append({"label": "Unidades vendidas", "value": total_units})
@@ -466,8 +488,8 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
                   "hint": "Distintos compradores"})
     cards.append({"label": "Revenue 30d", "value": round(rev_30, 0), "prefix": "$ ",
                   "hint": f"{units_30} unidades"})
-    cards.append({"label": "Stock actual (Digip)", "value": stock_total,
-                  "hint": "Suma todas las areas"})
+    cards.append({"label": "Stock disponible (Digip)", "value": stock_disponibles,
+                  "hint": f"Vendible · fisico total {stock_total_fisico} · " + stock_hint})
 
     rows = q(eng, """
         SELECT date_trunc('month', o."createdAt")::date AS mes,

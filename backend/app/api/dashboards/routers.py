@@ -1401,6 +1401,21 @@ def get_sku_lotes(
     return _b()
 
 
+@router.get("/products/sku/{sku}/digip-info")
+def get_sku_digip_info(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+) -> dict:
+    """Vista espejo de digip.Articulo + ArticuloUnidadMedida + ArticuloUnidadMedidaCodigo.
+    Trae TODO lo que digip tiene del SKU (atributos, unidades de medida, EAN/UPC/codigos)."""
+    require_area(user, ["ventas", "compras", "logistica"])
+    key = f"sku-digip-info:{sku}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.digip_articulo_info(sku)
+    return _b()
+
+
 @router.get("/customers/{customer_id}")
 def get_customer_detail(
     customer_id: int,
