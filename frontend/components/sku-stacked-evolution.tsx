@@ -484,7 +484,7 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
                     fontSize={9}
                     fill="#374151"
                     fontWeight={600}
-                    formatter={(v: number) => (v > 0 ? fmt(Number(v), metric) : "")}
+                    formatter={(v: string | number) => (Number(v) > 0 ? fmt(Number(v), metric) : "")}
                   />
                 )}
               </Bar>
@@ -508,7 +508,7 @@ export function SkuStackedEvolution({ series, forecast, granularity, onGranulari
                   fontSize={9}
                   fill="#5b21b6"
                   fontWeight={600}
-                  formatter={(v: number) => (v > 0 ? fmt(Number(v), metric) : "")}
+                  formatter={(v: string | number) => (Number(v) > 0 ? fmt(Number(v), metric) : "")}
                 />
               )}
             </Area>
