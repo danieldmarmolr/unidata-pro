@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Line,
-  ReferenceDot, ReferenceLine,
+  ReferenceDot, ReferenceLine, LabelList,
   ResponsiveContainer, Tooltip, XAxis, YAxis, Legend, Cell,
 } from "recharts";
 import {
@@ -257,14 +257,40 @@ function ProfitDailyChart({ unit }: { unit: ProductsUnit }) {
           <Line type="monotone" dataKey="ganancia_ma7" stroke="#7a3eae" strokeWidth={2} dot={false} />
           <Line type="monotone" dataKey="prev_ganancia" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
           {max && (
-            <ReferenceDot x={max.date} y={max.ganancia as number} r={5} fill="#10b981" stroke="#fff" strokeWidth={2} ifOverflow="extendDomain">
-              <></>
-            </ReferenceDot>
+            <ReferenceDot
+              x={max.date}
+              y={max.ganancia as number}
+              r={5}
+              fill="#10b981"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `max ${fmtTickK(max.ganancia as number)}`,
+                position: "top",
+                fontSize: 10,
+                fontWeight: 700,
+                fill: "#065f46",
+              }}
+            />
           )}
           {min && (
-            <ReferenceDot x={min.date} y={min.ganancia as number} r={5} fill="#ef4444" stroke="#fff" strokeWidth={2} ifOverflow="extendDomain">
-              <></>
-            </ReferenceDot>
+            <ReferenceDot
+              x={min.date}
+              y={min.ganancia as number}
+              r={5}
+              fill="#ef4444"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `min ${fmtTickK(min.ganancia as number)}`,
+                position: "bottom",
+                fontSize: 10,
+                fontWeight: 700,
+                fill: "#991b1b",
+              }}
+            />
           )}
         </ComposedChart>
       </ResponsiveContainer>
@@ -298,10 +324,14 @@ function RevenueCostProfitChart({ unit }: { unit: ProductsUnit }) {
   const margenDelta = margenFinal - margenInicio;
   const insightLocal = `Margen ${margenFinal.toFixed(1)}% (vs ${margenInicio.toFixed(1)}% al inicio · ${margenDelta >= 0 ? "+" : ""}${margenDelta.toFixed(1)}pp). Revenue ${formatCurrency(data.summary.total_revenue)} · costo ${formatCurrency(data.summary.total_costo)}.`;
 
+  // Anotaciones de inicio y fin del periodo (para que se vea sin hover los valores extremos)
+  const firstPoint = pts[0];
+  const lastPoint = pts[pts.length - 1];
+
   return (
     <ChartCard
       title="Revenue vs Costo vs Ganancia · 90d"
-      subtitle="Detecta compresion de margen · area apilada"
+      subtitle="Detecta compresion de margen · area apilada · markers de inicio y fin"
       icon={Layers}
       iconColor="#7a3eae"
       badges={<PrevBadge diff={story.prev_total_diff_pct} />}
@@ -337,6 +367,42 @@ function RevenueCostProfitChart({ unit }: { unit: ProductsUnit }) {
           <Legend wrapperStyle={{ fontSize: 10 }} iconType="rect" />
           <Area type="monotone" dataKey="ganancia" name="Ganancia" stroke="#10b981" fill="url(#g-gan)" stackId="1" />
           <Area type="monotone" dataKey="costo" name="Costo" stroke="#f59e0b" fill="url(#g-cost)" stackId="1" />
+          {firstPoint && (
+            <ReferenceDot
+              x={firstPoint.date}
+              y={firstPoint.revenue}
+              r={4}
+              fill="#7a3eae"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `inicio ${fmtTickK(firstPoint.revenue)}`,
+                position: "top",
+                fontSize: 9,
+                fontWeight: 700,
+                fill: "#5b21b6",
+              }}
+            />
+          )}
+          {lastPoint && (
+            <ReferenceDot
+              x={lastPoint.date}
+              y={lastPoint.revenue}
+              r={4}
+              fill="#7a3eae"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `fin ${fmtTickK(lastPoint.revenue)}`,
+                position: "top",
+                fontSize: 9,
+                fontWeight: 700,
+                fill: "#5b21b6",
+              }}
+            />
+          )}
         </AreaChart>
       </ResponsiveContainer>
     </ChartCard>
@@ -402,14 +468,40 @@ function CatalogActiveChart({ unit }: { unit: ProductsUnit }) {
           <Area type="monotone" dataKey="pct_activo" stroke="#06b6d4" fill="url(#g-cat)" strokeWidth={2} />
           <Line type="monotone" dataKey="prev_pct" stroke="#94a3b8" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
           {max && (
-            <ReferenceDot x={max.date} y={max.pct_activo as number} r={5} fill="#06b6d4" stroke="#fff" strokeWidth={2} ifOverflow="extendDomain">
-              <></>
-            </ReferenceDot>
+            <ReferenceDot
+              x={max.date}
+              y={max.pct_activo as number}
+              r={5}
+              fill="#06b6d4"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `max ${(max.pct_activo as number).toFixed(1)}%`,
+                position: "top",
+                fontSize: 10,
+                fontWeight: 700,
+                fill: "#0e7490",
+              }}
+            />
           )}
           {min && (
-            <ReferenceDot x={min.date} y={min.pct_activo as number} r={5} fill="#ef4444" stroke="#fff" strokeWidth={2} ifOverflow="extendDomain">
-              <></>
-            </ReferenceDot>
+            <ReferenceDot
+              x={min.date}
+              y={min.pct_activo as number}
+              r={5}
+              fill="#ef4444"
+              stroke="#fff"
+              strokeWidth={2}
+              ifOverflow="extendDomain"
+              label={{
+                value: `min ${(min.pct_activo as number).toFixed(1)}%`,
+                position: "bottom",
+                fontSize: 10,
+                fontWeight: 700,
+                fill: "#991b1b",
+              }}
+            />
           )}
         </AreaChart>
       </ResponsiveContainer>
@@ -426,10 +518,19 @@ function AbcDistributionChart({ unit }: { unit: ProductsUnit }) {
   if (!data) return <div className="h-[280px] animate-pulse bg-soft rounded" />;
   const last = data.points[data.points.length - 1];
   const story = data.story;
+
+  // Enriquecemos cada punto con el total mensual para mostrarlo como label encima
+  // del stack. Recharts no calcula totales del stack automaticamente, lo hacemos
+  // nosotros para poder rendear un LabelList con el numero arriba.
+  const enriched = data.points.map((p) => ({
+    ...p,
+    total: p.skus_a + p.skus_b + p.skus_c,
+  }));
+
   return (
     <ChartCard
       title="Distribucion ABC mensual · 12 meses"
-      subtitle="Cuantos SKUs concentran el revenue (concentracion creciente = riesgo)"
+      subtitle="Cuantos SKUs concentran el revenue (concentracion creciente = riesgo) · total arriba + valor por clase"
       icon={BarChart3}
       iconColor="#f59e0b"
       badges={<TrendBadge trend={story.trend} strength={story.trend_strength} />}
@@ -444,8 +545,8 @@ function AbcDistributionChart({ unit }: { unit: ProductsUnit }) {
       }
       insight={data.insight}
     >
-      <ResponsiveContainer width="100%" height={240}>
-        <BarChart data={data.points} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={260}>
+        <BarChart data={enriched} margin={{ top: 24, right: 10, left: 0, bottom: 0 }}>
           <CartesianGrid stroke="#eadefc" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="date" tickFormatter={fmtMonthShort} tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
           <YAxis tick={{ fontSize: 10 }} axisLine={false} tickLine={false} />
@@ -454,9 +555,58 @@ function AbcDistributionChart({ unit }: { unit: ProductsUnit }) {
             labelFormatter={(label) => fmtMonthShort(label as string)}
           />
           <Legend wrapperStyle={{ fontSize: 10 }} iconType="rect" />
-          <Bar dataKey="skus_a" name="Clase A" stackId="abc" fill="#10b981" />
-          <Bar dataKey="skus_b" name="Clase B" stackId="abc" fill="#f59e0b" />
-          <Bar dataKey="skus_c" name="Clase C" stackId="abc" fill="#94a3b8" />
+          <Bar dataKey="skus_a" name="Clase A" stackId="abc" fill="#10b981">
+            {/* Label de la clase A adentro del segmento (solo si tiene espacio = >=15 SKUs) */}
+            <LabelList
+              dataKey="skus_a"
+              position="center"
+              fontSize={10}
+              fill="#ffffff"
+              fontWeight={700}
+              formatter={(v: unknown) => {
+                const n = Number(v);
+                return Number.isFinite(n) && n >= 15 ? formatNumber(n) : "";
+              }}
+            />
+          </Bar>
+          <Bar dataKey="skus_b" name="Clase B" stackId="abc" fill="#f59e0b">
+            <LabelList
+              dataKey="skus_b"
+              position="center"
+              fontSize={10}
+              fill="#ffffff"
+              fontWeight={700}
+              formatter={(v: unknown) => {
+                const n = Number(v);
+                return Number.isFinite(n) && n >= 15 ? formatNumber(n) : "";
+              }}
+            />
+          </Bar>
+          <Bar dataKey="skus_c" name="Clase C" stackId="abc" fill="#94a3b8">
+            <LabelList
+              dataKey="skus_c"
+              position="center"
+              fontSize={10}
+              fill="#ffffff"
+              fontWeight={700}
+              formatter={(v: unknown) => {
+                const n = Number(v);
+                return Number.isFinite(n) && n >= 15 ? formatNumber(n) : "";
+              }}
+            />
+            {/* Total mensual arriba del stack: lo dibujamos en la Bar mas alta del stack (clase C, ultima) */}
+            <LabelList
+              dataKey="total"
+              position="top"
+              fontSize={11}
+              fill="#1f2937"
+              fontWeight={800}
+              formatter={(v: unknown) => {
+                const n = Number(v);
+                return Number.isFinite(n) && n > 0 ? formatNumber(n) : "";
+              }}
+            />
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
     </ChartCard>

@@ -4,6 +4,22 @@ export type LoginResponse = {
   user: string;
 };
 
+export type KpiFormulaBreakdownRow = {
+  label: string;
+  value: number | string;
+  prefix?: string;
+  suffix?: string;
+  highlight?: boolean;
+};
+
+export type KpiFormula = {
+  description: string;
+  expression?: string | null;
+  source?: string | null;
+  period?: string | null;
+  breakdown?: KpiFormulaBreakdownRow[] | null;
+};
+
 export type KpiCard = {
   label: string;
   value: number | string;
@@ -16,6 +32,7 @@ export type KpiCard = {
   prefix?: string;
   suffix?: string;
   hint?: string | null;
+  formula?: KpiFormula | null;
 };
 
 export type Story = { tone: "ok" | "warn" | "alert"; text: string };

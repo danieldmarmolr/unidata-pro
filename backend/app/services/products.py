@@ -141,18 +141,153 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
     ticket_unidades = (units_periodo / ordenes_periodo) if ordenes_periodo > 0 else 0.0
     catalogo_activo_pct = (skus_vendidos / total_products * 100) if total_products > 0 else 0.0
 
-    cards.append({"label": "Productos publicados", "value": total_products, "hint": "Tienda Nube · published=TRUE"})
-    cards.append({"label": f"SKUs vendidos ({period})", "value": skus_vendidos, "hint": "Distintos en orders pagas"})
-    cards.append({"label": "Unidades vendidas", "value": units_periodo, "hint": "TN orders pagas"})
-    cards.append({"label": "Ordenes pagas", "value": ordenes_periodo, "hint": "TN orders paid del periodo"})
-    cards.append({"label": "Ticket de unidades", "value": round(ticket_unidades, 2), "hint": "Unidades / ordenes paid"})
-    cards.append({"label": "SKUs por orden", "value": round(skus_por_orden_avg, 2), "hint": "Diversidad de carrito · promedio"})
-    cards.append({"label": "Catalogo activo", "value": round(catalogo_activo_pct, 1), "suffix": "%", "hint": "SKUs vendidos / publicados"})
-    cards.append({"label": "Nuevos 7d", "value": nuevos_7d, "hint": "SKUs con primera venta en ultimos 7 dias"})
-    cards.append({"label": "Sin movimiento (>90d)", "value": sin_movimiento, "hint": "SKUs en catalogo sin venta hace 90+ dias"})
-    cards.append({"label": "SKUs Digip", "value": skus_digip, "hint": "En el WMS"})
-    cards.append({"label": "Stock critico", "value": sku_critico, "hint": "<= 5 unidades totales"})
-    cards.append({"label": "Stockout 14d", "value": stockout_14d, "hint": "SKUs que se agotan en menos de 14 dias al ritmo actual"})
+    period_label = f"ultimos {days} dias" if days else period
+    cards.append({
+        "label": "Productos publicados",
+        "value": total_products,
+        "hint": "Tienda Nube · published=TRUE",
+        "formula": {
+            "description": "Total de productos publicados activamente en Tienda Nube. Cuenta distintos por SKU + product_id.",
+            "expression": "COUNT(DISTINCT pv.sku) WHERE p.published = TRUE",
+            "source": "tienda_nube.ProductVariant + tienda_nube.Product",
+            "period": "snapshot al cierre del periodo",
+        },
+    })
+    cards.append({
+        "label": f"SKUs vendidos ({period})",
+        "value": skus_vendidos,
+        "hint": "Distintos en orders pagas",
+        "formula": {
+            "description": "SKUs distintos que aparecen en al menos una orden pagada del periodo. Excluye SKUs con NULL.",
+            "expression": "COUNT(DISTINCT oi.sku) WHERE o.paymentStatus = 'paid' AND createdAt >= NOW() - Nd",
+            "source": "tienda_nube.OrderItem JOIN tienda_nube.Order",
+            "period": period_label,
+            "breakdown": [
+                {"label": "SKUs distintos vendidos", "value": skus_vendidos, "highlight": True},
+                {"label": "Productos publicados (universo)", "value": total_products},
+                {"label": "Penetracion catalogo", "value": round(catalogo_activo_pct, 1), "suffix": "%"},
+            ],
+        },
+    })
+    cards.append({
+        "label": "Unidades vendidas",
+        "value": units_periodo,
+        "hint": "TN orders pagas",
+        "formula": {
+            "description": "Suma de unidades vendidas en orders pagadas del periodo (TN).",
+            "expression": "SUM(oi.quantity) WHERE o.paymentStatus = 'paid'",
+            "source": "tienda_nube.OrderItem",
+            "period": period_label,
+        },
+    })
+    cards.append({
+        "label": "Ordenes pagas",
+        "value": ordenes_periodo,
+        "hint": "TN orders paid del periodo",
+        "formula": {
+            "description": "Cantidad de ordenes con paymentStatus = 'paid' creadas en el periodo.",
+            "expression": "COUNT(DISTINCT o.id) WHERE paymentStatus = 'paid'",
+            "source": "tienda_nube.Order",
+            "period": period_label,
+        },
+    })
+    cards.append({
+        "label": "Ticket de unidades",
+        "value": round(ticket_unidades, 2),
+        "hint": "Unidades / ordenes paid",
+        "formula": {
+            "description": "Promedio de unidades por orden. Mide tamano de carrito.",
+            "expression": "unidades_vendidas / ordenes_pagas",
+            "breakdown": [
+                {"label": "Unidades vendidas", "value": units_periodo},
+                {"label": "Ordenes pagas", "value": ordenes_periodo},
+                {"label": "Ticket promedio", "value": round(ticket_unidades, 2), "suffix": " u/orden", "highlight": True},
+            ],
+            "period": period_label,
+        },
+    })
+    cards.append({
+        "label": "SKUs por orden",
+        "value": round(skus_por_orden_avg, 2),
+        "hint": "Diversidad de carrito · promedio",
+        "formula": {
+            "description": "Promedio de SKUs distintos por orden. Mide diversidad del carrito (proxy de cross-sell).",
+            "expression": "AVG(COUNT(DISTINCT oi.sku) per order)",
+            "source": "tienda_nube.OrderItem agrupado por orderId",
+            "period": period_label,
+        },
+    })
+    cards.append({
+        "label": "Catalogo activo",
+        "value": round(catalogo_activo_pct, 1),
+        "suffix": "%",
+        "hint": "SKUs vendidos / publicados",
+        "formula": {
+            "description": "Penetracion del catalogo: que porcion de productos publicados tuvo al menos una venta en el periodo.",
+            "expression": "SKUs vendidos / productos publicados × 100",
+            "breakdown": [
+                {"label": "SKUs vendidos", "value": skus_vendidos},
+                {"label": "Productos publicados", "value": total_products},
+                {"label": "Catalogo activo", "value": round(catalogo_activo_pct, 1), "suffix": "%", "highlight": True},
+            ],
+            "period": period_label,
+        },
+    })
+    cards.append({
+        "label": "Nuevos 7d",
+        "value": nuevos_7d,
+        "hint": "SKUs con primera venta en ultimos 7 dias",
+        "formula": {
+            "description": "SKUs cuya primera venta historica ocurrio en los ultimos 7 dias. Excluye SKUs con 'PVA' (servicios).",
+            "expression": "COUNT(*) WHERE MIN(o.createdAt) >= NOW() - 7d",
+            "source": "tienda_nube.OrderItem JOIN tienda_nube.Order",
+            "period": "ultimos 7 dias rolling",
+        },
+    })
+    cards.append({
+        "label": "Sin movimiento (>90d)",
+        "value": sin_movimiento,
+        "hint": "SKUs en catalogo sin venta hace 90+ dias",
+        "formula": {
+            "description": "SKUs con stock en DIGIP que no tuvieron ninguna venta en los ultimos 90 dias. Candidatos a liquidacion o discontinuacion.",
+            "expression": "COUNT SKUs con stock > 0 AND sin ventas en 90d",
+            "source": "digip.StockDetalle + tienda_nube.OrderItem",
+            "period": "snapshot vs 90d rolling",
+        },
+    })
+    cards.append({
+        "label": "SKUs Digip",
+        "value": skus_digip,
+        "hint": "En el WMS",
+        "formula": {
+            "description": "Cantidad de SKUs distintos con al menos una ubicacion fisica registrada en el WMS DIGIP.",
+            "expression": "COUNT(DISTINCT articuloCodigo)",
+            "source": "digip.StockDetalle",
+            "period": "snapshot actual",
+        },
+    })
+    cards.append({
+        "label": "Stock critico",
+        "value": sku_critico,
+        "hint": "<= 5 unidades totales",
+        "formula": {
+            "description": "SKUs con stock fisico total (suma de todas las ubicaciones) menor o igual a 5 unidades. Alerta operativa.",
+            "expression": "COUNT SKUs WHERE SUM(unidades) <= 5",
+            "source": "digip.StockDetalle agrupado por SKU",
+            "period": "snapshot actual",
+        },
+    })
+    cards.append({
+        "label": "Stockout 14d",
+        "value": stockout_14d,
+        "hint": "SKUs que se agotan en menos de 14 dias al ritmo actual",
+        "formula": {
+            "description": "SKUs proyectados a stockout en <14 dias dado el ritmo de venta de los ultimos 30d.",
+            "expression": "(stock_actual / (ventas_30d / 30)) < 14",
+            "source": "digip.StockDetalle + tienda_nube.OrderItem (30d)",
+            "period": "snapshot + ventas 30d rolling",
+        },
+    })
 
     # Top SKUs por revenue (universo top 80 para luego derivar ganancia per SKU)
     top_revenue_raw = q(eng_uni, """
@@ -247,6 +382,17 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
             "value": round(ganancia_total_periodo, 0),
             "prefix": "$ ",
             "hint": f"Margen {margen_periodo:.1f}% sobre $ {revenue_with_cost_periodo:,.0f} con costo cargado",
+            "formula": {
+                "description": "Ganancia agregada del periodo. Solo computa SKUs con costo de importacion cargado (lote vigente). Se descuenta costo mercaderia + IVA + IIBB + fee gateway.",
+                "expression": "revenue - costo_unitario × unidades - IVA - IIBB - fee gateway",
+                "source": "tienda_nube.OrderItem cruzado con costos_db.cost_item (lote vigente)",
+                "period": period_label,
+                "breakdown": [
+                    {"label": "Revenue con costo cargado", "value": round(revenue_with_cost_periodo, 0), "prefix": "$ "},
+                    {"label": "Ganancia neta", "value": round(ganancia_total_periodo, 0), "prefix": "$ "},
+                    {"label": "Margen sobre revenue con costo", "value": round(margen_periodo, 1), "suffix": "%", "highlight": True},
+                ],
+            },
         })
 
     top_brands = q(eng_uni, """
