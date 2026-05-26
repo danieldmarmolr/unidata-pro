@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
+import threading
 from typing import Any
 
 import httpx
@@ -1152,6 +1153,64 @@ def same_time_compare(period: str = "30d", unit: str | None = None) -> dict:
             "signups": _delta(cur_signups, prev_signups),
         },
     }
+
+
+# ─── Async dispatcher (background sync) ───────────────────────────────────────
+
+
+SYNC_KINDS = ("sync_all", "sync_breakdowns")
+
+
+def _run_sync_bg(run_id: int, kind: str, historical_days: int) -> None:
+    """Hilo background: marca running, ejecuta, marca done/error."""
+    from app.db import meta_sync_runs_db as runs_db
+    log.info("Sync run %d (%s, %dd) START", run_id, kind, historical_days)
+    try:
+        runs_db.mark_running(run_id)
+        if kind == "sync_all":
+            summary = sync_all(historical_days=historical_days)
+        elif kind == "sync_breakdowns":
+            summary = sync_breakdowns(historical_days=historical_days)
+        else:
+            raise RuntimeError(f"kind invalido: {kind}")
+        runs_db.mark_done(run_id, summary)
+        log.info("Sync run %d (%s) DONE", run_id, kind)
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+        log.exception("Sync run %d (%s) FAILED: %s", run_id, kind, err)
+        try:
+            runs_db.mark_error(run_id, err)
+        except Exception:
+            log.exception("No se pudo marcar run %d como error", run_id)
+
+
+def start_sync_async(
+    kind: str,
+    historical_days: int,
+    started_by_id: int | None,
+    started_by_email: str | None,
+) -> dict:
+    """Crea run y spawn de thread daemon. Retorna {run_id, reused}.
+
+    Si ya hay un run activo (pending/running) del mismo kind, reusa ese run_id
+    en vez de spawnear otro (idempotencia frente a doble-click).
+    """
+    if kind not in SYNC_KINDS:
+        raise RuntimeError(f"kind invalido: {kind}")
+    from app.db import meta_sync_runs_db as runs_db
+    runs_db.init()
+    active = runs_db.find_active(kind)
+    if active:
+        return {"run_id": int(active["id"]), "reused": True}
+    run_id = runs_db.create_run(kind, historical_days, started_by_id, started_by_email)
+    t = threading.Thread(
+        target=_run_sync_bg,
+        args=(run_id, kind, historical_days),
+        daemon=True,
+        name=f"meta-sync-{run_id}",
+    )
+    t.start()
+    return {"run_id": run_id, "reused": False}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

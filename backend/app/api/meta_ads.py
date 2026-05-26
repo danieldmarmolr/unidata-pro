@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.auth.security import current_user, require_admin, require_area
+from app.db import meta_sync_runs_db
 from app.services import meta_ads as meta_svc
 
 router = APIRouter(prefix="/api/marketing/meta", tags=["meta-ads"])
@@ -161,33 +162,61 @@ def get_same_time(
 
 @router.post("/sync")
 def trigger_sync(
-    _: Annotated[dict, Depends(require_admin)],
+    user: Annotated[dict, Depends(require_admin)],
     historical_days: Annotated[int, Query(ge=1, le=730)] = 30,
 ) -> dict:
-    """Dispara sync manual. historical_days controla la ventana de insights.
+    """Dispara sync ASYNC en background. Retorna run_id; el frontend pollea
+    GET /sync-runs/{id} para ver progreso.
 
     Pull inicial: usar 365 (12 meses).
     Daily incremental: 30 cubre re-statements de Meta (atribución se ajusta).
+
+    Si ya hay un sync activo del mismo kind se reusa su run_id (idempotente).
     """
-    try:
-        result = meta_svc.sync_all(historical_days=historical_days)
-        return {"ok": True, **result}
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Sync error: {e}")
+    dispatch = meta_svc.start_sync_async(
+        kind="sync_all",
+        historical_days=historical_days,
+        started_by_id=user.get("id"),
+        started_by_email=user.get("email"),
+    )
+    return {"kind": "sync_all", **dispatch}
 
 
 @router.post("/sync-breakdowns")
 def trigger_sync_breakdowns(
-    _: Annotated[dict, Depends(require_admin)],
+    user: Annotated[dict, Depends(require_admin)],
     historical_days: Annotated[int, Query(ge=1, le=180)] = 30,
 ) -> dict:
-    """Dispara sync de breakdowns (age, gender, placement, geo, hourly)."""
-    try:
-        result = meta_svc.sync_breakdowns(historical_days=historical_days)
-        return {"ok": True, **result}
-    except RuntimeError as e:
-        raise HTTPException(500, str(e))
-    except Exception as e:
-        raise HTTPException(500, f"Sync breakdowns error: {e}")
+    """Dispara sync ASYNC de breakdowns (age, gender, placement, geo, hourly).
+    Retorna run_id; el frontend pollea GET /sync-runs/{id}.
+    """
+    dispatch = meta_svc.start_sync_async(
+        kind="sync_breakdowns",
+        historical_days=historical_days,
+        started_by_id=user.get("id"),
+        started_by_email=user.get("email"),
+    )
+    return {"kind": "sync_breakdowns", **dispatch}
+
+
+@router.get("/sync-runs/{run_id}")
+def get_sync_run(
+    _: Annotated[dict, Depends(current_user)],
+    run_id: int,
+) -> dict:
+    """Devuelve estado del sync run. Status: pending | running | done | error."""
+    run = meta_sync_runs_db.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, "Run no encontrado")
+    return run
+
+
+@router.get("/sync-runs")
+def list_sync_runs(
+    _: Annotated[dict, Depends(current_user)],
+    kind: Annotated[Literal["sync_all", "sync_breakdowns"] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> dict:
+    """Lista runs recientes (default 10) — historial de sync para el panel."""
+    items = meta_sync_runs_db.list_runs(kind=kind, limit=limit)
+    return {"items": items}

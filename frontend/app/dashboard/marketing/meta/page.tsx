@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
@@ -12,6 +12,7 @@ import {
   ArrowLeft, DollarSign, Eye, MousePointerClick, Target, TrendingUp,
   RefreshCw, AlertTriangle, Users, UserPlus, Repeat, Zap, Clock, MapPin,
   Smartphone, Layers, ArrowUpRight, ArrowDownRight, ShoppingBag, Activity,
+  CheckCircle2, XCircle, History, ChevronDown, ChevronUp,
 } from "lucide-react";
 import { MetaImpactChart } from "@/components/meta-impact-chart";
 
@@ -92,6 +93,30 @@ type CohortRet = {
 type TopProducts = {
   period: string;
   items: { sku: string; title: string | null; image: string | null; qty: number; revenue: number }[];
+};
+
+type SyncRunStatus = "pending" | "running" | "done" | "error";
+type SyncRunKind = "sync_all" | "sync_breakdowns";
+type SyncAllSummary = {
+  since: string; until: string;
+  accounts: { id: string; name: string; unit: string;
+              campaigns: number; adsets: number; ads: number; insights: number;
+              error: string | null }[];
+};
+type SyncBreakdownsSummary = {
+  since: string; until: string; breakdowns: string[];
+  accounts: { id: string; name: string; rows: Record<string, number>; error: string | null }[];
+};
+type SyncRun = {
+  id: number;
+  kind: SyncRunKind;
+  status: SyncRunStatus;
+  historical_days: number | null;
+  started_by_email: string | null;
+  started_at: string;
+  finished_at: string | null;
+  summary: SyncAllSummary | SyncBreakdownsSummary | null;
+  error: string | null;
 };
 
 const PERIOD_OPTIONS = [
@@ -191,26 +216,68 @@ export default function MetaAdsPage() {
     enabled: showCross,
   });
 
-  type SyncResult = { ok: boolean; accounts?: { id: string; name: string; campaigns: number; ads: number; insights: number; error: string | null }[] };
-  const syncMut = useMutation<SyncResult, Error, number>({
+  // Sync background-job pattern: POST dispara, retorna run_id, frontend pollea.
+  type DispatchResp = { run_id: number; kind: SyncRunKind; reused: boolean };
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  const syncMut = useMutation<DispatchResp, Error, number>({
     mutationFn: (historicalDays: number) =>
-      api<SyncResult>(`/api/marketing/meta/sync?historical_days=${historicalDays}`, { method: "POST" }),
-    onSuccess: () => {
+      api<DispatchResp>(`/api/marketing/meta/sync?historical_days=${historicalDays}`, { method: "POST" }),
+    onSuccess: (data) => setActiveRunId(data.run_id),
+  });
+  const bkSyncMut = useMutation<DispatchResp, Error, number>({
+    mutationFn: (historicalDays: number) =>
+      api<DispatchResp>(`/api/marketing/meta/sync-breakdowns?historical_days=${historicalDays}`, { method: "POST" }),
+    onSuccess: (data) => setActiveRunId(data.run_id),
+  });
+
+  // Historial de runs - tambien usado al montar para reenganchar a un run activo
+  // si el user recargo la pagina mientras estaba corriendo.
+  const runsListQ = useQuery<{ items: SyncRun[] }>({
+    queryKey: ["meta-sync-runs"],
+    queryFn: () => api(`/api/marketing/meta/sync-runs?limit=10`),
+    refetchInterval: activeRunId ? 5_000 : false,
+    staleTime: 0,
+  });
+  useEffect(() => {
+    if (activeRunId !== null) return;
+    const items = runsListQ.data?.items;
+    if (!items?.length) return;
+    const active = items.find((r) => r.status === "pending" || r.status === "running");
+    if (active) setActiveRunId(active.id);
+  }, [runsListQ.data, activeRunId]);
+
+  // Poll del run activo
+  const runQ = useQuery<SyncRun>({
+    queryKey: ["meta-sync-run", activeRunId],
+    queryFn: () => api(`/api/marketing/meta/sync-runs/${activeRunId}`),
+    enabled: activeRunId !== null,
+    refetchInterval: (q) => {
+      const s = q.state.data?.status;
+      return s === "pending" || s === "running" ? 3_000 : false;
+    },
+  });
+
+  // Cuando el run termina OK -> invalidar dashboards y refrescar historial
+  useEffect(() => {
+    if (runQ.data?.status !== "done") return;
+    if (runQ.data.kind === "sync_all") {
       qc.invalidateQueries({ queryKey: ["meta-overview"] });
       qc.invalidateQueries({ queryKey: ["meta-campaigns"] });
       qc.invalidateQueries({ queryKey: ["meta-impact"] });
       qc.invalidateQueries({ queryKey: ["meta-same-time"] });
-    },
-  });
-  type BkSyncResult = { ok: boolean; accounts?: { id: string; name: string; rows: Record<string, number>; error: string | null }[] };
-  const bkSyncMut = useMutation<BkSyncResult, Error, number>({
-    mutationFn: (historicalDays: number) =>
-      api<BkSyncResult>(`/api/marketing/meta/sync-breakdowns?historical_days=${historicalDays}`, { method: "POST" }),
-    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["meta-attr"] });
+      qc.invalidateQueries({ queryKey: ["meta-ret"] });
+      qc.invalidateQueries({ queryKey: ["meta-top-products"] });
+    } else {
       qc.invalidateQueries({ queryKey: ["meta-bk"] });
       qc.invalidateQueries({ queryKey: ["meta-hourly"] });
-    },
-  });
+    }
+    qc.invalidateQueries({ queryKey: ["meta-sync-runs"] });
+  }, [runQ.data?.status, runQ.data?.kind, qc]);
+
+  const isSyncing = runQ.data?.status === "pending" || runQ.data?.status === "running";
 
   const ov = ovQ.data;
   const isEmpty = !ovQ.isLoading && (!ov || ov.kpi.spend === 0);
@@ -249,16 +316,16 @@ export default function MetaAdsPage() {
           </div>
           {isAdmin && (
             <div className="ml-auto flex items-center gap-2 flex-wrap">
-              <button onClick={() => syncMut.mutate(30)} disabled={syncMut.isPending}
+              <button onClick={() => syncMut.mutate(30)} disabled={isSyncing || syncMut.isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-primary/40 text-primary text-xs font-semibold hover:bg-primary/5 disabled:opacity-50">
-                <RefreshCw size={12} className={syncMut.isPending ? "animate-spin" : ""} /> Sync 30d
+                <RefreshCw size={12} className={isSyncing && runQ.data?.kind === "sync_all" ? "animate-spin" : ""} /> Sync 30d
               </button>
-              <button onClick={() => bkSyncMut.mutate(30)} disabled={bkSyncMut.isPending}
+              <button onClick={() => bkSyncMut.mutate(30)} disabled={isSyncing || bkSyncMut.isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-accent/40 text-accent text-xs font-semibold hover:bg-accent/5 disabled:opacity-50">
-                <RefreshCw size={12} className={bkSyncMut.isPending ? "animate-spin" : ""} /> Sync breakdowns
+                <RefreshCw size={12} className={isSyncing && runQ.data?.kind === "sync_breakdowns" ? "animate-spin" : ""} /> Sync breakdowns
               </button>
               <button onClick={() => { if (confirm("Pull histórico 12m. Tarda ~5-10 min. ¿Continuar?")) syncMut.mutate(365); }}
-                disabled={syncMut.isPending}
+                disabled={isSyncing || syncMut.isPending}
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-semibold hover:bg-amber-50 disabled:opacity-50">
                 <RefreshCw size={12} /> Backfill 12m
               </button>
@@ -266,19 +333,33 @@ export default function MetaAdsPage() {
           )}
         </div>
 
-        {syncMut.isError && (
+        {/* Dispatch error (raro - solo si la POST inicial fallo, no el sync mismo) */}
+        {(syncMut.isError || bkSyncMut.isError) && (
           <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg px-3 py-2 text-xs mb-4">
-            Sync falló: {(syncMut.error as Error)?.message}
+            No se pudo disparar el sync: {((syncMut.error || bkSyncMut.error) as Error)?.message}
           </div>
         )}
-        {syncMut.isSuccess && syncMut.data && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg px-3 py-2 text-xs mb-4">
-            Sync OK · {syncMut.data.accounts?.map((a) => `${a.campaigns} camp · ${a.ads} ads · ${a.insights} insights`).join(" | ")}
-          </div>
-        )}
-        {bkSyncMut.isSuccess && bkSyncMut.data && (
-          <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-lg px-3 py-2 text-xs mb-4">
-            Breakdowns OK · {bkSyncMut.data.accounts?.map((a) => `${a.name}: ${Object.entries(a.rows).map(([k,v]) => `${k}=${v}`).join(" · ")}`).join(" | ")}
+
+        {/* Estado del run activo / ultimo run */}
+        <SyncRunCard run={runQ.data} onDismiss={() => setActiveRunId(null)} />
+
+        {/* Historial */}
+        {isAdmin && (runsListQ.data?.items.length ?? 0) > 0 && (
+          <div className="mb-4">
+            <button onClick={() => setHistoryOpen(o => !o)}
+              className="inline-flex items-center gap-1.5 text-[11px] text-text-muted hover:text-text font-semibold">
+              <History size={12} />
+              Historial de sync ({runsListQ.data!.items.length})
+              {historyOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+            </button>
+            {historyOpen && (
+              <div className="mt-2 bg-surface border border-border rounded-lg p-2 space-y-1 max-h-72 overflow-y-auto">
+                {runsListQ.data!.items.map(r => (
+                  <SyncRunRow key={r.id} run={r} active={r.id === activeRunId}
+                    onSelect={() => setActiveRunId(r.id)} />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -827,6 +908,117 @@ function HourlyChart({ data }: { data: HourlyResp["data"] }) {
 
 function Legend({ color, label }: { color: string; label: string }) {
   return <span className="inline-flex items-center gap-1"><span className={`w-2 h-2 rounded-sm ${color} inline-block`} /> {label}</span>;
+}
+
+function SyncRunCard({ run, onDismiss }: { run: SyncRun | undefined; onDismiss: () => void }) {
+  const [now, setNow] = useState(() => Date.now());
+  const isLive = run?.status === "pending" || run?.status === "running";
+  useEffect(() => {
+    if (!isLive) return;
+    const t = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, [isLive]);
+
+  if (!run) return null;
+
+  const startedMs = new Date(run.started_at).getTime();
+  const endedMs = run.finished_at ? new Date(run.finished_at).getTime() : now;
+  const elapsedSec = Math.max(0, Math.round((endedMs - startedMs) / 1000));
+  const mm = Math.floor(elapsedSec / 60);
+  const ss = String(elapsedSec % 60).padStart(2, "0");
+  const elapsed = mm > 0 ? `${mm}m ${ss}s` : `${ss}s`;
+  const kindLabel = run.kind === "sync_all" ? "Sync core (campaigns + insights)" : "Sync breakdowns";
+
+  if (run.status === "pending" || run.status === "running") {
+    return (
+      <div className="bg-primary/5 border border-primary/30 rounded-lg px-3 py-2.5 text-xs mb-4 flex items-center gap-3">
+        <RefreshCw size={14} className="animate-spin text-primary shrink-0" />
+        <div className="flex-1">
+          <div className="font-bold text-text">
+            {kindLabel} en progreso · {run.historical_days ?? "?"}d
+          </div>
+          <div className="text-[10px] text-text-muted">
+            Run #{run.id} · {run.status === "pending" ? "esperando arranque" : "corriendo"} · {elapsed} transcurridos
+            {run.started_by_email ? ` · ${run.started_by_email}` : ""}
+          </div>
+        </div>
+        <span className="text-[10px] text-text-muted tabular-nums">refresh 3s</span>
+      </div>
+    );
+  }
+
+  if (run.status === "error") {
+    return (
+      <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg px-3 py-2.5 text-xs mb-4 flex items-start gap-2">
+        <XCircle size={14} className="shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <div className="font-bold">
+            {kindLabel} falló · Run #{run.id} · {elapsed}
+          </div>
+          <div className="text-[10px] mt-0.5 break-words">{run.error || "Error desconocido"}</div>
+        </div>
+        <button onClick={onDismiss} className="text-rose-500 hover:text-rose-700 text-[11px]">cerrar</button>
+      </div>
+    );
+  }
+
+  // done
+  const sum = run.summary;
+  return (
+    <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg px-3 py-2.5 text-xs mb-4 flex items-start gap-2">
+      <CheckCircle2 size={14} className="shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <div className="font-bold">
+          {kindLabel} OK · Run #{run.id} · {elapsed}
+        </div>
+        <div className="text-[10px] mt-0.5">
+          {sum && "accounts" in sum && Array.isArray(sum.accounts) ? (
+            run.kind === "sync_all" ? (
+              (sum as SyncAllSummary).accounts.map(a => (
+                <span key={a.id} className="inline-block mr-2">
+                  {a.name}: {a.campaigns} camp · {a.ads} ads · {a.insights} insights
+                  {a.error ? <span className="text-rose-600"> ⚠ {a.error.slice(0, 60)}</span> : ""}
+                </span>
+              ))
+            ) : (
+              (sum as SyncBreakdownsSummary).accounts.map(a => (
+                <span key={a.id} className="inline-block mr-2">
+                  {a.name}: {Object.entries(a.rows).map(([k, v]) => `${k}=${v}`).join(" · ")}
+                  {a.error ? <span className="text-rose-600"> ⚠</span> : ""}
+                </span>
+              ))
+            )
+          ) : <span>Sin detalle</span>}
+        </div>
+      </div>
+      <button onClick={onDismiss} className="text-emerald-600 hover:text-emerald-800 text-[11px]">cerrar</button>
+    </div>
+  );
+}
+
+function SyncRunRow({ run, active, onSelect }: { run: SyncRun; active: boolean; onSelect: () => void }) {
+  const startedMs = new Date(run.started_at).getTime();
+  const endedMs = run.finished_at ? new Date(run.finished_at).getTime() : Date.now();
+  const elapsedSec = Math.max(0, Math.round((endedMs - startedMs) / 1000));
+  const mm = Math.floor(elapsedSec / 60);
+  const ss = String(elapsedSec % 60).padStart(2, "0");
+  const elapsed = mm > 0 ? `${mm}m${ss}s` : `${ss}s`;
+  const icon = run.status === "done" ? <CheckCircle2 size={11} className="text-emerald-600" />
+    : run.status === "error" ? <XCircle size={11} className="text-rose-600" />
+    : <RefreshCw size={11} className="text-primary animate-spin" />;
+  return (
+    <button onClick={onSelect}
+      className={"w-full flex items-center gap-2 px-2 py-1 rounded text-[10px] hover:bg-soft/60 transition text-left " + (active ? "bg-primary/5" : "")}>
+      {icon}
+      <span className="font-mono text-text-muted w-10 shrink-0">#{run.id}</span>
+      <span className="font-semibold text-text w-32 shrink-0 truncate">
+        {run.kind === "sync_all" ? "core" : "breakdowns"} · {run.historical_days ?? "?"}d
+      </span>
+      <span className="text-text-muted flex-1 truncate">{fmtArDateTime(run.started_at)}</span>
+      <span className="text-text-muted tabular-nums shrink-0">{elapsed}</span>
+      {run.started_by_email && <span className="text-text-muted truncate max-w-[140px] shrink-0">{run.started_by_email}</span>}
+    </button>
+  );
 }
 
 function CampaignStatusBadge({ status }: { status: string }) {
