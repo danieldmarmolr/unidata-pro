@@ -129,8 +129,11 @@ def products_master_table(
           GROUP BY sku
         ),
         stock AS (
-          SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock_actual
-          FROM digip."StockDetalle" GROUP BY 1
+          -- digip."Stock" es 1 row por SKU con UnidadesDisponibles ya consolidado
+          -- (vs StockDetalle.unidades que incluye reservado/bloqueado/a despachar).
+          -- UnidadesDisponibles = lo que efectivamente se puede vender.
+          SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock_actual
+          FROM digip."Stock"
         ),
         prod AS (
           SELECT pv.sku,
