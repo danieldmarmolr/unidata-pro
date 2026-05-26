@@ -155,6 +155,7 @@ def list_all() -> list[dict]:
     with get_conn() as c, c.cursor() as cur:
         cur.execute("""
             SELECT u.*,
+                   COALESCE(u.hidden_from_directory, FALSE) AS hidden_from_directory,
                    a.slug   AS area_slug,
                    a.name   AS area_name,
                    a.color  AS area_color,
@@ -223,6 +224,7 @@ def update(
     manager_user_id: int | None = None,
     job_title: str | None = None,
     bio: str | None = None,
+    hidden_from_directory: bool | None = None,
     clear_area: bool = False,
     clear_manager: bool = False,
 ) -> dict | None:
@@ -273,6 +275,8 @@ def update(
         sets.append("job_title = %s"); params.append(job_title.strip() or None)
     if bio is not None:
         sets.append("bio = %s"); params.append(bio.strip() or None)
+    if hidden_from_directory is not None:
+        sets.append("hidden_from_directory = %s"); params.append(bool(hidden_from_directory))
     if not sets:
         return None
     sets.append("updated_at = NOW()")
@@ -424,6 +428,7 @@ def _to_dict(row: dict | None) -> dict:
     d["is_active"] = bool(d.get("is_active"))
     d["is_admin"] = bool(d.get("is_admin"))
     d["totp_enabled"] = bool(d.get("totp_enabled"))
+    d["hidden_from_directory"] = bool(d.get("hidden_from_directory"))
     # ISO format para timestamps
     for k in ("created_at", "updated_at"):
         if k in d and d[k] is not None and not isinstance(d[k], str):

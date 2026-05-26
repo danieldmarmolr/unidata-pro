@@ -36,6 +36,7 @@ class UserUpdate(BaseModel):
     manager_user_id: int | None = None
     job_title: str | None = None
     bio: str | None = None
+    hidden_from_directory: bool | None = None
     clear_area: bool = False
     clear_manager: bool = False
 
@@ -116,6 +117,7 @@ def update_user(
             manager_user_id=body.manager_user_id,
             job_title=body.job_title,
             bio=body.bio,
+            hidden_from_directory=body.hidden_from_directory,
             clear_area=body.clear_area,
             clear_manager=body.clear_manager,
         )

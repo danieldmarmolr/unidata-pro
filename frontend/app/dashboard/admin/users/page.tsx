@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { fmtArDate } from "@/lib/dates";
-import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers, Crown } from "lucide-react";
+import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers, Crown, Eye, EyeOff } from "lucide-react";
 
 type AreaChip = { id: number; slug: string; name: string; color: string };
 
@@ -30,6 +30,7 @@ type User = {
   manager_role: string | null;
   job_title: string | null;
   bio: string | null;
+  hidden_from_directory: boolean;
 };
 
 type Area = {
@@ -126,6 +127,7 @@ export default function AdminUsersPage() {
                 <th className="text-left px-3 py-2">Área</th>
                 <th className="text-left px-3 py-2">Gerente</th>
                 <th className="text-center px-3 py-2">Activo</th>
+                <th className="text-center px-3 py-2" title="Visibilidad en directorio y organigrama de People">People</th>
                 <th className="text-left px-3 py-2">Creado</th>
                 <th className="text-right px-3 py-2 pr-4">Acciones</th>
               </tr>
@@ -267,6 +269,28 @@ export default function AdminUsersPage() {
                       )}
                     </button>
                   </td>
+                  <td className="px-3 py-2 text-center">
+                    <button
+                      onClick={() =>
+                        updateMut.mutate({
+                          id: u.id,
+                          body: { hidden_from_directory: !u.hidden_from_directory },
+                        })
+                      }
+                      className="inline-flex items-center justify-center p-1 rounded hover:bg-bg-muted transition"
+                      title={
+                        u.hidden_from_directory
+                          ? "Oculto del directorio y organigrama. Click para mostrar."
+                          : "Visible en People. Click para ocultar."
+                      }
+                    >
+                      {u.hidden_from_directory ? (
+                        <EyeOff size={16} className="text-amber-500 inline" />
+                      ) : (
+                        <Eye size={16} className="text-success inline" />
+                      )}
+                    </button>
+                  </td>
                   <td className="px-3 py-2 text-text-muted text-xs">
                     {fmtArDate(u.created_at)}
                   </td>
@@ -283,7 +307,7 @@ export default function AdminUsersPage() {
               })}
               {!isLoading && (!data || data.length === 0) && (
                 <tr>
-                  <td colSpan={9} className="py-10 text-center text-text-muted">
+                  <td colSpan={10} className="py-10 text-center text-text-muted">
                     No hay usuarios.
                   </td>
                 </tr>
