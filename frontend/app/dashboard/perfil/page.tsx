@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Save, Cake, Briefcase, MapPin, Heart, User as UserIcon } from "lucide-react";
+import { Save, Cake, Briefcase, MapPin, Heart, User as UserIcon, Camera } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
+import { ImageUploader } from "@/components/people/image-uploader";
 
 type Area = { id: number; slug: string; name: string; color: string; description: string };
 type AreaChip = { id: number; slug: string; name: string; color: string };
@@ -16,6 +17,7 @@ type Me = {
     birthday_month: number | null; birthday_day: number | null; birthday_year: number | null;
     joined_at: string | null; location_city: string | null; interests: string | null;
     job_title: string | null; bio: string | null;
+    avatar_url: string | null;
     profile_completed: boolean; created_at: string;
   };
   needs_onboarding: boolean;
@@ -45,6 +47,7 @@ export default function PerfilPage() {
   const [interests, setInterests] = useState<string>("");
   const [jobTitle, setJobTitle] = useState<string>("");
   const [bio, setBio] = useState<string>("");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (meQ.data?.user) {
@@ -59,6 +62,7 @@ export default function PerfilPage() {
       setInterests(u.interests ?? "");
       setJobTitle(u.job_title ?? "");
       setBio(u.bio ?? "");
+      setAvatarUrl(u.avatar_url ?? null);
     }
   }, [meQ.data]);
 
@@ -80,8 +84,24 @@ export default function PerfilPage() {
       interests: interests || null,
       job_title: jobTitle || null,
       bio: bio || null,
+      avatar_url: avatarUrl,
       mark_completed: true,
     });
+  }
+
+  // Auto-save instant al cambiar la foto (mejor UX que esperar al boton "Guardar").
+  const avatarMut = useMutation({
+    mutationFn: (url: string | null) =>
+      api("/api/users/me/profile", {
+        method: "PATCH",
+        body: JSON.stringify({ avatar_url: url }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["users-me"] }),
+  });
+
+  function onAvatarChange(url: string | null) {
+    setAvatarUrl(url);
+    avatarMut.mutate(url);
   }
 
   function toggleSecondary(id: number) {
@@ -102,9 +122,17 @@ export default function PerfilPage() {
           <div className="max-w-2xl mx-auto space-y-6">
             {/* Identidad */}
             <div className="bg-gradient-to-br from-primary/10 to-accent/5 border border-primary/30 rounded-2xl p-5 flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center font-extrabold text-2xl shadow-lg">
-                {u.name.charAt(0).toUpperCase() || u.email.charAt(0).toUpperCase()}
-              </div>
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={u.name || u.email}
+                  className="w-16 h-16 rounded-2xl object-cover shadow-lg ring-2 ring-primary/30"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-accent text-white flex items-center justify-center font-extrabold text-2xl shadow-lg">
+                  {u.name.charAt(0).toUpperCase() || u.email.charAt(0).toUpperCase()}
+                </div>
+              )}
               <div className="flex-1 min-w-0">
                 <div className="text-lg font-extrabold text-text truncate">{u.name || u.email}</div>
                 <div className="text-xs text-text-muted">{u.email} · Rol: <span className="font-semibold text-text">{u.role}</span></div>
@@ -116,6 +144,28 @@ export default function PerfilPage() {
                 )}
               </div>
             </div>
+
+            {/* Foto de perfil */}
+            <Section
+              icon={Camera}
+              title="Foto de perfil"
+              subtitle="Se guarda al instante. La van a ver tus companeros en el directorio, feed y mensajes."
+            >
+              <ImageUploader
+                value={avatarUrl}
+                onChange={onAvatarChange}
+                label="Foto de perfil"
+                compact
+              />
+              {avatarMut.isPending && (
+                <div className="text-[11px] text-text-muted mt-2">Guardando foto...</div>
+              )}
+              {avatarMut.isSuccess && !avatarMut.isPending && (
+                <div className="text-[11px] text-emerald-700 font-semibold mt-2">
+                  Foto actualizada
+                </div>
+              )}
+            </Section>
 
             {/* Area */}
             <Section icon={UserIcon} title="Áreas" subtitle="Tu área principal define los dashboards por defecto. Podés sumar adicionales si colaborás con varias.">
