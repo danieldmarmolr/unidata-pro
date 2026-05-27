@@ -1197,6 +1197,24 @@ def get_stock_heatmap(
     return stock_svc.stock_heatmap(top_skus=top_skus)
 
 
+@router.get("/stock-heatmap/by-sku")
+def get_stock_heatmap_by_sku(
+    user: Annotated[dict, Depends(current_user)],
+    period: Annotated[Literal["today", "yesterday", "7d", "30d", "90d", "12m", "custom"], Query()] = "30d",
+    from_iso: Annotated[str | None, Query(alias="from")] = None,
+    to_iso: Annotated[str | None, Query(alias="to")] = None,
+) -> dict:
+    """Vista operativa por SKU: U.V., promedio diario, desv std, stock,
+    precio, costo, markup neto, total markup, tiempo riesgo y facturacion.
+    Markup post-fees post-IVA via calc_profit (motor canonico del sistema)."""
+    require_area(user, ["logistica", "compras", "ventas"])
+    key = f"stock-by-sku:{period}:{from_iso}:{to_iso}"
+    @cached(_cache, key=lambda: key)
+    def _b() -> dict:
+        return stock_svc.stock_heatmap_by_sku(period, from_iso, to_iso)
+    return _b()
+
+
 @router.get("/rfm")
 def get_rfm(
     user: Annotated[dict, Depends(current_user)],
