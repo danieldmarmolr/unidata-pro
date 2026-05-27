@@ -29,17 +29,29 @@ def sales_unistore(
     channel: all | tn | ml
     from_iso / to_iso: ISO date strings for period='custom'
     """
-    days = PERIOD_DAYS.get(period, 30)
     eng = get_engine("unistore")
 
     window = resolve_window(period, from_iso, to_iso)
     from_ts = window["from_ts"]
     to_ts = window["to_ts"]
+    # Ventana previa del mismo span — para calcular delta vs periodo anterior.
+    # Funciona para HOY/AYER/Personalizado/7d/30d/etc sin casos especiales.
+    span = to_ts - from_ts
+    prev_from_ts = from_ts - span
+    prev_to_ts = from_ts
 
-    p = {"days": days, "from_ts": from_ts, "to_ts": to_ts}
+    p = {"from_ts": from_ts, "to_ts": to_ts}
+    prev_p = {"prev_from": prev_from_ts, "prev_to": prev_to_ts}
 
     include_tn = channel in ("all", "tn")
     include_ml = channel in ("all", "ml")
+
+    # Label del periodo usado en las cards (mismo formato que muestra el topbar)
+    period_label = {
+        "today": "hoy", "yesterday": "ayer", "7d": "7d",
+        "30d": "30d", "90d": "90d", "12m": "12m",
+        "custom": "rango",
+    }.get(period, period)
 
     # ---------- KPIs ----------
     cards: list[dict] = []
@@ -47,38 +59,34 @@ def sales_unistore(
     gmv_tn = float(_scalar(eng, """
         SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END), 0)
         FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
     """, p) or 0) if include_tn else 0.0
 
     gmv_ml = float(_scalar(eng, """
         SELECT COALESCE(SUM(COALESCE(total_amount,0)), 0)
         FROM meli.meli_orders
-        WHERE date_created >= NOW() - make_interval(days => :days)
+        WHERE date_created >= :from_ts AND date_created < :to_ts
           AND status IN ('paid','confirmed','shipped','delivered')
     """, p) or 0) if include_ml else 0.0
 
     gmv_total = gmv_tn + gmv_ml
 
-    # vs periodo anterior (mismo span de dias, ventana inmediatamente previa)
-    prev_p = {"days": days, "days2": days * 2}
     gmv_tn_prev = float(_scalar(eng, """
         SELECT COALESCE(SUM(CASE WHEN "paymentStatus"='paid' THEN COALESCE(total,0) ELSE 0 END), 0)
         FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days2)
-          AND "createdAt" <  NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :prev_from AND "createdAt" < :prev_to
     """, prev_p) or 0) if include_tn else 0.0
     gmv_ml_prev = float(_scalar(eng, """
         SELECT COALESCE(SUM(COALESCE(total_amount,0)), 0)
         FROM meli.meli_orders
-        WHERE date_created >= NOW() - make_interval(days => :days2)
-          AND date_created <  NOW() - make_interval(days => :days)
+        WHERE date_created >= :prev_from AND date_created < :prev_to
           AND status IN ('paid','confirmed','shipped','delivered')
     """, prev_p) or 0) if include_ml else 0.0
     gmv_prev = gmv_tn_prev + gmv_ml_prev
     delta_gmv = ((gmv_total - gmv_prev) / gmv_prev * 100) if gmv_prev > 0 else None
 
     cards.append({
-        "label": f"GMV ultimos {period}",
+        "label": f"GMV ultimos {period_label}",
         "value": round(gmv_total, 0),
         "prefix": "$ ",
         "delta": round(delta_gmv, 1) if delta_gmv is not None else None,
@@ -88,23 +96,21 @@ def sales_unistore(
     # Ordenes
     orders_tn = int(_scalar(eng, """
         SELECT COUNT(*) FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
     """, p) or 0) if include_tn else 0
     orders_ml = int(_scalar(eng, """
         SELECT COUNT(*) FROM meli.meli_orders
-        WHERE date_created >= NOW() - make_interval(days => :days)
+        WHERE date_created >= :from_ts AND date_created < :to_ts
     """, p) or 0) if include_ml else 0
     total_orders = orders_tn + orders_ml
 
     orders_tn_prev = int(_scalar(eng, """
         SELECT COUNT(*) FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days2)
-          AND "createdAt" <  NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :prev_from AND "createdAt" < :prev_to
     """, prev_p) or 0) if include_tn else 0
     orders_ml_prev = int(_scalar(eng, """
         SELECT COUNT(*) FROM meli.meli_orders
-        WHERE date_created >= NOW() - make_interval(days => :days2)
-          AND date_created <  NOW() - make_interval(days => :days)
+        WHERE date_created >= :prev_from AND date_created < :prev_to
     """, prev_p) or 0) if include_ml else 0
     orders_prev = orders_tn_prev + orders_ml_prev
     delta_orders = ((total_orders - orders_prev) / orders_prev * 100) if orders_prev > 0 else None
@@ -119,21 +125,22 @@ def sales_unistore(
     # AOV (sobre orders pagadas)
     aov_tn = float(_scalar(eng, """
         SELECT COALESCE(AVG(NULLIF(total,0)),0) FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
           AND "paymentStatus"='paid'
     """, p) or 0) if include_tn else 0.0
     aov_ml = float(_scalar(eng, """
         SELECT COALESCE(AVG(NULLIF(total_amount,0)),0) FROM meli.meli_orders
-        WHERE date_created >= NOW() - make_interval(days => :days)
+        WHERE date_created >= :from_ts AND date_created < :to_ts
           AND status IN ('paid','confirmed','shipped','delivered')
     """, p) or 0) if include_ml else 0.0
-    aov = (aov_tn + aov_ml) / (1 if (aov_tn>0 and aov_ml>0) and channel == "all" else 1)
-    if channel == "all" and aov_tn>0 and aov_ml>0:
+    if channel == "all" and aov_tn > 0 and aov_ml > 0:
         aov = (aov_tn + aov_ml) / 2
     elif channel == "tn":
         aov = aov_tn
     elif channel == "ml":
         aov = aov_ml
+    else:
+        aov = aov_tn + aov_ml
     cards.append({
         "label": "Ticket promedio (AOV)",
         "value": round(aov, 0),
@@ -145,7 +152,7 @@ def sales_unistore(
     paid_rate = None
     paid_orders_tn = int(_scalar(eng, """
         SELECT COUNT(*) FROM tienda_nube."Order"
-        WHERE "createdAt" >= NOW() - make_interval(days => :days)
+        WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
           AND "paymentStatus"='paid'
     """, p) or 0)
     if orders_tn > 0:
@@ -293,7 +300,7 @@ def sales_unistore(
         rows = _q(eng, """
             SELECT COALESCE("paymentStatus",'desconocido') AS status, COUNT(*)::int
             FROM tienda_nube."Order"
-            WHERE "createdAt" >= NOW() - make_interval(days => :days)
+            WHERE "createdAt" >= :from_ts AND "createdAt" < :to_ts
             GROUP BY 1 ORDER BY 2 DESC
         """, p) or []
         payment_status = [{"category": r[0], "value": float(r[1])} for r in rows]
@@ -312,7 +319,7 @@ def sales_unistore(
                    COUNT(DISTINCT oi."orderId")::int AS orders
             FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
-            WHERE o."createdAt" >= NOW() - make_interval(days => :days)
+            WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
               AND o."paymentStatus" = 'paid'
             GROUP BY 1, 2
             ORDER BY revenue DESC
@@ -333,7 +340,7 @@ def sales_unistore(
                    COUNT(*)::int AS orders
             FROM tienda_nube."Order" o
             JOIN tienda_nube."OrderShippingAddress" osa ON osa."orderId" = o.id
-            WHERE o."createdAt" >= NOW() - make_interval(days => :days)
+            WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
               AND o."paymentStatus" = 'paid'
             GROUP BY 1
             ORDER BY rev DESC

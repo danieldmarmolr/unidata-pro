@@ -1,6 +1,10 @@
 """
 Ventas Unidrop: orders TN procesadas + ML procesadas a traves de la plataforma.
 Espejo del dashboard sales de Unistore.
+
+Las queries respetan la ventana exacta `from_ts/to_ts` provista por resolve_window,
+para que HOY/AYER/Personalizado se calculen sobre el rango real (no sobre
+NOW() - N dias rolling, que era el bug previo).
 """
 from __future__ import annotations
 
@@ -10,17 +14,28 @@ from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services._utils import resolve_window
 
-PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
-
 
 def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    days = resolve_window(period, from_iso, to_iso)["days"]
     eng = get_engine("unidrop")
-    p = {"days": days}
-    p2 = {"days": days, "days2": days * 2}
+
+    window = resolve_window(period, from_iso, to_iso)
+    from_ts = window["from_ts"]
+    to_ts = window["to_ts"]
+    span = to_ts - from_ts
+    prev_from_ts = from_ts - span
+    prev_to_ts = from_ts
+
+    p = {"from_ts": from_ts, "to_ts": to_ts}
+    prev_p = {"prev_from": prev_from_ts, "prev_to": prev_to_ts}
 
     include_tn = channel in ("all", "tn")
     include_ml = channel in ("all", "ml")
+
+    period_label = {
+        "today": "hoy", "yesterday": "ayer", "7d": "7d",
+        "30d": "30d", "90d": "90d", "12m": "12m",
+        "custom": "rango",
+    }.get(period, period)
 
     cards: list[dict] = []
 
@@ -28,12 +43,12 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     gmv_tn = float(scalar(eng, """
         SELECT COALESCE(SUM(CASE WHEN payment_status::text='paid' THEN COALESCE(total,0) ELSE 0 END),0)::float
         FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
+        WHERE created_at >= :from_ts AND created_at < :to_ts
     """, p) or 0) if include_tn else 0.0
     gmv_ml = float(scalar(eng, """
         SELECT COALESCE(SUM(COALESCE("totalAmount",0)),0)::float
         FROM mercado_libre_dev."OrderMercadoLibre"
-        WHERE "dateCreated" >= NOW() - make_interval(days => :days)
+        WHERE "dateCreated" >= :from_ts AND "dateCreated" < :to_ts
           AND status IN ('paid','confirmed','shipped','delivered')
     """, p) or 0) if include_ml else 0.0
     gmv = gmv_tn + gmv_ml
@@ -41,21 +56,19 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     gmv_prev_tn = float(scalar(eng, """
         SELECT COALESCE(SUM(CASE WHEN payment_status::text='paid' THEN COALESCE(total,0) ELSE 0 END),0)::float
         FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days2)
-          AND created_at <  NOW() - make_interval(days => :days)
-    """, p2) or 0) if include_tn else 0.0
+        WHERE created_at >= :prev_from AND created_at < :prev_to
+    """, prev_p) or 0) if include_tn else 0.0
     gmv_prev_ml = float(scalar(eng, """
         SELECT COALESCE(SUM(COALESCE("totalAmount",0)),0)::float
         FROM mercado_libre_dev."OrderMercadoLibre"
-        WHERE "dateCreated" >= NOW() - make_interval(days => :days2)
-          AND "dateCreated" <  NOW() - make_interval(days => :days)
+        WHERE "dateCreated" >= :prev_from AND "dateCreated" < :prev_to
           AND status IN ('paid','confirmed','shipped','delivered')
-    """, p2) or 0) if include_ml else 0.0
+    """, prev_p) or 0) if include_ml else 0.0
     gmv_prev = gmv_prev_tn + gmv_prev_ml
     delta_gmv = ((gmv - gmv_prev) / gmv_prev * 100) if gmv_prev > 0 else None
 
     cards.append({
-        "label": f"GMV ultimos {period}",
+        "label": f"GMV ultimos {period_label}",
         "value": round(gmv, 0),
         "prefix": "$ ",
         "delta": round(delta_gmv, 1) if delta_gmv is not None else None,
@@ -65,15 +78,27 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     # Ordenes
     orders_tn = int(scalar(eng, """
         SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
+        WHERE created_at >= :from_ts AND created_at < :to_ts
     """, p) or 0) if include_tn else 0
     orders_ml = int(scalar(eng, """
         SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre"
-        WHERE "dateCreated" >= NOW() - make_interval(days => :days)
+        WHERE "dateCreated" >= :from_ts AND "dateCreated" < :to_ts
     """, p) or 0) if include_ml else 0
+    orders_tn_prev = int(scalar(eng, """
+        SELECT COUNT(*) FROM public.tienda_nube_orders
+        WHERE created_at >= :prev_from AND created_at < :prev_to
+    """, prev_p) or 0) if include_tn else 0
+    orders_ml_prev = int(scalar(eng, """
+        SELECT COUNT(*) FROM mercado_libre_dev."OrderMercadoLibre"
+        WHERE "dateCreated" >= :prev_from AND "dateCreated" < :prev_to
+    """, prev_p) or 0) if include_ml else 0
+    orders_total = orders_tn + orders_ml
+    orders_prev = orders_tn_prev + orders_ml_prev
+    delta_orders = ((orders_total - orders_prev) / orders_prev * 100) if orders_prev > 0 else None
     cards.append({
         "label": "Ordenes",
-        "value": orders_tn + orders_ml,
+        "value": orders_total,
+        "delta": round(delta_orders, 1) if delta_orders is not None else None,
         "hint": f"TN: {orders_tn:,} / ML: {orders_ml:,}",
     })
 
@@ -81,18 +106,21 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     aov_tn = float(scalar(eng, """
         SELECT COALESCE(AVG(NULLIF(total,0)),0)::float
         FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
+        WHERE created_at >= :from_ts AND created_at < :to_ts
           AND payment_status::text='paid'
     """, p) or 0) if include_tn else 0.0
     aov_ml = float(scalar(eng, """
         SELECT COALESCE(AVG(NULLIF("totalAmount",0)),0)::float
         FROM mercado_libre_dev."OrderMercadoLibre"
-        WHERE "dateCreated" >= NOW() - make_interval(days => :days)
+        WHERE "dateCreated" >= :from_ts AND "dateCreated" < :to_ts
           AND status IN ('paid','confirmed','shipped','delivered')
     """, p) or 0) if include_ml else 0.0
-    if channel == "tn": aov = aov_tn
-    elif channel == "ml": aov = aov_ml
-    else: aov = (aov_tn + aov_ml) / 2 if (aov_tn > 0 and aov_ml > 0) else (aov_tn or aov_ml)
+    if channel == "tn":
+        aov = aov_tn
+    elif channel == "ml":
+        aov = aov_ml
+    else:
+        aov = (aov_tn + aov_ml) / 2 if (aov_tn > 0 and aov_ml > 0) else (aov_tn or aov_ml)
     cards.append({
         "label": "Ticket promedio",
         "value": round(aov, 0),
@@ -103,7 +131,7 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
     # % Pago confirmado TN
     paid_tn = int(scalar(eng, """
         SELECT COUNT(*) FROM public.tienda_nube_orders
-        WHERE created_at >= NOW() - make_interval(days => :days)
+        WHERE created_at >= :from_ts AND created_at < :to_ts
           AND payment_status::text='paid'
     """, p) or 0)
     paid_rate = (paid_tn / orders_tn * 100) if orders_tn > 0 else 0
@@ -124,30 +152,29 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
             "hint": f"{share:.1f}% del GMV del periodo",
         })
 
-    # Pagos Talo (suscripciones + órdenes procesadas por Talo)
+    # Pagos Talo (suscripciones + ordenes procesadas por Talo)
     talo_vol = float(scalar(eng, """
         SELECT COALESCE(SUM(pt.amount),0)::float
         FROM public."PaymentTransaction" pt
-        WHERE pt."createdAt" >= NOW() - make_interval(days => :days)
+        WHERE pt."createdAt" >= :from_ts AND pt."createdAt" < :to_ts
           AND pt.status::text IN ('completed','succeeded','approved','paid','credited','processed','PROCESSED')
     """, p) or 0)
     talo_prev = float(scalar(eng, """
         SELECT COALESCE(SUM(pt.amount),0)::float
         FROM public."PaymentTransaction" pt
-        WHERE pt."createdAt" >= NOW() - make_interval(days => :days2)
-          AND pt."createdAt" <  NOW() - make_interval(days => :days)
+        WHERE pt."createdAt" >= :prev_from AND pt."createdAt" < :prev_to
           AND pt.status::text IN ('completed','succeeded','approved','paid','credited','processed','PROCESSED')
-    """, p2) or 0)
+    """, prev_p) or 0)
     delta_talo = ((talo_vol - talo_prev) / talo_prev * 100) if talo_prev > 0 else None
     cards.append({
-        "label": f"Pagos Talo ({period})",
+        "label": f"Pagos Talo ({period_label})",
         "value": round(talo_vol, 0),
         "prefix": "$ ",
         "delta": round(delta_talo, 1) if delta_talo is not None else None,
         "hint": "Volumen procesado · ordenes + suscripciones",
     })
 
-    # Tendencia 12m por canal
+    # Tendencia 12m por canal (fijo, NO depende del filtro del topbar)
     series: list[dict] = []
     if include_tn:
         rows = q(eng, """
@@ -175,21 +202,21 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
             "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[1] or 0)} for r in rows],
         })
 
-    # Daily revenue periodo
+    # Daily revenue del periodo
     parts: list[str] = []
     if include_tn:
         parts.append("""
             SELECT date_trunc('day', created_at) AS day,
                    CASE WHEN payment_status::text='paid' THEN COALESCE(total,0) ELSE 0 END AS rev
             FROM public.tienda_nube_orders
-            WHERE created_at >= NOW() - make_interval(days => :days)
+            WHERE created_at >= :from_ts AND created_at < :to_ts
         """)
     if include_ml:
         parts.append("""
             SELECT date_trunc('day', "dateCreated") AS day,
                    COALESCE("totalAmount",0) AS rev
             FROM mercado_libre_dev."OrderMercadoLibre"
-            WHERE "dateCreated" >= NOW() - make_interval(days => :days)
+            WHERE "dateCreated" >= :from_ts AND "dateCreated" < :to_ts
               AND status IN ('paid','confirmed','shipped','delivered')
         """)
     daily = []
@@ -207,7 +234,7 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
         rows = q(eng, """
             SELECT COALESCE(payment_status::text,'desconocido'), COUNT(*)::int
             FROM public.tienda_nube_orders
-            WHERE created_at >= NOW() - make_interval(days => :days)
+            WHERE created_at >= :from_ts AND created_at < :to_ts
             GROUP BY 1 ORDER BY 2 DESC
         """, p) or []
         payment_status = [{"category": r[0], "value": float(r[1])} for r in rows]
@@ -222,7 +249,7 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
                    COALESCE(SUM(o.total),0)::float AS rev
             FROM public."User" u
             JOIN public.tienda_nube_orders o ON o.user_id = u.id
-            WHERE o.created_at >= NOW() - make_interval(days => :days)
+            WHERE o.created_at >= :from_ts AND o.created_at < :to_ts
               AND o.payment_status::text = 'paid'
             GROUP BY u.id, u.fantasy_name, u.name, u.email
         """)
@@ -233,7 +260,7 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
                    COALESCE(SUM(oml."totalAmount"),0)::float AS rev
             FROM public."User" u
             JOIN mercado_libre_dev."OrderMercadoLibre" oml ON oml."userId" = u.id
-            WHERE oml."dateCreated" >= NOW() - make_interval(days => :days)
+            WHERE oml."dateCreated" >= :from_ts AND oml."dateCreated" < :to_ts
               AND oml.status IN ('paid','confirmed','shipped','delivered')
             GROUP BY u.id, u.fantasy_name, u.name, u.email
         """)
@@ -259,7 +286,7 @@ def sales_unidrop(period: str = "30d", channel: str = "all", from_iso: str | Non
             SELECT COALESCE(NULLIF(TRIM(billing_province),''),'(sin provincia)'),
                    SUM(total)::float, COUNT(*)::int
             FROM public.tienda_nube_orders
-            WHERE created_at >= NOW() - make_interval(days => :days)
+            WHERE created_at >= :from_ts AND created_at < :to_ts
               AND payment_status::text='paid'
             GROUP BY 1 ORDER BY 2 DESC LIMIT 10
         """, p) or []
