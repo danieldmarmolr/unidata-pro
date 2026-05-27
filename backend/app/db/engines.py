@@ -1,5 +1,11 @@
 """
-Tuneles SSH a los bastiones AWS y engines SQLAlchemy por unidad de negocio.
+Engines SQLAlchemy por unidad de negocio.
+
+Dos modos de conexion segun USE_SSH_TUNNEL:
+  - true  (default, dev local / Railway): SSH tunnel a bastion EC2 -> RDS
+  - false (Fargate dentro de la misma VPC que los RDS): conexion directa
+          a `db_host:db_port`, sin tunnel.
+
 Auto-recovery: si el tunel se cayo o el engine perdio conexion, se reconectan.
 
 Mapeo de unidades de negocio -> base de datos y schemas:
@@ -97,10 +103,15 @@ def _open_tunnel(cfg: UnitConfig) -> SSHTunnelForwarder:
 
 
 def _build_engine(cfg: UnitConfig) -> Engine:
-    _open_tunnel(cfg)
+    settings = get_settings()
+    if settings.use_ssh_tunnel:
+        _open_tunnel(cfg)
+        host, port = "127.0.0.1", cfg.local_port
+    else:
+        host, port = cfg.db_host, cfg.db_port
     url = (
         f"postgresql+psycopg2://{cfg.db_user}:{cfg.db_password}"
-        f"@127.0.0.1:{cfg.local_port}/{cfg.db_name}"
+        f"@{host}:{port}/{cfg.db_name}"
     )
     engine = create_engine(
         url,
@@ -147,8 +158,11 @@ def get_engine(unit: str) -> Engine:
     cfg = settings.units[unit]
     with _LOCK:
         existing_eng = _ENGINES.get(unit)
-        if existing_eng is not None and _tunnel_alive(_TUNNELS.get(unit)):
-            return existing_eng
+        if existing_eng is not None:
+            # En modo directo no hay tunnel que validar; engine SQLAlchemy
+            # tiene pool_pre_ping=True asi que detecta conexiones muertas solo.
+            if not settings.use_ssh_tunnel or _tunnel_alive(_TUNNELS.get(unit)):
+                return existing_eng
         # tunnel muerto o engine no creado: rebuild todo
         _reset_unit(unit)
         try:
