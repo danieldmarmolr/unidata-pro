@@ -57,9 +57,8 @@ def forecast_all_skus(top_n: int = 100) -> dict:
             HAVING SUM(oi.quantity) FILTER (WHERE o."createdAt" >= NOW() - INTERVAL '90 days') >= 5
         ),
         stock AS (
-            SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock_total
-            FROM digip."StockDetalle"
-            GROUP BY 1
+            SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock_total
+            FROM digip."Stock"
         )
         SELECT v.sku, v.nombre, v.units_30d, v.units_prev30d, v.units_90d,
                v.dias_con_venta, v.precio_promedio,

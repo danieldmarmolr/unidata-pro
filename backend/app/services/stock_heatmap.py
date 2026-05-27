@@ -6,6 +6,12 @@ con las areas de deposito (Digip). Permite identificar:
 - SKUs concentrados en una sola area (riesgo logistico)
 - Areas con poco surtido vs areas con catalogo completo
 - SKUs sin stock en zonas comerciales clave
+
+NOTA: usa StockDetalle (stock fisico per area, incluye reservado/bloqueado).
+La distribucion por area solo existe en StockDetalle; digip.Stock es agregado
+por SKU sin dimension area. El KPI canonico "stock disponible" del sistema
+sigue siendo digip.Stock.unidadesDisponibles — el heatmap es una vista
+operativa complementaria de distribucion fisica.
 """
 from __future__ import annotations
 

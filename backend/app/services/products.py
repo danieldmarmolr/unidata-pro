@@ -1,7 +1,7 @@
 """
 Productos - Unistore.
 Vista global cross-canal (TN + ML) + drill 360 por SKU.
-Cruza tienda_nube.OrderItem (TN), meli.meli_orders (ML), digip.StockDetalle (stock),
+Cruza tienda_nube.OrderItem (TN), meli.meli_orders (ML), digip.Stock (stock disponible),
 unidev.devolucion_items (devoluciones), costs SQLite (costo de importacion).
 """
 from __future__ import annotations
@@ -66,16 +66,15 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
           )
     """) or 0)
 
+    # Stock canonico Unidata: digip."Stock"."unidadesDisponibles" — lo que efectivamente
+    # se puede vender (StockDetalle.unidades incluia reservado/bloqueado/a despachar).
     skus_digip = int(scalar(eng_uni, """
-        SELECT COUNT(DISTINCT "articuloCodigo")
-        FROM digip."StockDetalle"
+        SELECT COUNT(*) FROM digip."Stock"
     """) or 0)
 
     sku_critico = int(scalar(eng_uni, """
-        SELECT COUNT(*) FROM (
-            SELECT "articuloCodigo" FROM digip."StockDetalle"
-            GROUP BY 1 HAVING SUM(unidades) <= 5 AND SUM(unidades) >= 0
-        ) x
+        SELECT COUNT(*) FROM digip."Stock"
+        WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 0 AND 5
     """) or 0)
 
     units_periodo = int(scalar(eng_uni, """
@@ -128,8 +127,8 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
           GROUP BY oi.sku
         ),
         stock_act AS (
-          SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock
-          FROM digip."StockDetalle" GROUP BY 1
+          SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock
+          FROM digip."Stock"
         )
         SELECT COUNT(*)
         FROM ventas_30d v
@@ -249,9 +248,9 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         "value": sin_movimiento,
         "hint": "SKUs en catalogo sin venta hace 90+ dias",
         "formula": {
-            "description": "SKUs con stock en DIGIP que no tuvieron ninguna venta en los ultimos 90 dias. Candidatos a liquidacion o discontinuacion.",
-            "expression": "COUNT SKUs con stock > 0 AND sin ventas en 90d",
-            "source": "digip.StockDetalle + tienda_nube.OrderItem",
+            "description": "SKUs con stock disponible en DIGIP que no tuvieron ninguna venta en los ultimos 90 dias. Candidatos a liquidacion o discontinuacion.",
+            "expression": "COUNT SKUs con unidadesDisponibles > 0 AND sin ventas en 90d",
+            "source": "digip.Stock + tienda_nube.OrderItem",
             "period": "snapshot vs 90d rolling",
         },
     })
@@ -260,20 +259,20 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         "value": skus_digip,
         "hint": "En el WMS",
         "formula": {
-            "description": "Cantidad de SKUs distintos con al menos una ubicacion fisica registrada en el WMS DIGIP.",
-            "expression": "COUNT(DISTINCT articuloCodigo)",
-            "source": "digip.StockDetalle",
+            "description": "Cantidad de SKUs registrados en el WMS DIGIP (Stock agregado por SKU).",
+            "expression": "COUNT(*) FROM digip.Stock",
+            "source": "digip.Stock",
             "period": "snapshot actual",
         },
     })
     cards.append({
         "label": "Stock critico",
         "value": sku_critico,
-        "hint": "<= 5 unidades totales",
+        "hint": "<= 5 unidades disponibles",
         "formula": {
-            "description": "SKUs con stock fisico total (suma de todas las ubicaciones) menor o igual a 5 unidades. Alerta operativa.",
-            "expression": "COUNT SKUs WHERE SUM(unidades) <= 5",
-            "source": "digip.StockDetalle agrupado por SKU",
+            "description": "SKUs con unidadesDisponibles (lo que se puede vender) menor o igual a 5. No incluye reservado/bloqueado/a despachar.",
+            "expression": "COUNT SKUs WHERE unidadesDisponibles BETWEEN 0 AND 5",
+            "source": "digip.Stock.unidadesDisponibles",
             "period": "snapshot actual",
         },
     })
@@ -282,9 +281,9 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
         "value": stockout_14d,
         "hint": "SKUs que se agotan en menos de 14 dias al ritmo actual",
         "formula": {
-            "description": "SKUs proyectados a stockout en <14 dias dado el ritmo de venta de los ultimos 30d.",
-            "expression": "(stock_actual / (ventas_30d / 30)) < 14",
-            "source": "digip.StockDetalle + tienda_nube.OrderItem (30d)",
+            "description": "SKUs proyectados a stockout en <14 dias dado el ritmo de venta de los ultimos 30d. Usa unidadesDisponibles (vendible) como base.",
+            "expression": "(unidadesDisponibles / (ventas_30d / 30)) < 14",
+            "source": "digip.Stock + tienda_nube.OrderItem (30d)",
             "period": "snapshot + ventas 30d rolling",
         },
     })
@@ -427,13 +426,13 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
               )
         )
         SELECT ns.sku, MAX(p.name) AS name, COALESCE(MAX(p.brand),'') AS brand,
-               COALESCE(SUM(sd.unidades), 0)::int AS stock_actual
+               COALESCE(MAX(s."unidadesDisponibles"), 0)::int AS stock_actual
         FROM no_sales ns
         LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = ns.sku
         LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
-        LEFT JOIN digip."StockDetalle" sd ON sd."articuloCodigo" = ns.sku
+        LEFT JOIN digip."Stock" s ON s."codigoArticulo" = ns.sku
         GROUP BY ns.sku
-        HAVING COALESCE(SUM(sd.unidades), 0) > 0
+        HAVING COALESCE(MAX(s."unidadesDisponibles"), 0) > 0
         ORDER BY stock_actual DESC LIMIT 20
     """) or []
     sin_movimiento_list = [{
@@ -444,10 +443,9 @@ def products_overview(period: str = "30d", channel: str = "all", from_iso: str |
 
     critico_alerta = q(eng_uni, """
         WITH stock_q AS (
-            SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock
-            FROM digip."StockDetalle"
-            GROUP BY 1
-            HAVING SUM(unidades) >= 0 AND SUM(unidades) <= 5
+            SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock
+            FROM digip."Stock"
+            WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 0 AND 5
         )
         SELECT s.sku, MAX(oi.name) AS name, s.stock,
                SUM(oi.quantity)::int AS units_vendidas

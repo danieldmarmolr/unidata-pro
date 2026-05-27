@@ -297,9 +297,8 @@ def inventory_rotation(period: str = "30d", from_iso: str | None = None, to_iso:
             GROUP BY 1
         ),
         stock AS (
-            SELECT "articuloCodigo" AS sku, SUM(unidades)::float AS stock
-            FROM digip."StockDetalle"
-            GROUP BY 1
+            SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::float AS stock
+            FROM digip."Stock"
         )
         SELECT v.sku,
                COALESCE(v.nombre, v.sku) AS nombre,

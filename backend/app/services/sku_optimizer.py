@@ -95,9 +95,8 @@ def _unistore_overview() -> dict:
                 HAVING SUM(oi.quantity) >= 10
             ),
             stock AS (
-                SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock_total
-                FROM digip."StockDetalle"
-                GROUP BY 1
+                SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock_total
+                FROM digip."Stock"
             )
             SELECT v.sku, v.nombre, v.units_30d, v.daily_velocity::float,
                    COALESCE(s.stock_total, 0) AS stock,
@@ -144,10 +143,9 @@ def _unistore_overview() -> dict:
                 GROUP BY oi.sku
             ),
             stock AS (
-                SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock_total
-                FROM digip."StockDetalle"
-                GROUP BY 1
-                HAVING SUM(unidades) > 30
+                SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock_total
+                FROM digip."Stock"
+                WHERE COALESCE("unidadesDisponibles", 0) > 30
             )
             SELECT v.sku, v.nombre, v.units_30d, v.units_prev30d,
                    s.stock_total,

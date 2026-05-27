@@ -432,12 +432,8 @@ def today_story() -> dict:
     # ── 9) Stock critico Unistore ─────────────────────────────────────────────
     try:
         low_stock = int(scalar(uni, """
-            SELECT COUNT(*)::int FROM (
-              SELECT sd."articuloCodigo"
-              FROM digip."StockDetalle" sd
-              GROUP BY sd."articuloCodigo"
-              HAVING SUM(sd.unidades) > 0 AND SUM(sd.unidades) <= 5
-            ) x
+            SELECT COUNT(*)::int FROM digip."Stock"
+            WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 1 AND 5
         """) or 0)
         if low_stock > 0:
             blurbs.append({

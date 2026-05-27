@@ -76,13 +76,10 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
           AND o."createdAt" < NOW() - INTERVAL '5 days'
     """) or 0)
 
-    # SKUs con stock critico
+    # SKUs con stock critico (unidadesDisponibles vendible)
     sku_critico = int(scalar(eng, """
-        SELECT COUNT(*) FROM (
-            SELECT "articuloCodigo" FROM digip."StockDetalle"
-            GROUP BY "articuloCodigo"
-            HAVING SUM(unidades) <= :th AND SUM(unidades) >= 0
-        ) x
+        SELECT COUNT(*) FROM digip."Stock"
+        WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 0 AND :th
     """, {"th": STOCK_CRITICO_TH}) or 0)
 
     # Targets configurables (3ra baseline). Map vacio si no hay seteados.
@@ -198,14 +195,16 @@ def logistica_unistore(period: str = "30d", area: str = "all", from_iso: str | N
         "extra": {"skus": int(r[2] or 0)},
     } for r in rows]
 
-    # ---------- Productos con stock critico ----------
+    # ---------- Productos con stock critico (unidadesDisponibles <= th) ----------
     rows = q(eng, """
-        SELECT "articuloCodigo", MAX("articuloDescripcion") AS desc,
-               SUM(unidades)::int AS unidades,
-               COUNT(DISTINCT "areaDescripcion")::int AS areas
-        FROM digip."StockDetalle"
-        GROUP BY 1
-        HAVING SUM(unidades) >= 0 AND SUM(unidades) <= :th
+        SELECT s."codigoArticulo" AS sku,
+               MAX(sd."articuloDescripcion") AS desc,
+               COALESCE(s."unidadesDisponibles", 0)::int AS unidades,
+               COUNT(DISTINCT sd."areaDescripcion")::int AS areas
+        FROM digip."Stock" s
+        LEFT JOIN digip."StockDetalle" sd ON sd."articuloCodigo" = s."codigoArticulo"
+        WHERE COALESCE(s."unidadesDisponibles", 0) BETWEEN 0 AND :th
+        GROUP BY s."codigoArticulo", s."unidadesDisponibles"
         ORDER BY unidades ASC
         LIMIT 20
     """, {"th": STOCK_CRITICO_TH}) or []

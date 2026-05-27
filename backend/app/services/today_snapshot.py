@@ -458,13 +458,11 @@ def _today_snapshot_productos(unit: str | None = None) -> dict:
             hint="Ganancia neta / revenue (solo SKUs con costo cargado)",
         ))
 
-        # Stock critico: snapshot, no comparable temporalmente
+        # Stock critico: snapshot, no comparable temporalmente.
+        # Usamos digip.Stock.unidadesDisponibles (lo vendible), no StockDetalle.unidades.
         stock_critico_now = int(scalar(uni, """
-            SELECT COUNT(*) FROM (
-                SELECT "articuloCodigo"
-                FROM digip."StockDetalle"
-                GROUP BY 1 HAVING SUM(unidades) BETWEEN 1 AND 5
-            ) x
+            SELECT COUNT(*) FROM digip."Stock"
+            WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 1 AND 5
         """) or 0)
         if stock_critico_now:
             blocks.append({

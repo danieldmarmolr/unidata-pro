@@ -305,10 +305,9 @@ def export_stock_critico(
     eng = get_engine("unistore")
     rows = q(eng, """
         WITH stock_q AS (
-            SELECT "articuloCodigo" AS sku, SUM(unidades)::int AS stock
-            FROM digip."StockDetalle"
-            GROUP BY 1
-            HAVING SUM(unidades) BETWEEN 1 AND 5
+            SELECT "codigoArticulo" AS sku, COALESCE("unidadesDisponibles", 0)::int AS stock
+            FROM digip."Stock"
+            WHERE COALESCE("unidadesDisponibles", 0) BETWEEN 1 AND 5
         ),
         sales_q AS (
             SELECT oi.sku, COUNT(DISTINCT oi."orderId")::int AS ordenes_30d,

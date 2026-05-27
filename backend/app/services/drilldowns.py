@@ -957,11 +957,11 @@ def tn_skus_no_movement(days: int = 90) -> dict:
               )
         )
         SELECT ns.sku, MAX(p.name) AS producto, COALESCE(MAX(p.brand),'') AS marca,
-               COALESCE(SUM(sd.unidades),0)::int AS stock_actual
+               COALESCE(MAX(s."unidadesDisponibles"),0)::int AS stock_actual
         FROM no_sales ns
         LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = ns.sku
         LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
-        LEFT JOIN digip."StockDetalle" sd ON sd."articuloCodigo" = ns.sku
+        LEFT JOIN digip."Stock" s ON s."codigoArticulo" = ns.sku
         GROUP BY ns.sku
         ORDER BY stock_actual DESC LIMIT 1000
     """, {"d": int(days)}) or []
@@ -969,17 +969,23 @@ def tn_skus_no_movement(days: int = 90) -> dict:
 
 
 def tn_stock_critico() -> dict:
+    """Stock critico: unidadesDisponibles (vendible) <= 5. Enriquecido con
+    cantidad de ubicaciones fisicas desde StockDetalle para contexto operativo."""
     eng = get_engine("unistore")
     rows = q(eng, """
-        SELECT sd."articuloCodigo" AS sku,
-               SUM(sd.unidades)::int AS stock,
-               COUNT(DISTINCT sd.ubicacion)::int AS ubicaciones,
+        SELECT s."codigoArticulo" AS sku,
+               COALESCE(s."unidadesDisponibles", 0)::int AS stock,
+               COALESCE(ub.ubicaciones, 0)::int AS ubicaciones,
                MAX(p.name) AS producto
-        FROM digip."StockDetalle" sd
-        LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = sd."articuloCodigo"
+        FROM digip."Stock" s
+        LEFT JOIN (
+            SELECT "articuloCodigo", COUNT(DISTINCT ubicacion)::int AS ubicaciones
+            FROM digip."StockDetalle" GROUP BY 1
+        ) ub ON ub."articuloCodigo" = s."codigoArticulo"
+        LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = s."codigoArticulo"
         LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
-        GROUP BY sd."articuloCodigo"
-        HAVING SUM(sd.unidades) >= 0 AND SUM(sd.unidades) <= 5
+        WHERE COALESCE(s."unidadesDisponibles", 0) BETWEEN 0 AND 5
+        GROUP BY s."codigoArticulo", s."unidadesDisponibles", ub.ubicaciones
         ORDER BY stock ASC LIMIT 1000
     """) or []
     return _serialize(rows, ["sku", "stock", "ubicaciones", "producto"])
