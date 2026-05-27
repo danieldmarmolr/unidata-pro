@@ -721,7 +721,7 @@ export function DrillDownModal({
   // Hacemos open/close del wrapper como fragments para compartir el children.
   const innerContent = (
     <>
-        <div className="flex items-start justify-between p-4 sm:p-5 border-b border-border gap-2">
+        <div className={`flex items-start justify-between ${inline ? "p-3 sm:p-4" : "p-4 sm:p-5"} border-b border-border gap-2`}>
           <div className="min-w-0 flex-1">
             <div className="text-sm sm:text-base font-bold text-text truncate">{title}</div>
             {subtitle && <div className="text-[11px] sm:text-xs text-text-muted mt-1">{subtitle}</div>}
@@ -828,7 +828,7 @@ export function DrillDownModal({
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-1">
+        <div className={`flex-1 overflow-auto ${inline ? "p-0" : "p-1"}`}>
           {isLoading && (
             <div className="p-8 text-center text-text-muted text-sm">Cargando detalle...</div>
           )}
@@ -908,10 +908,17 @@ export function DrillDownModal({
               return false;
             };
             const labelFor = (c: string) => {
-              if (/^(payment|paymentStatus|pago|payment_status)$/i.test(c)) return "Estado del pedido";
+              if (/^(payment|paymentStatus|pago|payment_status)$/i.test(c)) return "Estado";
               if (/^(canal|canal_envio|shipping_channel)$/i.test(c)) return "Envio";
+              if (METODO_PAGO_TIPO_HINT.test(c)) return "Pago";
+              if (/^ganancia_neta$/i.test(c)) return "Ganancia";
               return c;
             };
+            // Columnas que pueden envolver texto largo (en lugar de forzar nowrap
+            // y desbordar a scroll horizontal). Aplicamos max-width controlado y
+            // break-words para mantener filas legibles sin scroll lateral.
+            const WRAPPABLE_HINT = /^(cliente|customer|customer_name|nombre_cliente|client|client_name|nombre|name|item|product|product_name|nombre_producto|provincia|province|ciudad|city|email|descripcion|description|categoria|marca|proveedor)$/i;
+            const isWrappable = (c: string) => WRAPPABLE_HINT.test(c);
             return (
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
@@ -920,12 +927,12 @@ export function DrillDownModal({
                     if (isHiddenColumn(c)) return null;
                     const active = sortBy === idx;
                     return (
-                      <th key={c} className="text-left px-3 py-2 whitespace-nowrap">
+                      <th key={c} className="text-left px-2 py-1.5 whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => toggleSort(idx)}
                           className={
-                            "inline-flex items-center gap-1 transition " +
+                            "inline-flex items-center gap-0.5 transition " +
                             (active ? "text-primary" : "hover:text-text")
                           }
                           title={`Ordenar por ${labelFor(c)}`}
@@ -984,9 +991,18 @@ export function DrillDownModal({
                         const col = data.columns[j];
                         if (isHiddenColumn(col)) return null;
                         const isFirstVisible = j === 0;
+                        const wrappable = isWrappable(col);
                         return (
-                          <td key={j} className="px-3 py-1.5 whitespace-nowrap font-mono text-[11px]">
-                            <div className="inline-flex items-center gap-1.5">
+                          <td
+                            key={j}
+                            className={
+                              "px-2 py-1.5 font-mono text-[11px] align-middle " +
+                              (wrappable
+                                ? "max-w-[160px] break-words leading-tight"
+                                : "whitespace-nowrap")
+                            }
+                          >
+                            <div className={wrappable ? "flex items-center gap-1.5" : "inline-flex items-center gap-1.5"}>
                               {isFirstVisible && isVip && (
                                 <span
                                   className={`inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-br ${vipVisual.bg} text-white shadow-sm flex-shrink-0`}
@@ -995,7 +1011,7 @@ export function DrillDownModal({
                                   <span className="text-[10px]">{vipVisual.icon}</span>
                                 </span>
                               )}
-                              <span>
+                              <span className={wrappable ? "min-w-0" : ""}>
                                 <CellRenderer col={col} v={v} row={r} columns={data.columns} />
                               </span>
                             </div>
