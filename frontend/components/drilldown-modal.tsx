@@ -635,21 +635,30 @@ export function DrillDownModal({
   endpoint,
   filename = "drilldown.csv",
   onClose,
+  inline = false,
+  className,
 }: {
   title: string;
   subtitle?: string;
   endpoint: string | null;
   filename?: string;
-  onClose: () => void;
+  onClose?: () => void;
+  /** Cuando true se renderiza como tarjeta inline (sin overlay/close). Para
+   * embeber el mismo render que la modal del Inicio dentro de una pagina
+   * como /dashboard/ventas. onClose se ignora en este modo. */
+  inline?: boolean;
+  /** Clase extra para el contenedor cuando inline=true (ej. mb-6, mx-0). */
+  className?: string;
 }) {
-  // Cierre con ESC
+  // Cierre con ESC — solo cuando es modal (no inline)
   useEffect(() => {
+    if (inline || !onClose) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, inline]);
 
   const { data, isLoading, error } = useQuery<Result>({
     queryKey: ["drilldown", endpoint],
@@ -703,12 +712,15 @@ export function DrillDownModal({
 
   if (!endpoint) return null;
 
-  return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-6 animate-in fade-in" onClick={onClose}>
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-surface rounded-t-2xl sm:rounded-2xl shadow-2xl border-t sm:border border-border w-full max-w-5xl max-h-[92vh] sm:max-h-[85vh] flex flex-col"
-      >
+  // Inline: tarjeta normal sin overlay ni close button. Para embeber en /ventas.
+  const inlineContainerClass = `bg-surface rounded-2xl border border-border w-full flex flex-col ${className ?? ""}`;
+  const modalOuterClass = "fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-6 animate-in fade-in";
+  const modalInnerClass = "bg-surface rounded-t-2xl sm:rounded-2xl shadow-2xl border-t sm:border border-border w-full max-w-5xl max-h-[92vh] sm:max-h-[85vh] flex flex-col";
+
+  // Inline: el container es una tarjeta normal. Modal: overlay + inner.
+  // Hacemos open/close del wrapper como fragments para compartir el children.
+  const innerContent = (
+    <>
         <div className="flex items-start justify-between p-4 sm:p-5 border-b border-border gap-2">
           <div className="min-w-0 flex-1">
             <div className="text-sm sm:text-base font-bold text-text truncate">{title}</div>
@@ -808,9 +820,11 @@ export function DrillDownModal({
                 </button>
               </>
             )}
-            <button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Cerrar">
-              <X size={18} />
-            </button>
+            {!inline && onClose && (
+              <button onClick={onClose} className="text-text-muted hover:text-text" aria-label="Cerrar">
+                <X size={18} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -997,10 +1011,22 @@ export function DrillDownModal({
           })()}
         </div>
 
-        <div className="px-5 py-3 border-t border-border bg-soft text-xs text-text-muted flex items-center gap-2">
-          <ExternalLink size={11} className="text-primary" />
-          <span>Click ESC o fuera del modal para cerrar</span>
-        </div>
+        {!inline && (
+          <div className="px-5 py-3 border-t border-border bg-soft text-xs text-text-muted flex items-center gap-2">
+            <ExternalLink size={11} className="text-primary" />
+            <span>Click ESC o fuera del modal para cerrar</span>
+          </div>
+        )}
+    </>
+  );
+
+  if (inline) {
+    return <div className={inlineContainerClass}>{innerContent}</div>;
+  }
+  return (
+    <div className={modalOuterClass} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className={modalInnerClass}>
+        {innerContent}
       </div>
     </div>
   );

@@ -17,7 +17,6 @@ import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { UnidropOrdersGlobal } from "@/components/unidrop-orders-global";
-import { UnistoreOrdersTable } from "@/components/unistore-orders-table";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { fmtArDateTime } from "@/lib/dates";
@@ -221,10 +220,18 @@ export default function VentasPage() {
  )}
  </div>
 
- {/* Tabla de órdenes Unistore (solo Unistore) */}
+ {/* Tabla de órdenes Unistore — mismo render que la modal de Inicio.
+      Endpoint /orders/paid devuelve TN + ML Fox con ganancia neta, tipo
+      de pago y markup. Hereda el filtro de fechas del topbar. */}
  {unit === "unistore" && (
  <div className="mb-6">
- <UnistoreOrdersTable externalPayFilter={paymentFilter} />
+ <DrillDownModal
+   inline
+   title="Órdenes Unistore"
+   subtitle="Pagas + efectivo pendiente · TN + ML Fox · hereda el filtro de fechas del topbar"
+   endpoint={`/api/drilldowns/orders/paid?${_qs}`}
+   filename={`unistore_orders_${period}.csv`}
+ />
  </div>
  )}
 

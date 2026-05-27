@@ -656,22 +656,159 @@ def _enrich_with_ganancia(eng, rows: list) -> list:
     return enriched
 
 
-def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
-    """Ordenes paid + pending (efectivo presencial a cobrar) en la ventana.
+def _build_ml_fox_orders_select(eng) -> str:
+    """Devuelve un SELECT contra meli.meli_orders con las MISMAS 15 columnas
+    que _build_order_select para que el front pueda renderizarlas en la misma
+    grilla. Cliente/provincia/metodo_envio se detectan con col_or_null para
+    sobrevivir a variaciones de schema entre ambientes.
+    """
+    cliente_col = col_or_null(eng, "meli", "meli_orders", "mo", [
+        "buyer_nickname", "buyer_first_name", "buyer_name",
+    ])
+    # Si el primero es null buscamos el siguiente (concatenamos fallback). Por
+    # simplicidad usamos COALESCE con los 3 candidatos:
+    cliente_expr = (
+        "COALESCE("
+        f"{col_or_null(eng, 'meli', 'meli_orders', 'mo', ['buyer_nickname'])},"
+        f"{col_or_null(eng, 'meli', 'meli_orders', 'mo', ['buyer_first_name'])},"
+        f"{col_or_null(eng, 'meli', 'meli_orders', 'mo', ['buyer_name'])},"
+        "'')"
+        if cliente_col != "NULL::text" else "''::text"
+    )
+    provincia_expr = col_or_null(eng, "meli", "meli_orders", "mo", [
+        "receiver_address_state", "receiver_state", "shipping_state",
+        "buyer_state", "billing_state",
+    ])
+    metodo_envio_expr = col_or_null(eng, "meli", "meli_orders", "mo", [
+        "shipping_logistic_type", "logistic_type", "shipping_mode", "shipping_type",
+    ])
+    return f"""
+        SELECT mo.id::text                                  AS id,           -- 0
+               ('ML-' || mo.id::text)                       AS number,       -- 1
+               mo.date_created::text                        AS fecha,        -- 2
+               mo.status::text                              AS payment,      -- 3 (status MELI: paid/confirmed/shipped/delivered)
+               NULL::text                                   AS shipping,     -- 4 (no aplica directo)
+               mo.status::text                              AS status,       -- 5
+               COALESCE(mo.total_amount,0)::float           AS total,        -- 6
+               COALESCE({cliente_expr}, '')::text           AS cliente,      -- 7
+               COALESCE({provincia_expr}::text, '-')        AS provincia,    -- 8
+               COALESCE({metodo_envio_expr}::text, 'Mercado Envios') AS metodo_envio, -- 9
+               'Mercado Libre Fox'::text                    AS canal,        -- 10
+               FALSE                                        AS empaquetada,  -- 11
+               mo.buyer_id::text                            AS customer_id,  -- 12
+               'MELI'::text                                 AS gatewayName,  -- 13
+               'mercado-libre'::text                        AS gateway       -- 14
+        FROM meli.meli_orders mo
+        WHERE mo.status IN ('paid','confirmed','shipped','delivered')
+          AND mo.date_created >= :from_ts AND mo.date_created < :to_ts
+        ORDER BY mo.date_created DESC LIMIT 1000
+    """
 
-    Incluye:
-      - paymentStatus='paid' (cobradas online o ya cobradas presencial)
-      - paymentStatus='pending' con gateway='offline' (efectivo a esperar)
+
+def _enrich_with_ganancia_ml_fox(eng, rows: list) -> list:
+    """Equivalente a _enrich_with_ganancia para ordenes ML Fox (meli.meli_orders).
+
+    Carga items desde meli.meli_order_items (seller_sku, quantity, unit_price) y
+    cruza con cost_index_unistore (mismos lotes que TN — es el mismo catalogo).
+    is_cash=False siempre (ML es 100% online), is_digital=False.
+    """
+    if not rows:
+        return rows
+
+    from app.services.profit_engine import (
+        cost_index_unistore,
+        profit_for_order_items,
+    )
+
+    # rows[0] = id (string). meli_order_items.order_id es bigint.
+    order_ids = [int(r[0]) for r in rows if r[0]]
+    if not order_ids:
+        return rows
+
+    items_rows = q(eng, """
+        SELECT order_id, seller_sku, COALESCE(quantity,0)::int, COALESCE(unit_price,0)::float
+        FROM meli.meli_order_items
+        WHERE order_id = ANY(:ids) AND seller_sku IS NOT NULL AND seller_sku <> ''
+    """, {"ids": order_ids}) or []
+    items_by_order: dict[int, list[tuple]] = {}
+    for ir in items_rows:
+        items_by_order.setdefault(int(ir[0]), []).append((ir[1], ir[2], ir[3]))
+
+    try:
+        cost_idx = cost_index_unistore()
+    except Exception:
+        cost_idx = {}
+
+    enriched: list = []
+    for r in rows:
+        order_total = float(r[6] or 0)
+        oid_int = int(r[0]) if r[0] else None
+        items = items_by_order.get(oid_int, []) if oid_int else []
+        # ML es siempre online — no hay efectivo presencial.
+        is_cash = False
+        is_digital = False
+        tipo = "online"
+
+        if items:
+            pb = profit_for_order_items(
+                items, cost_idx=cost_idx, is_cash=is_cash, is_digital=is_digital,
+            )
+            # Recalibrar sobre total real si el suma de items difiere (descuentos,
+            # comisiones MELI cobradas al seller, envio cobrado al comprador, etc).
+            if pb.ingreso_bruto and abs(pb.ingreso_bruto - order_total) > 1.0:
+                from app.services.profit_engine import calc_profit
+                pb = calc_profit(
+                    ingreso_bruto=order_total,
+                    costo_sin_iva=pb.costo_sin_iva,
+                    costo_con_iva=pb.costo_con_iva,
+                    is_cash=is_cash,
+                    is_digital=is_digital,
+                    iva_aliquot_override=pb.iva_aliquot if pb.iva_aliquot_source == "derived" else None,
+                )
+            ganancia = round(pb.ganancia_neta, 0) if pb.has_cost else None
+            profit_dict = pb.to_dict()
+        else:
+            ganancia = None
+            profit_dict = {"has_cost": False, "is_cash": is_cash, "is_digital": is_digital}
+
+        enriched.append(list(r) + [ganancia, tipo, profit_dict])
+    return enriched
+
+
+def tn_orders_paid(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
+    """Ordenes Unistore pagas en la ventana: TN paid + TN pending (efectivo
+    presencial a cobrar) + ML Fox Electronics (meli.meli_orders).
+
+    Conserva el nombre `tn_orders_paid` por compat con el endpoint /orders/paid
+    y los llamadores externos, pero el resultado combina los 2 canales con la
+    misma serializacion (15 cols + 3 de enrich), ordenado por fecha DESC.
     """
     eng = get_engine("unistore")
     win = resolve_window(period, from_iso, to_iso)
-    where = """((o."paymentStatus" = 'paid')
-                OR (o."paymentStatus" = 'pending' AND o.gateway = 'offline'))
-               AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts"""
-    rows = q(eng, _build_order_select(eng).format(where=where), {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}) or []
-    enriched = _enrich_with_ganancia(eng, rows)
-    out = _orders_serialize(enriched)
-    out["summary"] = _orders_summary(enriched)
+    params = {"from_ts": win["from_ts"], "to_ts": win["to_ts"]}
+
+    # 1) TN paid + cash pendiente
+    tn_where = """((o."paymentStatus" = 'paid')
+                   OR (o."paymentStatus" = 'pending' AND o.gateway = 'offline'))
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts"""
+    tn_rows = q(eng, _build_order_select(eng).format(where=tn_where), params) or []
+    tn_enriched = _enrich_with_ganancia(eng, tn_rows)
+
+    # 2) ML Fox Electronics
+    try:
+        ml_rows = q(eng, _build_ml_fox_orders_select(eng), params) or []
+        ml_enriched = _enrich_with_ganancia_ml_fox(eng, ml_rows)
+    except Exception as exc:
+        import logging
+        logging.getLogger("unidata.drilldowns").warning("ML Fox orders fetch fail: %s", exc)
+        ml_enriched = []
+
+    # 3) Combinar y ordenar por fecha desc
+    combined = tn_enriched + ml_enriched
+    combined.sort(key=lambda r: (r[2] or ""), reverse=True)
+
+    out = _orders_serialize(combined)
+    out["summary"] = _orders_summary(combined)
     return out
 
 
