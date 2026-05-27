@@ -15,6 +15,8 @@ import { SkuKpiStrip } from "@/components/sku-kpi-strip";
 import { SkuDigipArticulo, type DigipArticuloInfo } from "@/components/sku-digip-articulo";
 import { SkuStockVsDemand } from "@/components/sku-stock-vs-demand";
 import { SkuLotesConsumption, type LotesConsumptionPayload } from "@/components/sku-lotes-consumption";
+import { SkuIdentityCard } from "@/components/sku-identity-card";
+import { SkuBusinessMetrics, type BusinessMetrics } from "@/components/sku-business-metrics";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft, Package } from "lucide-react";
@@ -120,6 +122,7 @@ type Detail = {
   } | null;
   images?: string[];
   cost_info: CostInfo;
+  business_metrics?: BusinessMetrics | null;
   cards: KpiCardT[];
   monthly_revenue: TimeSeries;
   monthly_units: TimeSeries;
@@ -276,100 +279,27 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           </div>
         )}
 
-        {data?.images && data.images.length > 0 && (
-          <div className="bg-surface border border-border rounded-xl p-4 mb-6">
-            <div className="text-[11px] uppercase tracking-wider font-bold text-text-muted mb-3">
-              Imagenes del producto ({data.images.length})
-            </div>
-            <div className="flex gap-3 overflow-x-auto pb-1">
-              {data.images.map((src, i) => (
-                <a
-                  key={src + i}
-                  href={src}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="shrink-0 block w-32 h-32 rounded-lg border border-border overflow-hidden hover:border-primary hover:shadow-lg transition bg-soft"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={src}
-                    alt={`SKU ${sku} imagen ${i + 1}`}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
-                </a>
-              ))}
-            </div>
-          </div>
+        {/* Identidad compacta: thumbnail + SKU + EAN + Precio + Estado +
+            fechas + ProductID en una sola tarjeta. Click en el thumb abre
+            modal con la galeria completa. */}
+        {data?.product_info && (
+          <SkuIdentityCard
+            sku={data.product_info.sku}
+            name={data.product_info.name}
+            brand={data.product_info.brand}
+            ean={data.product_info.barcode}
+            price={data.product_info.price}
+            published={data.product_info.published}
+            productId={data.product_info.product_id}
+            firstSale={data.first_sale}
+            lastSale={data.last_sale}
+            images={data.images ?? []}
+          />
         )}
 
-        {data?.product_info && (
-          <div className="bg-surface border border-border rounded-xl p-5 mb-6">
-            {/* Identificacion oficial: SKU interno + EAN (codigo de barras del producto) */}
-            <div className="flex flex-wrap gap-3 mb-4 pb-4 border-b border-border">
-              <div className="flex-1 min-w-[200px] bg-gradient-to-br from-primary/10 to-accent/5 border border-primary/30 rounded-xl px-4 py-3">
-                <div className="text-[10px] uppercase tracking-wider font-bold text-primary/70">Codigo interno (SKU)</div>
-                <div className="font-mono font-extrabold text-lg text-text mt-0.5">{data.product_info.sku}</div>
-              </div>
-              <div className="flex-1 min-w-[240px] bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-300 rounded-xl px-4 py-3">
-                <div className="text-[10px] uppercase tracking-wider font-bold text-amber-800">
-                  EAN · Codigo de barras oficial
-                </div>
-                {data.product_info.barcode ? (
-                  <div className="flex items-baseline gap-2 mt-0.5">
-                    <div className="font-mono font-extrabold text-lg text-text tabular-nums tracking-wider">
-                      {data.product_info.barcode}
-                    </div>
-                    <button
-                      onClick={() => navigator.clipboard?.writeText(data.product_info!.barcode)}
-                      className="text-[10px] text-amber-700 hover:text-amber-900 hover:underline"
-                      title="Copiar EAN"
-                    >
-                      copiar
-                    </button>
-                  </div>
-                ) : (
-                  <div className="text-sm text-amber-700 mt-0.5">Sin EAN registrado</div>
-                )}
-                <div className="text-[10px] text-amber-700/80 mt-0.5">
-                  Codigo escaneable identificador GS1 del producto
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-              {/* Marca oculta: la data esta rota (todos los productos vienen como '(sin marca)').
-                  Cuando se corrija el sourcing en TN/digip se vuelve a habilitar. */}
-              <div>
-                <div className="text-xs text-text-muted">Precio actual</div>
-                <div className="font-semibold">$ {data.product_info.price.toLocaleString("es-AR")}</div>
-              </div>
-              <div>
-                <div className="text-xs text-text-muted">Estado</div>
-                <div className="font-semibold">
-                  {data.product_info.published === true ? "Publicado" : data.product_info.published === false ? "Despublicado" : "—"}
-                </div>
-              </div>
-              {data.first_sale && (
-                <div>
-                  <div className="text-xs text-text-muted">Primera venta</div>
-                  <div className="font-semibold">{data.first_sale.slice(0, 10)}</div>
-                </div>
-              )}
-              {data.last_sale && (
-                <div>
-                  <div className="text-xs text-text-muted">Ultima venta</div>
-                  <div className="font-semibold">{data.last_sale.slice(0, 10)}</div>
-                </div>
-              )}
-              {data.product_info.product_id > 0 && (
-                <div>
-                  <div className="text-xs text-text-muted">Product ID (TN)</div>
-                  <div className="font-mono text-xs">{data.product_info.product_id}</div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        {/* 11 metricas business del periodo: U.V., Stock, prom/D.E. diario,
+            facturacion, clientes, costo, precio, markup, markup %, total markup */}
+        <SkuBusinessMetrics metrics={data?.business_metrics ?? null} />
 
         {/* Maestro DIGIP: vista espejo de digip.Articulo + UnidadMedida + Codigos (colapsable) */}
         <SkuDigipArticulo data={digipInfoData} loading={digipInfoLoading} />

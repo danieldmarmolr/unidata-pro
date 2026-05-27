@@ -1240,12 +1240,102 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
     except Exception as e:
         log.warning("product_detail recent_orders fail: %s", e)
 
+    # ============================================================
+    # BUSINESS METRICS · respeta el filtro de periodo del topbar
+    # 11 metricas que el SKU 360 muestra arriba en formato compacto:
+    # U.V. / Stock / Prom. diario / D.E. diario / Facturacion / Costo /
+    # Precio / Markup / Markup % / Total Markup / Total Clientes
+    # ============================================================
+    bm: dict = {
+        "uv": 0,
+        "stock_disponible": stock_disponibles,
+        "uv_prom_diario": 0.0,
+        "uv_de_diario": 0.0,
+        "facturacion": 0.0,
+        "costo_unit_ars": None,
+        "precio_promedio": 0.0,
+        "markup_unit": 0.0,
+        "markup_pct": None,
+        "total_markup": 0.0,
+        "total_clientes": 0,
+        "dias_periodo": int(win.get("days", 30)),
+        "period_label": win.get("label", period),
+    }
+    try:
+        # Una sola query con todas las agregaciones para el periodo
+        bm_rows = q(eng, """
+            SELECT
+                COALESCE(SUM(oi.quantity), 0)::int AS uv,
+                COALESCE(SUM(oi.quantity * oi.price), 0)::float AS facturacion,
+                COUNT(DISTINCT o."customerId")::int AS clientes
+            FROM tienda_nube."OrderItem" oi
+            JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+            WHERE oi.sku = :sku
+              AND o."paymentStatus" = 'paid'
+              AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+        """, {"sku": sku, "from_ts": from_ts, "to_ts": to_ts}) or []
+        if bm_rows:
+            bm["uv"] = int(bm_rows[0][0] or 0)
+            bm["facturacion"] = float(bm_rows[0][1] or 0)
+            bm["total_clientes"] = int(bm_rows[0][2] or 0)
+    except Exception as e:
+        log.warning("product_detail business_metrics agg fail: %s", e)
+
+    # D.E. diaria + promedio diario: necesitamos la serie diaria del periodo.
+    # Si hay 0 dias no calculamos.
+    if bm["dias_periodo"] > 0:
+        try:
+            daily_rows = q(eng, """
+                SELECT date_trunc('day', o."createdAt")::date AS d,
+                       SUM(oi.quantity)::int AS units
+                FROM tienda_nube."OrderItem" oi
+                JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+                WHERE oi.sku = :sku
+                  AND o."paymentStatus" = 'paid'
+                  AND o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+                GROUP BY 1
+            """, {"sku": sku, "from_ts": from_ts, "to_ts": to_ts}) or []
+            # Necesitamos rellenar con ceros los dias sin ventas para que la
+            # desviacion estandar refleje la variabilidad real (no solo dias
+            # con ventas)
+            by_day: dict = {r[0]: int(r[1] or 0) for r in daily_rows}
+            dias = bm["dias_periodo"]
+            base = from_ts.date() if hasattr(from_ts, "date") else dt.date.fromisoformat(str(from_ts)[:10])
+            series: list[int] = []
+            for i in range(dias):
+                day_i = base + dt.timedelta(days=i)
+                series.append(by_day.get(day_i, 0))
+            if series:
+                mean = sum(series) / len(series)
+                bm["uv_prom_diario"] = round(mean, 2)
+                if len(series) > 1:
+                    var = sum((x - mean) ** 2 for x in series) / (len(series) - 1)
+                    bm["uv_de_diario"] = round(var ** 0.5, 2)
+        except Exception as e:
+            log.warning("product_detail daily series fail: %s", e)
+
+    # Precio promedio = facturacion / U.V. (si UV > 0)
+    if bm["uv"] > 0:
+        bm["precio_promedio"] = round(bm["facturacion"] / bm["uv"], 2)
+
+    # Costo unit ARS (del lote vigente) y derivados
+    if cost_info:
+        costo_unit = cost_info.get("cost_con_iva_unit_ars") or cost_info.get("cost_unit_ars") or cost_info.get("cost_ars")
+        if costo_unit:
+            bm["costo_unit_ars"] = float(costo_unit)
+            if bm["precio_promedio"] > 0:
+                bm["markup_unit"] = round(bm["precio_promedio"] - bm["costo_unit_ars"], 2)
+                if bm["costo_unit_ars"] > 0:
+                    bm["markup_pct"] = round((bm["markup_unit"] / bm["costo_unit_ars"]) * 100, 1)
+                bm["total_markup"] = round(bm["markup_unit"] * bm["uv"], 2)
+
     return {
         "sku": sku,
         "product_info": product_info,
         "images": images,
         "cards": cards,
         "cost_info": cost_info,
+        "business_metrics": bm,
         "monthly_revenue": monthly_trend,
         "monthly_units": units_trend,
         "top_customers": top_customers_list,
