@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
-import { tnAdminUrl } from "@/lib/dates";
+import { tnAdminUrl, fmtArDateTime } from "@/lib/dates";
 import { OrderStatusPipeline } from "@/components/order-status-pipeline";
 
 /**
@@ -125,7 +125,7 @@ export function ExpandableOrderRow({
             </div>
           )}
         </td>
-        <td className="px-3 py-2 align-middle text-xs text-text-muted">{order.fecha ?? "—"}</td>
+        <td className="px-3 py-2 align-middle text-xs text-text-muted whitespace-nowrap">{fmtArDateTime(order.fecha)}</td>
         {hasPago && (
           <td className="px-3 py-2 align-middle max-w-[140px]">
             <span className="text-[11px] text-text-muted truncate block" title={order.metodo_pago ?? ""}>

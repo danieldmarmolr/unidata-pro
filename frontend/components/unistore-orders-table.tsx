@@ -15,7 +15,7 @@ type RawRow = unknown[];
 const COL = {
   id: 0, numero: 1, fecha: 2, payment: 3, shipping: 4, status: 5,
   total: 6, cliente: 7, provincia: 8, metodo_envio: 9, canal: 10, empaquetada: 11, customer_id: 12,
-  metodo_pago: 13, ganancia: 14,
+  metodo_pago: 13, gateway_id: 14, ganancia: 15, metodo_pago_tipo: 16, profit: 17,
 } as const;
 
 const PAYMENT_FILTERS = [
@@ -43,7 +43,7 @@ function rowToOrderData(row: RawRow): OrderRowData {
   return {
     id: Number(row[COL.id] ?? 0),
     numero: get(row, COL.numero),
-    fecha: get(row, COL.fecha).slice(0, 10) || null,
+    fecha: get(row, COL.fecha) || null,
     total: Number(row[COL.total] ?? 0),
     payment: get(row, COL.payment) || null,
     shipping: get(row, COL.shipping) || null,
