@@ -84,6 +84,7 @@ export default function PublicProfilePage({
                         url={data.avatar_url}
                         size="xl"
                         ringColor="#fff"
+                        expandable
                       />
                       {!isSelf && (
                         <button

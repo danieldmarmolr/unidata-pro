@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 type AvatarProps = {
@@ -8,6 +9,8 @@ type AvatarProps = {
   size?: "xs" | "sm" | "md" | "lg" | "xl";
   className?: string;
   ringColor?: string;
+  /** Si hay url y expandable=true, click abre un lightbox fullscreen con la foto grande. */
+  expandable?: boolean;
 };
 
 const SIZE_MAP: Record<NonNullable<AvatarProps["size"]>, string> = {
@@ -28,7 +31,8 @@ function colorForName(name: string): string {
   return palette[h % palette.length];
 }
 
-export function Avatar({ name, url, size = "md", className, ringColor }: AvatarProps) {
+export function Avatar({ name, url, size = "md", className, ringColor, expandable }: AvatarProps) {
+  const [open, setOpen] = useState(false);
   const initials = (name ?? "?")
     .trim()
     .split(/\s+/)
@@ -36,24 +40,36 @@ export function Avatar({ name, url, size = "md", className, ringColor }: AvatarP
     .map((s) => s.charAt(0).toUpperCase())
     .join("");
   const bg = colorForName(name ?? "??");
+  const canExpand = !!(expandable && url);
 
-  if (url) {
-    return (
-      <img
-        src={url}
-        alt={name ?? "avatar"}
-        className={cn(
-          SIZE_MAP[size],
-          "rounded-full object-cover shrink-0",
-          ringColor && "ring-2",
-          className,
-        )}
-        style={ringColor ? { boxShadow: `0 0 0 2px ${ringColor}` } : undefined}
-      />
-    );
-  }
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
 
-  return (
+  const visual = url ? (
+    <img
+      src={url}
+      alt={name ?? "avatar"}
+      className={cn(
+        SIZE_MAP[size],
+        "rounded-full object-cover shrink-0",
+        ringColor && "ring-2",
+        canExpand && "cursor-zoom-in hover:opacity-90 transition",
+        className,
+      )}
+      style={ringColor ? { boxShadow: `0 0 0 2px ${ringColor}` } : undefined}
+    />
+  ) : (
     <span
       className={cn(
         SIZE_MAP[size],
@@ -68,5 +84,43 @@ export function Avatar({ name, url, size = "md", className, ringColor }: AvatarP
     >
       {initials || "?"}
     </span>
+  );
+
+  if (!canExpand) return visual;
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="p-0 border-0 bg-transparent inline-flex"
+        aria-label={`Ampliar foto de ${name ?? "usuario"}`}
+      >
+        {visual}
+      </button>
+      {open && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-sm flex items-center justify-center p-6"
+          onClick={() => setOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white text-2xl leading-none flex items-center justify-center"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+          <img
+            src={url!}
+            alt={name ?? "avatar"}
+            onClick={(e) => e.stopPropagation()}
+            className="max-w-[90vw] max-h-[90vh] rounded-2xl shadow-2xl object-contain"
+          />
+        </div>
+      )}
+    </>
   );
 }
