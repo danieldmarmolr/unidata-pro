@@ -11,7 +11,7 @@ import { RevenueChart } from "@/components/revenue-chart";
 import { DonutChart } from "@/components/donut-chart";
 import { HBarChart } from "@/components/bar-chart";
 import { DailyRevenueChart } from "@/components/sparkline";
-import { InteractiveMetricChart } from "@/components/interactive-metric-chart";
+import { SalesDailyChart } from "@/components/sales-daily-chart";
 import { TopProductsTable } from "@/components/top-products";
 import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
@@ -137,28 +137,12 @@ export default function VentasPage() {
  {isLoading || !data ? (
  <div className="bg-surface border border-border rounded-xl p-5 h-[340px] animate-pulse" />
  ) : (
- <InteractiveMetricChart
+ <SalesDailyChart
  points={data.daily_revenue as any[]}
- metrics={[
-   { key: "value", label: "Revenue total", kind: "currency", color: "#7a3eae" },
-   { key: "revenue_tn", label: "Revenue TN", kind: "currency", color: "#10b981" },
-   { key: "revenue_ml", label: "Revenue ML", kind: "currency", color: "#f59e0b" },
-   { key: "orders", label: "Órdenes", kind: "number", color: "#3b82f6" },
-   { key: "orders_tn", label: "Órdenes TN", kind: "number", color: "#06b6d4" },
-   { key: "orders_ml", label: "Órdenes ML", kind: "number", color: "#f97316" },
-   { key: "units", label: "Unidades", kind: "number", color: "#84cc16" },
-   { key: "ticket_avg", label: "Ticket Promedio", kind: "currency", color: "#8b5cf6" },
-   { key: "skus", label: "SKUs distintos", kind: "number", color: "#ec4899" },
-   { key: "devoluciones", label: "Devoluciones", kind: "number", color: "#ef4444" },
- ]}
- defaultSeries={[
-   { key: "value", vizType: "bar", axis: "left" },
-   { key: "orders", vizType: "line", axis: "right" },
-   { key: "ticket_avg", vizType: "area", axis: "right" },
- ]}
  caption={`Métricas diarias · ${period}`}
- subtitle="Activá/desactivá series · cambiá tipo de gráfico y eje por serie"
+ subtitle="Cambiá la variable y activá/desactivá canales · stacked TN + ML con línea Total"
  height={320}
+ unitLabel={unit === "unistore" ? "Unistore" : "Unidrop"}
  />
  )}
  </div>
