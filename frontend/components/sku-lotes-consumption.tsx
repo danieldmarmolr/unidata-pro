@@ -160,6 +160,10 @@ export function SkuLotesConsumption({ data, loading }: Props) {
 
   const { lotes, cost_evolution, totals } = data;
 
+  // Con un solo lote el chart de comparacion no tiene sentido (una barra =
+  // ninguna historia) ni el badge de delta de costo. Compactamos la vista.
+  const singleLote = lotes.length === 1;
+
   // Delta de costo USD entre primer y ultimo lote (para el badge del header)
   const firstUsd = cost_evolution.find((r) => r.costo_usd)?.costo_usd ?? 0;
   const lastUsd = [...cost_evolution].reverse().find((r) => r.costo_usd)?.costo_usd ?? 0;
@@ -190,14 +194,21 @@ export function SkuLotesConsumption({ data, loading }: Props) {
             <Package size={18} />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-text">Consumo lote a lote · ganancia y evolución de costo</h3>
+            <h3 className="text-sm font-bold text-text">
+              Consumo lote a lote · ganancia y evolución de costo
+              <span className="ml-2 text-[11px] font-normal text-text-muted">
+                ({lotes.length} {lotes.length === 1 ? "lote" : "lotes"})
+              </span>
+            </h3>
             <p className="text-[11px] text-text-muted">
-              Cada lote define un periodo (de su entrada a la del siguiente). Ventas omnicanal en ese rango · ganancia = revenue − unidades × costo lote (ARS con IVA)
+              {singleLote
+                ? "Único lote vigente · ganancia = revenue − unidades × costo lote (ARS con IVA)"
+                : "Cada lote define un periodo (de su entrada a la del siguiente). Ventas omnicanal en ese rango · ganancia = revenue − unidades × costo lote (ARS con IVA)"}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {firstUsd > 0 && lastUsd > 0 && (
+          {!singleLote && firstUsd > 0 && lastUsd > 0 && (
             <div className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-lg border ${
               usdDeltaPct > 2 ? "bg-rose-50 text-rose-800 border-rose-200" :
               usdDeltaPct < -2 ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
@@ -211,31 +222,35 @@ export function SkuLotesConsumption({ data, loading }: Props) {
         </div>
       </div>
 
-      {/* Totales del periodo */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
-        <div className="bg-soft/40 border border-border rounded-lg px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Vendidas (todos los lotes)</div>
-          <div className="text-xl font-extrabold tabular-nums">{formatNumber(totals.units_sold)}</div>
-        </div>
-        <div className="bg-soft/40 border border-border rounded-lg px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Revenue acumulado</div>
-          <div className="text-xl font-extrabold tabular-nums text-primary">{fmtShortAr(totals.revenue)}</div>
-        </div>
-        <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-emerald-800 font-bold flex items-center gap-1">
-            <Wallet size={9} /> Ganancia neta
+      {/* Totales del periodo · solo cuando hay 2+ lotes (con 1 lote la fila de
+          la tabla ya muestra los mismos numeros y duplicar es ruido) */}
+      {!singleLote && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4">
+          <div className="bg-soft/40 border border-border rounded-lg px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Vendidas (todos los lotes)</div>
+            <div className="text-xl font-extrabold tabular-nums">{formatNumber(totals.units_sold)}</div>
           </div>
-          <div className="text-xl font-extrabold tabular-nums text-emerald-900">{fmtShortAr(totals.ganancia)}</div>
-        </div>
-        <div className="bg-primary/5 border border-primary/30 rounded-lg px-3 py-2">
-          <div className="text-[9px] uppercase tracking-wider text-primary/80 font-bold">Margen neto promedio</div>
-          <div className="text-xl font-extrabold tabular-nums text-primary">
-            {totals.margen_pct !== null ? `${totals.margen_pct}%` : "—"}
+          <div className="bg-soft/40 border border-border rounded-lg px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Revenue acumulado</div>
+            <div className="text-xl font-extrabold tabular-nums text-primary">{fmtShortAr(totals.revenue)}</div>
+          </div>
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-emerald-800 font-bold flex items-center gap-1">
+              <Wallet size={9} /> Ganancia neta
+            </div>
+            <div className="text-xl font-extrabold tabular-nums text-emerald-900">{fmtShortAr(totals.ganancia)}</div>
+          </div>
+          <div className="bg-primary/5 border border-primary/30 rounded-lg px-3 py-2">
+            <div className="text-[9px] uppercase tracking-wider text-primary/80 font-bold">Margen neto promedio</div>
+            <div className="text-xl font-extrabold tabular-nums text-primary">
+              {totals.margen_pct !== null ? `${totals.margen_pct}%` : "—"}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Chart: barras (unidades vendidas por lote) + linea (costo USD evolucion) */}
+      {/* Chart de evolucion · solo cuando hay 2+ lotes (una barra sola no cuenta historia) */}
+      {!singleLote && (
       <div className="bg-soft/20 border border-border rounded-lg p-3 mb-4">
         <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold mb-2">
           Unidades vendidas por lote + evolución del costo USD
@@ -311,8 +326,10 @@ export function SkuLotesConsumption({ data, loading }: Props) {
           <span className="inline-flex items-center gap-1"><span className="w-2 h-2 bg-primary rounded-sm" /> Costo USD (der)</span>
         </div>
       </div>
+      )}
 
-      {/* Barra de filtros */}
+      {/* Barra de filtros · solo cuando hay 2+ lotes (con 1 lote no hay nada que filtrar) */}
+      {!singleLote && (
       <div className="flex items-center gap-3 flex-wrap mb-3 text-xs">
         <div className="inline-flex items-center gap-1 text-text-muted">
           <Filter size={11} />
@@ -384,6 +401,7 @@ export function SkuLotesConsumption({ data, loading }: Props) {
           {filteredLotes.length} {filteredLotes.length === 1 ? "lote" : "lotes"} mostrando
         </div>
       </div>
+      )}
 
       {/* Tabla detalle por lote */}
       <div className="border border-border rounded-lg overflow-hidden">
@@ -497,11 +515,13 @@ export function SkuLotesConsumption({ data, loading }: Props) {
         </div>
       </div>
 
-      <div className="mt-3 text-[10px] text-text-muted">
-        <ChevronRight size={9} className="inline" />
-        Aproximación temporal: las ventas se asignan al lote vigente en su fecha, no es FIFO real. Cuando "consumido del lote" supera 100% indica
-        que las ventas del periodo cubrieron ese lote + saldo de lotes previos.
-      </div>
+      {!singleLote && (
+        <div className="mt-3 text-[10px] text-text-muted">
+          <ChevronRight size={9} className="inline" />
+          Aproximación temporal: las ventas se asignan al lote vigente en su fecha, no es FIFO real. Cuando "consumido del lote" supera 100% indica
+          que las ventas del periodo cubrieron ese lote + saldo de lotes previos.
+        </div>
+      )}
     </div>
   );
 }
