@@ -1246,6 +1246,16 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
     # U.V. / Stock / Prom. diario / D.E. diario / Facturacion / Costo /
     # Precio / Markup / Markup % / Total Markup / Total Clientes
     # ============================================================
+    # Stock disponible canonico (digip.Stock.unidadesDisponibles).
+    # NOTE: la definicion vieja se removio en 5945c02 al eliminar la KPI duplicada
+    # pero el bloque business metrics la sigue necesitando.
+    stock_disponibles = int(scalar(eng, """
+        SELECT COALESCE("unidadesDisponibles", 0)::int
+        FROM digip."Stock"
+        WHERE "codigoArticulo" = :sku
+        LIMIT 1
+    """, {"sku": sku}) or 0)
+
     bm: dict = {
         "uv": 0,
         "stock_disponible": stock_disponibles,
