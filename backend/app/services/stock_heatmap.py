@@ -152,13 +152,17 @@ def stock_heatmap_by_sku(period: str = "30d", from_iso: str | None = None, to_is
     eng = get_engine("unistore")
     p = {"days": days}
 
-    # 1) Ventas agregadas por SKU (TN) en el periodo + stddev diaria + precio promedio
+    # 1) Ventas agregadas por SKU (TN) en el periodo + stddev diaria + precio promedio.
+    # NOTA: el SELECT externo NO joinea OrderItem (eso explotaba la cardinalidad
+    # con miles de filas por SKU). El nombre / imagen / brand vienen del enrich
+    # batch que hacemos despues con todos los SKUs en una sola query.
     sales_rows = q(eng, """
         WITH daily AS (
             SELECT oi.sku,
                    DATE(o."createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
                    SUM(oi.quantity)::int AS qty_dia,
-                   SUM(oi.quantity * oi.price)::float AS rev_dia
+                   SUM(oi.quantity * oi.price)::float AS rev_dia,
+                   MAX(oi.name) AS last_name
             FROM tienda_nube."OrderItem" oi
             JOIN tienda_nube."Order" o ON o.id = oi."orderId"
             WHERE o."paymentStatus" = 'paid'
@@ -168,21 +172,13 @@ def stock_heatmap_by_sku(period: str = "30d", from_iso: str | None = None, to_is
             GROUP BY 1, 2
         )
         SELECT d.sku,
-               COALESCE(MAX(p.name), MAX(oi.name), d.sku) AS nombre,
-               COALESCE(MAX(p.brand), '') AS brand,
-               (SELECT pi.src FROM tienda_nube."ProductImage" pi
-                WHERE pi."productId" = MAX(p.id)
-                ORDER BY pi.position ASC NULLS LAST LIMIT 1) AS imagen,
+               MAX(d.last_name) AS nombre_item,
                SUM(d.qty_dia)::int AS uv,
                SUM(d.rev_dia)::float AS facturacion,
-               AVG(d.qty_dia)::float AS uv_diaria_avg_solo_dias_venta,
                (SUM(d.qty_dia)::float / NULLIF(:days, 0)) AS uv_diaria_avg,
                COALESCE(STDDEV_SAMP(d.qty_dia), 0)::float AS uv_diaria_std,
                (SUM(d.rev_dia)::float / NULLIF(SUM(d.qty_dia), 0)) AS precio_avg
         FROM daily d
-        LEFT JOIN tienda_nube."OrderItem" oi ON oi.sku = d.sku
-        LEFT JOIN tienda_nube."ProductVariant" pv ON pv.sku = d.sku
-        LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
         GROUP BY d.sku
     """, p) or []
 
@@ -194,16 +190,36 @@ def stock_heatmap_by_sku(period: str = "30d", from_iso: str | None = None, to_is
     """) or []
     stock_map = {r[0]: int(r[1] or 0) for r in stock_rows}
 
+    # 3) Enrich batch: nombre + brand + imagen para TODOS los SKUs en una sola query.
+    # Evita el N+1 de la version anterior (1500+ queries para SKUs sin ventas).
+    all_skus = set(stock_map.keys()) | {r[0] for r in sales_rows if r and r[0]}
+    info_map: dict[str, dict] = {}
+    if all_skus:
+        info_rows = q(eng, """
+            SELECT pv.sku,
+                   MAX(p.name) AS name,
+                   COALESCE(MAX(p.brand), '') AS brand,
+                   (SELECT pi.src FROM tienda_nube."ProductImage" pi
+                    WHERE pi."productId" = MAX(p.id)
+                    ORDER BY pi.position ASC NULLS LAST LIMIT 1) AS imagen
+            FROM tienda_nube."ProductVariant" pv
+            LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
+            WHERE pv.sku = ANY(:skus)
+            GROUP BY pv.sku
+        """, {"skus": list(all_skus)}) or []
+        for sku, name, brand, imagen in info_rows:
+            info_map[sku] = {"name": name, "brand": brand or "", "imagen": imagen or ""}
+
     cost_idx = cost_index_unistore()
 
     items: list[dict] = []
     skus_seen: set[str] = set()
     for r in sales_rows:
-        (sku, nombre, brand, imagen, uv, facturacion, uv_solo_dias_venta,
-         uv_diaria_avg, uv_diaria_std, precio_avg) = r
+        sku, nombre_item, uv, facturacion, uv_diaria_avg, uv_diaria_std, precio_avg = r
         if not sku:
             continue
         skus_seen.add(sku)
+        info = info_map.get(sku, {})
 
         uv_i = int(uv or 0)
         rev_f = float(facturacion or 0)
@@ -241,11 +257,12 @@ def stock_heatmap_by_sku(period: str = "30d", from_iso: str | None = None, to_is
         elif stock_i == 0:
             tiempo_riesgo = 0.0  # ya en stockout
 
+        nombre_final = info.get("name") or nombre_item or sku
         items.append({
             "sku": sku,
-            "nombre": (nombre or sku)[:80],
-            "brand": brand or "",
-            "imagen": imagen or "",
+            "nombre": str(nombre_final)[:80],
+            "brand": info.get("brand") or "",
+            "imagen": info.get("imagen") or "",
             "uv": uv_i,
             "uv_diaria_avg": round(uv_avg_f, 1),
             "uv_diaria_std": round(uv_std_f, 1),
@@ -260,28 +277,17 @@ def stock_heatmap_by_sku(period: str = "30d", from_iso: str | None = None, to_is
             "has_cost": markup_unit is not None,
         })
 
-    # Agregamos SKUs CON STOCK pero sin ventas en el periodo (zero-velocity en deposito)
+    # Agregamos SKUs CON STOCK pero sin ventas en el periodo (zero-velocity en deposito).
+    # El enrich ya esta cargado en info_map (batch).
     for sku, stock_i in stock_map.items():
         if sku in skus_seen or stock_i <= 0:
             continue
-        # Buscar nombre + imagen una sola vez por SKU sin ventas (consulta liviana)
-        info = q(eng, """
-            SELECT MAX(p.name) AS name, COALESCE(MAX(p.brand), '') AS brand,
-                   (SELECT pi.src FROM tienda_nube."ProductImage" pi
-                    WHERE pi."productId" = MAX(p.id)
-                    ORDER BY pi.position ASC NULLS LAST LIMIT 1) AS imagen
-            FROM tienda_nube."ProductVariant" pv
-            LEFT JOIN tienda_nube."Product" p ON p.id = pv."productId"
-            WHERE pv.sku = :sku
-        """, {"sku": sku}) or []
-        nombre = (info[0][0] if info and info[0] else None) or sku
-        brand = (info[0][1] if info and info[0] else "") or ""
-        imagen = (info[0][2] if info and info[0] else "") or ""
+        info = info_map.get(sku, {})
         items.append({
             "sku": sku,
-            "nombre": str(nombre)[:80],
-            "brand": brand,
-            "imagen": imagen,
+            "nombre": str(info.get("name") or sku)[:80],
+            "brand": info.get("brand") or "",
+            "imagen": info.get("imagen") or "",
             "uv": 0,
             "uv_diaria_avg": 0.0,
             "uv_diaria_std": 0.0,
