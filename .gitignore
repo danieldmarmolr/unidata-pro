@@ -46,3 +46,5 @@ frontend/.vercel/
 .vscode/
 .deploy/
 .claude/worktrees/
+aws/
+awszip.zip
