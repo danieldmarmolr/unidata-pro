@@ -91,12 +91,6 @@ function riesgoBadge(dias: number | null): { label: string; cls: string } {
   return { label: `${dias.toFixed(0)}d`, cls: "bg-soft text-text-muted border-border" };
 }
 
-function fmtShort(v: number): string {
-  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
-  if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
-  return formatNumber(v);
-}
-
 export default function StockHeatmapPage() {
   const [view, setView] = useState<ViewMode>("by-sku");
   const [topSkus, setTopSkus] = useState(30);
@@ -232,8 +226,8 @@ function BySkuView({
     <>
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-4">
-        <KpiBox icon={TrendingUp} label="Facturacion periodo" value={formatCurrency(data?.summary.total_facturacion || 0)} accent="primary" />
-        <KpiBox icon={TrendingUp} label="Total markup" value={formatCurrency(data?.summary.total_markup || 0)} accent="emerald" />
+        <KpiBox icon={TrendingUp} label="Facturacion periodo" value={formatCurrency(data?.summary.total_facturacion || 0, "ARS", 2)} accent="primary" />
+        <KpiBox icon={TrendingUp} label="Total markup" value={formatCurrency(data?.summary.total_markup || 0, "ARS", 2)} accent="emerald" />
         <KpiBox icon={Boxes} label="Stock total" value={formatNumber(data?.summary.total_stock_units || 0)} accent="primary" />
         <KpiBox icon={AlertTriangle} label="Riesgo alto (<7d)" value={formatNumber(data?.summary.skus_riesgo_alto || 0)} accent="rose" />
         <KpiBox icon={Clock} label="Riesgo medio (7-14d)" value={formatNumber(data?.summary.skus_riesgo_medio || 0)} accent="amber" />
@@ -333,16 +327,16 @@ function BySkuView({
                       <td className={cn("px-2 py-2 text-right tabular-nums font-bold", r.stock === 0 ? "text-rose-700" : r.stock <= 5 ? "text-amber-700" : "text-text")}>
                         {formatNumber(r.stock)}
                       </td>
-                      <td className="px-2 py-2 text-right tabular-nums">{r.precio_avg > 0 ? formatCurrency(r.precio_avg) : "—"}</td>
-                      <td className="px-2 py-2 text-right tabular-nums text-text-muted">{r.costo_avg !== null ? formatCurrency(r.costo_avg) : "—"}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{r.precio_avg > 0 ? formatCurrency(r.precio_avg, "ARS", 2) : "—"}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-text-muted">{r.costo_avg !== null ? formatCurrency(r.costo_avg, "ARS", 2) : "—"}</td>
                       <td className={cn("px-2 py-2 text-right tabular-nums font-medium", r.markup !== null && r.markup < 0 ? "text-rose-700" : "")}>
-                        {r.markup !== null ? formatCurrency(r.markup) : "—"}
+                        {r.markup !== null ? formatCurrency(r.markup, "ARS", 2) : "—"}
                       </td>
                       <td className={cn("px-2 py-2 text-right tabular-nums", r.markup_pct !== null && r.markup_pct < 15 ? "text-rose-700" : r.markup_pct !== null && r.markup_pct < 30 ? "text-amber-700" : r.markup_pct !== null ? "text-emerald-700" : "")}>
-                        {r.markup_pct !== null ? `${r.markup_pct.toFixed(1)}%` : "—"}
+                        {r.markup_pct !== null ? `${r.markup_pct.toFixed(2)}%` : "—"}
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums font-bold">
-                        {r.total_markup !== null ? fmtShort(r.total_markup) : "—"}
+                        {r.total_markup !== null ? formatCurrency(r.total_markup, "ARS", 2) : "—"}
                       </td>
                       <td className="px-2 py-2 text-center">
                         <span className={cn("inline-flex items-center justify-center text-[10px] font-bold border rounded-full px-2 py-0.5", ries.cls)}>
@@ -350,7 +344,7 @@ function BySkuView({
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-bold">
-                        {r.facturacion > 0 ? formatCurrency(r.facturacion) : "—"}
+                        {r.facturacion > 0 ? formatCurrency(r.facturacion, "ARS", 2) : "—"}
                       </td>
                     </tr>
                   );
