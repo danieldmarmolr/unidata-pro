@@ -6,6 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { fmtArDate } from "@/lib/dates";
 import { CheckCircle2, XCircle, KeyRound, ShieldCheck, Plus, X, Layers, Crown, Eye, EyeOff } from "lucide-react";
+import { Avatar } from "@/components/people/avatar";
 
 type AreaChip = { id: number; slug: string; name: string; color: string };
 
@@ -31,6 +32,7 @@ type User = {
   job_title: string | null;
   bio: string | null;
   hidden_from_directory: boolean;
+  avatar_url: string | null;
 };
 
 type Area = {
@@ -120,6 +122,7 @@ export default function AdminUsersPage() {
           <table className="w-full text-sm">
             <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider">
               <tr>
+                <th className="text-left px-3 py-2 w-10"></th>
                 <th className="text-left px-3 py-2">Email</th>
                 <th className="text-left px-3 py-2">Nombre</th>
                 <th className="text-center px-3 py-2">Rol</th>
@@ -139,6 +142,9 @@ export default function AdminUsersPage() {
                 );
                 return (
                 <tr key={u.id} className="border-t border-border hover:bg-soft transition">
+                  <td className="px-3 py-2">
+                    <Avatar name={u.name || u.email} url={u.avatar_url} size="sm" />
+                  </td>
                   <td className="px-3 py-2 font-semibold">
                     <div className="flex items-center gap-1.5">
                       {u.role === "ceo" && (
@@ -307,7 +313,7 @@ export default function AdminUsersPage() {
               })}
               {!isLoading && (!data || data.length === 0) && (
                 <tr>
-                  <td colSpan={10} className="py-10 text-center text-text-muted">
+                  <td colSpan={11} className="py-10 text-center text-text-muted">
                     No hay usuarios.
                   </td>
                 </tr>

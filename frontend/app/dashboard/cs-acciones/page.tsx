@@ -10,6 +10,7 @@ import {
 import { Topbar } from "@/components/topbar";
 import { api, getUser } from "@/lib/api";
 import { CsBroadcastModal } from "@/components/cs-broadcast-modal";
+import { Avatar } from "@/components/people/avatar";
 
 // SLA por priority (en horas). Si supera, el chip de deadline se vuelve overdue.
 const SLA_HOURS: Record<"high" | "normal" | "low", number> = {
@@ -32,7 +33,11 @@ type Action = {
   metadata?: Record<string, any>;
   status: "pending" | "doing" | "done" | "cancelled";
   assigned_to: number | null;
+  assigned_name: string | null;
+  assigned_avatar_url: string | null;
   created_by: number;
+  created_by_name: string | null;
+  created_by_avatar_url: string | null;
   notes: string | null;
   priority: Priority;
   deadline_at: string | null;
@@ -328,8 +333,16 @@ function ActionCard({
               </span>
             )}
             {a.assigned_to && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold">
-                @user#{a.assigned_to}
+              <span
+                className="inline-flex items-center gap-1.5 pl-0.5 pr-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold"
+                title={a.assigned_name ?? `user#${a.assigned_to}`}
+              >
+                <Avatar
+                  name={a.assigned_name || `user${a.assigned_to}`}
+                  url={a.assigned_avatar_url}
+                  size="xs"
+                />
+                {a.assigned_name || `@user#${a.assigned_to}`}
               </span>
             )}
             {stats && stats.total > 0 && (

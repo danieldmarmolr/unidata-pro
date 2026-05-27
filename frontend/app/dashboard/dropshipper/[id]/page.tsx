@@ -38,6 +38,7 @@ import { api, getUser } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime } from "@/lib/dates";
+import { Avatar } from "@/components/people/avatar";
 import { useTableSort, SortHeader } from "@/lib/use-table-sort";
 import {
   UnifiedOrderModal,
@@ -1732,6 +1733,8 @@ type DropshipperNote = {
   dropshipper_id: number;
   author_id: number;
   author_email: string;
+  author_name: string | null;
+  author_avatar_url: string | null;
   note: string;
   category: "general" | "cs" | "billing" | "support" | "retention" | "flag" | "ops";
   archived: boolean;
@@ -1855,15 +1858,25 @@ function DropshipperNotes({ dropshipperId }: { dropshipperId: number }) {
                 key={n.id}
                 className="flex items-start gap-2 py-2 px-3 border border-border rounded-lg bg-soft/30"
               >
-                <span
-                  className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${cat.cls}`}
-                >
-                  {cat.label}
-                </span>
+                <Avatar
+                  name={n.author_name || n.author_email}
+                  url={n.author_avatar_url}
+                  size="sm"
+                />
                 <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                    <span className="text-[11px] font-semibold text-text leading-none">
+                      {n.author_name || n.author_email}
+                    </span>
+                    <span
+                      className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border ${cat.cls}`}
+                    >
+                      {cat.label}
+                    </span>
+                  </div>
                   <div className="text-xs text-text whitespace-pre-wrap break-words">{n.note}</div>
                   <div className="text-[10px] text-text-muted mt-0.5">
-                    {n.author_email} · {fmtArDateTime(n.created_at)}
+                    {fmtArDateTime(n.created_at)}
                   </div>
                 </div>
                 {canArchive && (

@@ -135,31 +135,35 @@ def list_actions(
     where: list[str] = []
     params: list = []
     if status:
-        where.append("status = %s")
+        where.append("a.status = %s")
         params.append(status)
     if unit in ("unistore", "unidrop"):
-        where.append("unit = %s")
+        where.append("a.unit = %s")
         params.append(unit)
     if assigned_to is not None:
-        where.append("assigned_to = %s")
+        where.append("a.assigned_to = %s")
         params.append(int(assigned_to))
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     params.append(int(limit))
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, source_type, source_key, unit, title, suggested_action,
-                   target_ids, target_count, metadata, status, assigned_to,
-                   created_by, notes, priority, deadline_at,
-                   created_at, updated_at, completed_at
-            FROM cs_actions
+            SELECT a.id, a.source_type, a.source_key, a.unit, a.title, a.suggested_action,
+                   a.target_ids, a.target_count, a.metadata, a.status, a.assigned_to,
+                   a.created_by, a.notes, a.priority, a.deadline_at,
+                   a.created_at, a.updated_at, a.completed_at,
+                   ua.name AS assigned_name, ua.avatar_url AS assigned_avatar_url,
+                   uc.name AS created_by_name, uc.avatar_url AS created_by_avatar_url
+            FROM cs_actions a
+            LEFT JOIN users ua ON ua.id = a.assigned_to
+            LEFT JOIN users uc ON uc.id = a.created_by
             {where_sql}
             ORDER BY
-                CASE status WHEN 'pending' THEN 0 WHEN 'doing' THEN 1
-                            WHEN 'done' THEN 2 ELSE 3 END,
-                CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
-                deadline_at NULLS LAST,
-                created_at DESC
+                CASE a.status WHEN 'pending' THEN 0 WHEN 'doing' THEN 1
+                              WHEN 'done' THEN 2 ELSE 3 END,
+                CASE a.priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+                a.deadline_at NULLS LAST,
+                a.created_at DESC
             LIMIT %s
             """,
             params,

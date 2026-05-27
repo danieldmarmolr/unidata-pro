@@ -96,13 +96,17 @@ def list_for_dropshipper(
 ) -> list[dict]:
     init()
     sql = """
-        SELECT * FROM dropshipper_notes
-        WHERE dropshipper_id = %s AND dropshipper_unit = %s
+        SELECT n.*,
+               u.name       AS author_name,
+               u.avatar_url AS author_avatar_url
+        FROM dropshipper_notes n
+        LEFT JOIN users u ON u.id = n.author_id
+        WHERE n.dropshipper_id = %s AND n.dropshipper_unit = %s
     """
     params: list = [dropshipper_id, dropshipper_unit]
     if not include_archived:
-        sql += " AND archived = FALSE"
-    sql += " ORDER BY created_at DESC LIMIT %s"
+        sql += " AND n.archived = FALSE"
+    sql += " ORDER BY n.created_at DESC LIMIT %s"
     params.append(limit)
     with get_conn() as c, c.cursor() as cur:
         cur.execute(sql, params)

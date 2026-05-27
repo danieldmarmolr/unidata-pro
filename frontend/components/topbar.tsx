@@ -11,7 +11,18 @@ import { cn } from "@/lib/utils";
 import { SkuSearchBox } from "@/components/sku-search-box";
 import { DrillDownModal } from "@/components/drilldown-modal";
 import { NotificationBell as PeopleNotificationBell } from "@/components/people/notification-bell";
+import { Avatar } from "@/components/people/avatar";
 import { todayArIso } from "@/lib/dates";
+
+type MeProfile = {
+  user: {
+    id: number;
+    email: string;
+    name: string;
+    role: string;
+    avatar_url: string | null;
+  };
+};
 
 const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: "today", label: "HOY" },
@@ -175,6 +186,16 @@ export function Topbar({
   const [searchOpen, setSearchOpen] = useState(false);
   useEffect(() => setUser(getUser()), []);
 
+  // Profile completo (incluye avatar_url subido en /dashboard/perfil).
+  // Cache larga porque la foto cambia poco. La pagina de perfil invalida
+  // ["users-me"] al guardar, asi que el cambio se refleja sin reload.
+  const { data: profile } = useQuery<MeProfile>({
+    queryKey: ["users-me"],
+    queryFn: () => api<MeProfile>("/api/users/me"),
+    enabled: !!user,
+    staleTime: 5 * 60_000,
+  });
+
   // Atajo Ctrl+K / Cmd+K para abrir busqueda global
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -190,8 +211,8 @@ export function Topbar({
     return () => window.removeEventListener("keydown", onKey);
   }, [searchOpen]);
 
-  const initial = (user?.name || user?.email || "?").charAt(0).toUpperCase();
   const display = user?.name || user?.email?.split("@")[0] || "anonimo";
+  const avatarUrl = profile?.user?.avatar_url ?? null;
   return (
     <>
       <header className="sticky top-0 z-30 min-h-14 sm:min-h-16 bg-surface border-b border-border px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-2 lg:pl-8 pl-16 flex-wrap py-2 sm:py-0">
@@ -238,15 +259,17 @@ export function Topbar({
           </button>
           <NotificationBell />
           <PeopleNotificationBell />
-          <div className="ml-1 sm:ml-2 flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-soft border border-border">
-            <div className="w-7 h-7 rounded-full bg-gradient-to-br from-accent to-primary text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
-              {initial}
-            </div>
+          <Link
+            href="/dashboard/perfil"
+            title="Mi perfil"
+            className="ml-1 sm:ml-2 flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-lg bg-soft border border-border hover:border-primary/40 transition"
+          >
+            <Avatar name={display} url={avatarUrl} size="sm" />
             <div className="text-xs hidden sm:block">
               <div className="font-semibold text-text leading-none truncate max-w-[120px]">{display}</div>
               <div className="text-[10px] text-text-muted mt-0.5">{user?.role || "..."}</div>
             </div>
-          </div>
+          </Link>
         </div>
       </header>
 
