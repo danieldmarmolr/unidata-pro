@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.auth.security import current_user, require_area
+from app.auth.security import current_user, require_admin, require_area
 from app.db import refund_requests_db
 from app.services.finanzas_invoices_meli import get_latest_subscription_invoice_for_dni
 
@@ -168,6 +168,27 @@ def revert_to_pending(
     if not result:
         raise HTTPException(409, "No se pudo actualizar (estado cambio concurrentemente)")
     return result
+
+
+@router.delete("/{request_id}")
+def delete_(
+    request_id: int,
+    admin: Annotated[dict, Depends(require_admin)],
+) -> dict:
+    """Borra una solicitud (hard delete). Solo admin.
+
+    Pensado para limpiar registros de prueba o entradas duplicadas que
+    no tienen valor historico. Si la solicitud ya esta en un estado
+    terminal con audit util, considerar mantenerla en vez de borrar.
+    """
+    existing = refund_requests_db.get_request(request_id)
+    if not existing:
+        raise HTTPException(404, "Solicitud no encontrada")
+    ok = refund_requests_db.delete_request(request_id)
+    if not ok:
+        raise HTTPException(409, "No se pudo borrar")
+    log.info("request %s borrada por admin %s", request_id, admin["email"])
+    return {"deleted": True, "id": request_id}
 
 
 @router.post("/{request_id}/reject")

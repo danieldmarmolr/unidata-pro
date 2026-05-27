@@ -4,11 +4,11 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X, Receipt,
+  RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X, Receipt, Trash2,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
-import { api } from "@/lib/api";
+import { api, getUser } from "@/lib/api";
 
 type Status = "pending" | "transferred" | "integration_cancelled" | "rejected";
 
@@ -231,8 +231,11 @@ function RequestCard({ request: r }: { request: Request }) {
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const meta = STATUS_META[r.status];
   const qc = useQueryClient();
+  const me = getUser();
+  const isAdmin = !!me?.is_admin || me?.role === "admin";
 
   const transferMut = useMutation({
     mutationFn: (body: { note: string | null; refund_amount_arg: number | null }) =>
@@ -270,6 +273,15 @@ function RequestCard({ request: r }: { request: Request }) {
       api(`/api/refund-requests/${r.id}/revert-to-pending`, { method: "POST" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["refund-requests"] });
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () =>
+      api(`/api/refund-requests/${r.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["refund-requests"] });
+      setShowDeleteConfirm(false);
     },
   });
 
@@ -474,14 +486,25 @@ function RequestCard({ request: r }: { request: Request }) {
                 </button>
               </>
             )}
+
+            {isAdmin && (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                title="Eliminar definitivamente (solo admin)"
+                className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-300 bg-white text-red-700 text-xs font-semibold hover:bg-red-50 transition"
+              >
+                <Trash2 size={12} /> Eliminar
+              </button>
+            )}
           </div>
 
-          {(transferMut.isError || rejectMut.isError || cancelMut.isError || revertMut.isError) && (
+          {(transferMut.isError || rejectMut.isError || cancelMut.isError || revertMut.isError || deleteMut.isError) && (
             <div className="text-xs bg-red-50 border border-red-200 text-error rounded-lg px-3 py-2">
               {(transferMut.error as Error)?.message ??
                 (rejectMut.error as Error)?.message ??
                 (cancelMut.error as Error)?.message ??
-                (revertMut.error as Error)?.message}
+                (revertMut.error as Error)?.message ??
+                (deleteMut.error as Error)?.message}
             </div>
           )}
         </div>
@@ -511,7 +534,55 @@ function RequestCard({ request: r }: { request: Request }) {
           onConfirm={() => cancelMut.mutate()}
         />
       )}
+      {showDeleteConfirm && (
+        <DeleteModal
+          loading={deleteMut.isPending}
+          dropshipperName={r.dropshipper_name}
+          code={displayCode(r)}
+          onCancel={() => setShowDeleteConfirm(false)}
+          onConfirm={() => deleteMut.mutate()}
+        />
+      )}
     </div>
+  );
+}
+
+function DeleteModal({
+  loading, dropshipperName, code, onCancel, onConfirm,
+}: {
+  loading: boolean;
+  dropshipperName: string;
+  code: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <ModalShell onClose={onCancel} title="Eliminar solicitud">
+      <div className="space-y-3 text-sm text-text">
+        <p>
+          Vas a eliminar <span className="font-bold">{dropshipperName}</span>
+          <span className="font-mono text-xs text-text-muted"> · {code}</span>.
+        </p>
+        <p className="text-xs text-text-muted">
+          La acción es <span className="font-semibold text-red-700">irreversible</span>. Se borra el registro completo, incluido todo el audit. Usar solo para pruebas o duplicados sin valor histórico.
+        </p>
+      </div>
+      <div className="flex justify-end gap-2 mt-4">
+        <button
+          onClick={onCancel}
+          className="px-3 py-1.5 rounded-lg border border-border text-text-muted hover:bg-bg text-xs font-semibold"
+        >
+          Cancelar
+        </button>
+        <button
+          disabled={loading}
+          onClick={onConfirm}
+          className="px-3 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold shadow disabled:opacity-60"
+        >
+          {loading ? "Eliminando..." : "Eliminar definitivamente"}
+        </button>
+      </div>
+    </ModalShell>
   );
 }
 

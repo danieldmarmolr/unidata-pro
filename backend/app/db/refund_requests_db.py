@@ -278,6 +278,16 @@ def revert_to_pending(
     return _to_dict(row) if row else None
 
 
+def delete_request(request_id: int) -> bool:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "DELETE FROM subscription_refund_requests WHERE id = %s",
+            (request_id,),
+        )
+        return cur.rowcount > 0
+
+
 def mark_rejected(
     request_id: int,
     *,
