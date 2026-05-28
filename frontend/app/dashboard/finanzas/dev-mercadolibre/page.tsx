@@ -291,7 +291,18 @@ function ReturnCard({ item: r }: { item: Item }) {
 
   return (
     <div className={`border-2 rounded-xl ${meta.bg} ${meta.border}`}>
-      <div className="p-4 flex items-start gap-3">
+      <div
+        className="p-4 flex items-start gap-3 cursor-pointer hover:bg-bg/30 transition rounded-t-xl"
+        onClick={() => setOpen(!open)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen(!open);
+          }
+        }}
+      >
         <div
           className="w-10 h-10 rounded-lg flex items-center justify-center text-white shadow flex-shrink-0"
           style={{ background: meta.color }}
@@ -401,7 +412,7 @@ function ReturnCard({ item: r }: { item: Item }) {
           </div>
         </div>
         <button
-          onClick={() => setOpen(!open)}
+          onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
           className="text-text-muted hover:text-text px-1"
           title={open ? "Cerrar" : "Ver detalle"}
         >
