@@ -287,9 +287,21 @@ export function CellRenderer({
     }
     return <>{String(v)}</>;
   }
-  // Detectar fechas: ISO con T o "YYYY-MM-DD HH:MM:SS"
+  // Detectar fechas: ISO con T o "YYYY-MM-DD HH:MM:SS". Renderizamos dia +
+  // hora en dos lineas para que la celda pueda envolverse en tablas estrechas
+  // (la columna fecha forma parte de WRAPPABLE_HINT y aplica leading-tight).
   if (typeof v === "string" && (/^\d{4}-\d{2}-\d{2}T/.test(v) || /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(v))) {
-    return <>{fmtArDateTime(v)}</>;
+    const formatted = fmtArDateTime(v);
+    const parts = formatted.split(" ");
+    if (parts.length === 2) {
+      return (
+        <span className="inline-flex flex-col leading-tight">
+          <span>{parts[0]}</span>
+          <span className="text-text-muted text-[10px]">{parts[1]}</span>
+        </span>
+      );
+    }
+    return <>{formatted}</>;
   }
   // Order id como string (solo en rows de Unistore — en Unidrop el id es User.id)
   if (typeof v === "string" && !isUnidropRow && looksLikeTnOrderId(col, v)) {
@@ -828,7 +840,7 @@ export function DrillDownModal({
           </div>
         </div>
 
-        <div className={`flex-1 overflow-auto ${inline ? "p-0" : "p-1"}`}>
+        <div className={`flex-1 overflow-y-auto ${inline ? "p-0 overflow-x-hidden" : "overflow-x-auto p-1"}`}>
           {isLoading && (
             <div className="p-8 text-center text-text-muted text-sm">Cargando detalle...</div>
           )}
@@ -917,8 +929,13 @@ export function DrillDownModal({
             // Columnas que pueden envolver texto largo (en lugar de forzar nowrap
             // y desbordar a scroll horizontal). Aplicamos max-width controlado y
             // break-words para mantener filas legibles sin scroll lateral.
-            const WRAPPABLE_HINT = /^(cliente|customer|customer_name|nombre_cliente|client|client_name|nombre|name|item|product|product_name|nombre_producto|provincia|province|ciudad|city|email|descripcion|description|categoria|marca|proveedor)$/i;
+            const WRAPPABLE_HINT = /^(cliente|customer|customer_name|nombre_cliente|client|client_name|nombre|name|item|product|product_name|nombre_producto|provincia|province|ciudad|city|email|descripcion|description|categoria|marca|proveedor|fecha|date|created_at|createdAt)$/i;
             const isWrappable = (c: string) => WRAPPABLE_HINT.test(c);
+            // En modo inline forzamos celdas mas estrechas y aplicamos
+            // table-layout fixed-friendly para que la tabla se ajuste al
+            // ancho del contenedor sin scroll lateral.
+            const cellMaxWClass = inline ? "max-w-[120px]" : "max-w-[180px]";
+            const cellPx = inline ? "px-1.5" : "px-2";
             return (
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
@@ -927,7 +944,7 @@ export function DrillDownModal({
                     if (isHiddenColumn(c)) return null;
                     const active = sortBy === idx;
                     return (
-                      <th key={c} className="text-left px-2 py-1.5 whitespace-nowrap">
+                      <th key={c} className={`text-left ${cellPx} py-1.5 whitespace-nowrap`}>
                         <button
                           type="button"
                           onClick={() => toggleSort(idx)}
@@ -996,9 +1013,9 @@ export function DrillDownModal({
                           <td
                             key={j}
                             className={
-                              "px-2 py-1.5 font-mono text-[11px] align-middle " +
+                              `${cellPx} py-1.5 font-mono text-[11px] align-middle ` +
                               (wrappable
-                                ? "max-w-[160px] break-words leading-tight"
+                                ? `${cellMaxWClass} break-words leading-tight`
                                 : "whitespace-nowrap")
                             }
                           >
