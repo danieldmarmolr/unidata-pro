@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building, Share2, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react";
+import { X, Download, ExternalLink, User, MapPin, Package, Boxes, Truck, Tag, Building, Share2, ChevronUp, ChevronDown, ChevronRight, ArrowUpDown } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCurrency, formatNumber } from "@/lib/utils";
 import { fmtArDateTime, tnAdminUrl, looksLikeTnOrderId } from "@/lib/dates";
@@ -649,6 +649,11 @@ export function DrillDownModal({
   onClose,
   inline = false,
   className,
+  clientFilter,
+  clientFilterLabel,
+  onClearClientFilter,
+  maxBodyHeight,
+  expandable,
 }: {
   title: string;
   subtitle?: string;
@@ -661,6 +666,27 @@ export function DrillDownModal({
   inline?: boolean;
   /** Clase extra para el contenedor cuando inline=true (ej. mb-6, mx-0). */
   className?: string;
+  /** Filtro client-side opcional. Se aplica sobre las filas crudas del endpoint
+   * ANTES del sort y del summary. Sirve para cross-filters (donut → tabla,
+   * chart → tabla) sin necesidad de cambiar el backend. */
+  clientFilter?: (row: unknown[], columns: string[]) => boolean;
+  /** Texto del chip que aparece cuando clientFilter esta activo (ej.
+   * "paymentStatus = paid"). Si onClearClientFilter esta presente el chip
+   * incluye boton X. */
+  clientFilterLabel?: string;
+  onClearClientFilter?: () => void;
+  /** Altura maxima del body de la tabla (ej. "560px"). Util para layouts grid
+   * donde se quiere fijar la altura para que coincida con un sibling. */
+  maxBodyHeight?: string;
+  /** Si se provee, agrega una columna chevron al principio de cada fila y
+   * al hacer click despliega una sub-row con el contenido renderizado por
+   * `render`. `idColumn` indica que columna usar como id (e.g. "id", "numero").
+   * `getRowId(row, columns)` permite override si el id requiere computo. */
+  expandable?: {
+    idColumn?: string;
+    getRowId?: (row: unknown[], columns: string[]) => string | number | null;
+    render: (id: string, row: unknown[], columns: string[]) => ReactNode;
+  };
 }) {
   // Cierre con ESC — solo cuando es modal (no inline)
   useEffect(() => {
@@ -684,10 +710,23 @@ export function DrillDownModal({
   // que apunta a otra grilla.
   const [sortBy, setSortBy] = useState<number | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Set de ids expandidos (cuando expandable esta activo). Reset al cambiar
+  // de endpoint para que no queden sub-rows huerfanas de otro dataset.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     setSortBy(null);
     setSortDir("desc");
+    setExpandedIds(new Set());
   }, [endpoint]);
+
+  const toggleExpand = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const toggleSort = (idx: number) => {
     if (sortBy === idx) {
@@ -698,10 +737,19 @@ export function DrillDownModal({
     }
   };
 
-  // Filas ordenadas. Si no hay sort, devuelve las originales sin tocar.
+  // Aplicamos clientFilter (cross-filter desde donut/chart) antes del sort.
+  // Si no hay filter o aun no llegaron datos, devolvemos las rows tal cual.
+  const filteredRows = useMemo(() => {
+    if (!data) return [];
+    if (!clientFilter) return data.rows;
+    return data.rows.filter((r) => clientFilter(r, data.columns));
+  }, [data, clientFilter]);
+
+  // Filas ordenadas. Si no hay sort, devuelve las filtradas sin tocar.
   const sortedRows = useMemo(() => {
-    if (!data || sortBy === null) return data?.rows ?? [];
-    const arr = [...data.rows];
+    if (!data) return [];
+    if (sortBy === null) return filteredRows;
+    const arr = [...filteredRows];
     const dir = sortDir === "asc" ? 1 : -1;
     arr.sort((a, b) => {
       const va = a[sortBy];
@@ -936,10 +984,28 @@ export function DrillDownModal({
             // ancho del contenedor sin scroll lateral.
             const cellMaxWClass = inline ? "max-w-[120px]" : "max-w-[180px]";
             const cellPx = inline ? "px-1.5" : "px-2";
+            // Cuantas columnas visibles tendra la grilla (para el colspan
+            // de las sub-rows expandibles).
+            const visibleColCount = data.columns.filter((c) => !isHiddenColumn(c)).length + (expandable ? 1 : 0);
+            // Resolver idColumn -> index. Usado para extraer el id de cada
+            // fila cuando se hace click en el chevron.
+            const idColIdx = expandable?.idColumn
+              ? data.columns.findIndex((c) => c.toLowerCase() === expandable.idColumn!.toLowerCase())
+              : 0;
+            const resolveRowId = (row: unknown[]): string | null => {
+              if (!expandable) return null;
+              if (expandable.getRowId) {
+                const v = expandable.getRowId(row, data.columns);
+                return v === null || v === undefined ? null : String(v);
+              }
+              const v = row[idColIdx >= 0 ? idColIdx : 0];
+              return v === null || v === undefined ? null : String(v);
+            };
             return (
             <table className="w-full text-xs">
               <thead className="bg-soft text-text-muted text-[10px] uppercase tracking-wider sticky top-0 z-10">
                 <tr>
+                  {expandable && <th className={`${cellPx} py-1.5 w-6`} aria-label="Expandir"></th>}
                   {data.columns.map((c, idx) => {
                     if (isHiddenColumn(c)) return null;
                     const active = sortBy === idx;
@@ -998,44 +1064,69 @@ export function DrillDownModal({
                   const rowTitle = isCashPending
                     ? "Efectivo pendiente · esperar cobro presencial"
                     : isVip ? vipVisual.label : undefined;
+                  const rowId = resolveRowId(r);
+                  const isExpanded = !!rowId && expandedIds.has(rowId);
                   return (
-                    <tr
-                      key={i}
-                      className={rowClassName}
-                      title={rowTitle}
-                    >
-                      {r.map((v, j) => {
-                        const col = data.columns[j];
-                        if (isHiddenColumn(col)) return null;
-                        const isFirstVisible = j === 0;
-                        const wrappable = isWrappable(col);
-                        return (
-                          <td
-                            key={j}
-                            className={
-                              `${cellPx} py-1.5 font-mono text-[11px] align-middle ` +
-                              (wrappable
-                                ? `${cellMaxWClass} break-words leading-tight`
-                                : "whitespace-nowrap")
-                            }
-                          >
-                            <div className={wrappable ? "flex items-center gap-1.5" : "inline-flex items-center gap-1.5"}>
-                              {isFirstVisible && isVip && (
-                                <span
-                                  className={`inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-br ${vipVisual.bg} text-white shadow-sm flex-shrink-0`}
-                                  title={vipVisual.label}
-                                >
-                                  <span className="text-[10px]">{vipVisual.icon}</span>
-                                </span>
-                              )}
-                              <span className={wrappable ? "min-w-0" : ""}>
-                                <CellRenderer col={col} v={v} row={r} columns={data.columns} />
-                              </span>
-                            </div>
+                    <Fragment key={i}>
+                      <tr
+                        className={rowClassName}
+                        title={rowTitle}
+                      >
+                        {expandable && (
+                          <td className={`${cellPx} py-1.5 align-middle`}>
+                            {rowId !== null ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(rowId)}
+                                aria-label={isExpanded ? "Cerrar detalle" : "Ver detalle"}
+                                className="inline-flex items-center justify-center w-5 h-5 rounded text-text-muted hover:text-primary hover:bg-soft transition"
+                                title={isExpanded ? "Ocultar SKUs y markup" : "Ver SKUs + costo + markup"}
+                              >
+                                {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                              </button>
+                            ) : null}
                           </td>
-                        );
-                      })}
-                    </tr>
+                        )}
+                        {r.map((v, j) => {
+                          const col = data.columns[j];
+                          if (isHiddenColumn(col)) return null;
+                          const isFirstVisible = j === 0;
+                          const wrappable = isWrappable(col);
+                          return (
+                            <td
+                              key={j}
+                              className={
+                                `${cellPx} py-1.5 font-mono text-[11px] align-middle ` +
+                                (wrappable
+                                  ? `${cellMaxWClass} break-words leading-tight`
+                                  : "whitespace-nowrap")
+                              }
+                            >
+                              <div className={wrappable ? "flex items-center gap-1.5" : "inline-flex items-center gap-1.5"}>
+                                {isFirstVisible && isVip && (
+                                  <span
+                                    className={`inline-flex items-center justify-center w-5 h-5 rounded-full bg-gradient-to-br ${vipVisual.bg} text-white shadow-sm flex-shrink-0`}
+                                    title={vipVisual.label}
+                                  >
+                                    <span className="text-[10px]">{vipVisual.icon}</span>
+                                  </span>
+                                )}
+                                <span className={wrappable ? "min-w-0" : ""}>
+                                  <CellRenderer col={col} v={v} row={r} columns={data.columns} />
+                                </span>
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                      {expandable && isExpanded && rowId !== null && (
+                        <tr className="bg-transparent">
+                          <td colSpan={visibleColCount} className="p-0">
+                            {expandable.render(rowId, r, data.columns)}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>

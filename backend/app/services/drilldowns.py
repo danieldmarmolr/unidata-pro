@@ -871,6 +871,208 @@ def _orders_summary(enriched_rows: list) -> dict:
     }
 
 
+def order_markup_breakdown(order_id: str) -> dict:
+    """Desglose de markup por SKU + totales del pedido (TN o ML Fox).
+
+    Detecta el origen del pedido por el prefijo del id:
+      - 'ML-<num>' -> meli.meli_orders + meli.meli_order_items
+      - resto      -> tienda_nube."Order" + tienda_nube."OrderItem"
+
+    Devuelve:
+      items: [{sku, name, qty, price_unit, subtotal, costo_unit, costo_total,
+               ganancia_bruta, markup_pct, has_cost, lote}]
+      summary: {revenue, costo_total, ganancia_bruta, markup_pct_total,
+                iva_neto, iibb, gateway_fee, ganancia_neta, margen_pct,
+                cobertura_pct, skus_sin_costo, is_cash, is_digital,
+                gateway_id, gateway_name}
+    """
+    from app.services.profit_engine import (
+        cost_index_unistore,
+        is_cash_payment,
+        calc_profit,
+    )
+    eng = get_engine("unistore")
+    cost_idx = cost_index_unistore()
+
+    is_ml = isinstance(order_id, str) and order_id.upper().startswith("ML-")
+    if is_ml:
+        ml_id = order_id.split("-", 1)[1]
+        try:
+            ml_id_int = int(ml_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid_ml_id", "items": [], "summary": {}}
+
+        # Header de la orden ML para gateway/total
+        hdr = q(eng, """
+            SELECT mo.id, COALESCE(mo.total_amount, 0)::float, mo.status::text, mo.date_created::text
+            FROM meli.meli_orders mo
+            WHERE mo.id = :id
+            LIMIT 1
+        """, {"id": ml_id_int}) or []
+        if not hdr:
+            return {"error": "order_not_found", "items": [], "summary": {}}
+        order_total = float(hdr[0][1] or 0)
+        gateway_id = "mercado-libre"
+        gateway_name = "MELI"
+        is_digital = False
+        is_cash = False  # MELI siempre online
+
+        # Items con descripcion (title) si esta disponible
+        title_col = col_or_null(eng, "meli", "meli_order_items", "mi", [
+            "item_title", "title", "name",
+        ])
+        item_rows = q(eng, f"""
+            SELECT mi.seller_sku::text         AS sku,
+                   COALESCE({title_col}::text, mi.seller_sku::text, '')::text AS name,
+                   COALESCE(mi.quantity, 0)::int    AS qty,
+                   COALESCE(mi.unit_price, 0)::float AS price_unit
+            FROM meli.meli_order_items mi
+            WHERE mi.order_id = :id
+              AND mi.seller_sku IS NOT NULL AND mi.seller_sku <> ''
+        """, {"id": ml_id_int}) or []
+    else:
+        try:
+            tn_id_int = int(order_id)
+        except (ValueError, TypeError):
+            return {"error": "invalid_tn_id", "items": [], "summary": {}}
+        hdr = q(eng, """
+            SELECT o.id, COALESCE(o.total, 0)::float, o."paymentStatus"::text,
+                   COALESCE(o.gateway, ''), COALESCE(o."gatewayName", '')
+            FROM tienda_nube."Order" o
+            WHERE o.id = :id
+            LIMIT 1
+        """, {"id": tn_id_int}) or []
+        if not hdr:
+            return {"error": "order_not_found", "items": [], "summary": {}}
+        order_total = float(hdr[0][1] or 0)
+        payment_status = hdr[0][2] or ""
+        gateway_id = hdr[0][3] or None
+        gateway_name = hdr[0][4] or ""
+        is_cash = is_cash_payment(gateway_id, payment_status)
+        # Producto digital: SKU PVA o sin items fisicos. Determinado item-por-item abajo.
+        is_digital = False
+
+        item_rows = q(eng, """
+            SELECT oi.sku::text                  AS sku,
+                   COALESCE(oi.name, '')::text   AS name,
+                   COALESCE(oi.quantity, 0)::int AS qty,
+                   COALESCE(oi.price, 0)::float  AS price_unit
+            FROM tienda_nube."OrderItem" oi
+            WHERE oi."orderId" = :id
+              AND oi.sku IS NOT NULL AND oi.sku <> ''
+        """, {"id": tn_id_int}) or []
+
+    # Calcular markup por linea
+    items_out: list[dict] = []
+    revenue_items = 0.0
+    costo_sin_iva_total = 0.0
+    costo_con_iva_total = 0.0
+    skus_sin_costo = 0
+    iva_aliq_first: float | None = None
+    has_full_cost = True
+
+    for r in item_rows:
+        sku = (r[0] or "").strip()
+        name = r[1] or sku or "(sin nombre)"
+        qty = int(r[2] or 0)
+        price_unit = float(r[3] or 0)
+        subtotal = price_unit * qty
+        revenue_items += subtotal
+
+        cost = cost_idx.get(sku.lower())
+        if not cost or not cost.get("costo_con_iva"):
+            skus_sin_costo += 1
+            has_full_cost = False
+            items_out.append({
+                "sku": sku,
+                "name": name,
+                "qty": qty,
+                "price_unit": round(price_unit, 2),
+                "subtotal": round(subtotal, 2),
+                "costo_unit": None,
+                "costo_total": None,
+                "ganancia_bruta": None,
+                "markup_pct": None,
+                "has_cost": False,
+                "lote": None,
+            })
+            continue
+
+        c_sin = float(cost.get("costo_sin_iva") or 0)
+        c_con = float(cost.get("costo_con_iva") or 0)
+        costo_unit = c_con
+        costo_total = c_con * qty
+        ganancia_bruta = subtotal - costo_total
+        markup_pct = (ganancia_bruta / costo_total * 100.0) if costo_total else 0.0
+
+        costo_sin_iva_total += c_sin * qty
+        costo_con_iva_total += c_con * qty
+        if iva_aliq_first is None:
+            iva_aliq_first = cost.get("iva_aliquot")
+
+        items_out.append({
+            "sku": sku,
+            "name": name,
+            "qty": qty,
+            "price_unit": round(price_unit, 2),
+            "subtotal": round(subtotal, 2),
+            "costo_unit": round(costo_unit, 2),
+            "costo_total": round(costo_total, 2),
+            "ganancia_bruta": round(ganancia_bruta, 2),
+            "markup_pct": round(markup_pct, 1),
+            "has_cost": True,
+            "lote": None,  # podriamos exponer el lote_id si esta en cost_idx
+        })
+
+    # Profit del pedido entero — recalibramos sobre el total real del header
+    # (puede diferir de revenue_items por descuentos o envio cobrado).
+    pb = calc_profit(
+        ingreso_bruto=order_total if order_total > 0 else revenue_items,
+        costo_sin_iva=costo_sin_iva_total,
+        costo_con_iva=costo_con_iva_total,
+        is_cash=is_cash,
+        is_digital=is_digital,
+        iva_aliquot_override=iva_aliq_first,
+    )
+    pb.has_cost = has_full_cost and len(item_rows) > 0
+
+    cobertura_pct = (
+        (len(item_rows) - skus_sin_costo) / len(item_rows) * 100.0
+        if item_rows else 0.0
+    )
+    revenue_final = order_total if order_total > 0 else revenue_items
+    ganancia_bruta_pedido = revenue_final - costo_con_iva_total if has_full_cost else None
+    markup_pct_total = (
+        (ganancia_bruta_pedido / costo_con_iva_total * 100.0)
+        if has_full_cost and costo_con_iva_total > 0
+        else None
+    )
+
+    summary = {
+        "revenue": round(revenue_final, 2),
+        "revenue_items": round(revenue_items, 2),
+        "costo_total": round(costo_con_iva_total, 2) if has_full_cost else None,
+        "costo_sin_iva": round(costo_sin_iva_total, 2) if has_full_cost else None,
+        "ganancia_bruta": round(ganancia_bruta_pedido, 2) if ganancia_bruta_pedido is not None else None,
+        "markup_pct_total": round(markup_pct_total, 1) if markup_pct_total is not None else None,
+        "iva_neto": round(pb.iva_neto_a_pagar, 2),
+        "iibb": round(pb.iibb, 2),
+        "gateway_fee": round(pb.gateway_fee, 2),
+        "gateway_fee_rate": pb.gateway_fee_rate,
+        "ganancia_neta": round(pb.ganancia_neta, 2) if pb.has_cost else None,
+        "margen_pct": round(pb.margen_pct, 1) if pb.has_cost else None,
+        "cobertura_pct": round(cobertura_pct, 1),
+        "skus_sin_costo": skus_sin_costo,
+        "total_items": len(item_rows),
+        "is_cash": is_cash,
+        "is_digital": is_digital,
+        "gateway_id": gateway_id,
+        "gateway_name": gateway_name,
+        "origen": "ml" if is_ml else "tn",
+    }
+    return {"items": items_out, "summary": summary, "error": None}
+
+
 def tn_orders_all(period: str = "30d", from_iso: str | None = None, to_iso: str | None = None) -> dict:
     eng = get_engine("unistore")
     win = resolve_window(period, from_iso, to_iso)

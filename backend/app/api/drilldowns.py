@@ -161,6 +161,20 @@ def drill_orders_stuck(_: Annotated[dict, Depends(current_user)]) -> dict:
     return svc.tn_orders_stuck()
 
 
+@router.get("/orders/{order_id}/markup-breakdown")
+def drill_order_markup_breakdown(
+    _: Annotated[dict, Depends(current_user)],
+    order_id: str,
+) -> dict:
+    """Desglose linea-por-linea de markup para una orden Unistore.
+
+    `order_id` puede ser numerico (TN: tienda_nube."Order".id) o con prefijo
+    'ML-<id>' (MELI Fox: meli.meli_orders.id). El servicio detecta el origen
+    automaticamente.
+    """
+    return svc.order_markup_breakdown(order_id)
+
+
 # ============================================
 # UNIDROP drilldowns (NO mezclar con Unistore)
 # ============================================

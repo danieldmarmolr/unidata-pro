@@ -16,6 +16,7 @@ import { TopProductsTable } from "@/components/top-products";
 import { CategoryTable } from "@/components/generic-table";
 import { Segmented } from "@/components/segmented";
 import { DrillDownModal } from "@/components/drilldown-modal";
+import { OrderMarkupBreakdown } from "@/components/order-markup-breakdown";
 import { UnidropOrdersGlobal } from "@/components/unidrop-orders-global";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
@@ -212,9 +213,13 @@ export default function VentasPage() {
  <DrillDownModal
    inline
    title="Órdenes Unistore"
-   subtitle="Pagas + efectivo pendiente · TN + ML Fox · hereda el filtro de fechas del topbar"
+   subtitle="Pagas + efectivo pendiente · TN + ML Fox · click ▸ para ver SKUs + costo + markup"
    endpoint={`/api/drilldowns/orders/paid?${_qs}`}
    filename={`unistore_orders_${period}.csv`}
+   expandable={{
+     idColumn: "id",
+     render: (id) => <OrderMarkupBreakdown orderId={id} />,
+   }}
  />
  </div>
  )}
