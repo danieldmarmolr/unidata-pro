@@ -65,12 +65,17 @@ export function ExpandableOrderRow({
   idx,
   onOpenDetail,
   cols = 6,
+  extraCells,
 }: {
   order: OrderRowData;
   idx: number;
   onOpenDetail?: (id: number) => void;
   /** Cantidad de columnas que ocupa la fila expandida. Default 6. */
   cols?: number;
+  /** Celdas extras inyectadas entre "Estado del pedido" y "Total orden".
+   * Las usa la tabla de SKU 360 para mostrar Markup $ / Markup % / % infl
+   * del SKU especifico en cada pedido. */
+  extraCells?: import("react").ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -143,6 +148,7 @@ export function ExpandableOrderRow({
             compact
           />
         </td>
+        {extraCells}
         <td className="px-3 py-2 align-middle text-right font-bold tabular-nums">{formatCurrency(order.total)}</td>
         {hasGanancia && (
           <td className="px-3 py-2 align-middle text-right tabular-nums text-xs font-semibold">

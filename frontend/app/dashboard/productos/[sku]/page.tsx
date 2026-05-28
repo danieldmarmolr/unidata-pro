@@ -5,8 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Topbar } from "@/components/topbar";
 import { CategoryTable } from "@/components/generic-table";
-import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
-import { ExportButtons } from "@/components/export-buttons";
+import { SkuOrdersTable } from "@/components/sku-orders-table";
 import { SkuOmnichannel, type UnidropPricingPayload } from "@/components/sku-omnichannel";
 import { SkuStackedEvolution, type SeriesRow, type Granularity } from "@/components/sku-stacked-evolution";
 import { SkuStockDetail } from "@/components/sku-stock-detail";
@@ -18,7 +17,7 @@ import { SkuIdentityCard } from "@/components/sku-identity-card";
 import { SkuBusinessMetrics, type BusinessMetrics } from "@/components/sku-business-metrics";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
-import { ArrowLeft, Package } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeries } from "@/lib/types";
 
 type CostInfo = {
@@ -146,6 +145,19 @@ type Detail = {
     cliente: string;
     customer_id: number | null;
     empaquetada: boolean;
+    canal?: string;
+    // Markup del SKU en este pedido (calculado con cost_index_unistore)
+    sku_has_cost?: boolean;
+    costo_unit_sku?: number | null;
+    costo_total_sku?: number | null;
+    markup_sku_abs?: number | null;
+    markup_sku_pct?: number | null;
+    // Markup total del pedido (suma de todos los items con costo)
+    markup_total_pedido_abs?: number | null;
+    pedido_cobertura_costos?: boolean;
+    pedido_items_sin_costo?: number;
+    // % que este SKU representa del markup total del pedido
+    pct_influencia_markup?: number | null;
   }>;
   period?: string;
   window_label?: string;
@@ -451,78 +463,12 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
 
         {/* Ordenes que incluyen este SKU (respeta el filtro de periodo) */}
         {data && data.recent_orders && (
-          <div className="bg-surface border border-border rounded-xl p-5 mt-6">
-            <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
-                  <Package size={16} />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-text">Órdenes con este SKU · {data.window_label || effectivePeriod}</h3>
-                  <p className="text-[11px] text-text-muted">
-                    {data.recent_orders.length} {data.recent_orders.length === 1 ? "orden" : "órdenes"} TN incluyen este SKU en el periodo seleccionado · click una fila para ver los items completos
-                  </p>
-                </div>
-              </div>
-              <ExportButtons
-                filename={`ordenes_con_${sku}_${data.period || "30d"}`}
-                columns={["#", "Numero", "Fecha", "Cliente", "Provincia", "Qty", "Precio unit", "Subtotal SKU", "Total orden", "Estado pago", "Estado envío"]}
-                rows={data.recent_orders.map((o, i) => [
-                  i + 1, o.numero, o.fecha, o.cliente, o.provincia,
-                  o.qty, o.precio_unit, o.subtotal, o.total, o.payment, o.shipping,
-                ])}
-              />
-            </div>
-            {data.recent_orders.length === 0 ? (
-              <div className="py-8 text-center text-text-muted text-sm">
-                No hay órdenes con este SKU en el periodo seleccionado.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-[10px] uppercase tracking-wider text-text-muted">
-                      <th className="px-3 py-2">#</th>
-                      <th className="px-3 py-2">Número</th>
-                      <th className="px-3 py-2">Fecha</th>
-                      <th className="px-3 py-2">Estado del pedido</th>
-                      <th className="px-3 py-2 text-right">Total orden</th>
-                      <th className="px-3 py-2 text-center"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.recent_orders.map((o, i) => {
-                      if (!o.id) return null;
-                      const subtitleParts: string[] = [];
-                      if (o.cliente) subtitleParts.push(o.cliente);
-                      if (o.provincia) subtitleParts.push(o.provincia);
-                      subtitleParts.push(`${o.qty}x · ${o.subtotal.toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 })} de este SKU`);
-                      const orderRow: OrderRowData = {
-                        id: o.id,
-                        numero: o.numero,
-                        fecha: o.fecha,
-                        total: o.total,
-                        payment: o.payment,
-                        shipping: o.shipping,
-                        status: o.status,
-                        empaquetada: o.empaquetada,
-                        canal: (o as { canal?: string }).canal,
-                        subtitle: subtitleParts.join(" · "),
-                      };
-                      return (
-                        <ExpandableOrderRow
-                          key={i}
-                          order={orderRow}
-                          idx={i + 1}
-                          cols={6}
-                        />
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+          <SkuOrdersTable
+            sku={sku}
+            period={data.period}
+            windowLabel={data.window_label || effectivePeriod}
+            orders={data.recent_orders}
+          />
         )}
       </div>
     </>

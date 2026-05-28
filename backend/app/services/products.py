@@ -1237,6 +1237,81 @@ def product_detail(sku: str, period: str = "30d", from_iso: str | None = None, t
             "empaquetada": bool(r[13]) if r[13] is not None else False,
             "canal": r[14] or "",
         } for r in rows]
+
+        # Enriquecer cada orden con markup del SKU + markup total del pedido
+        # + % de influencia del SKU sobre el markup total.
+        # Cargamos en un solo query TODOS los items de las ordenes que estan
+        # en recent_orders y los cruzamos en Python con cost_index_unistore.
+        try:
+            from app.services.profit_engine import cost_index_unistore
+            order_ids = [o["id"] for o in recent_orders if o.get("id")]
+            if order_ids:
+                items_rows = q(eng, """
+                    SELECT "orderId", sku, COALESCE("quantity", 0)::int,
+                           COALESCE("price", 0)::float
+                    FROM tienda_nube."OrderItem"
+                    WHERE "orderId" = ANY(:ids) AND sku IS NOT NULL AND sku <> ''
+                """, {"ids": order_ids}) or []
+                cost_idx = cost_index_unistore()
+                # Por order_id, lista de items + flag si todos tienen costo
+                items_by_order: dict[int, list[tuple]] = {}
+                for ir in items_rows:
+                    items_by_order.setdefault(int(ir[0]), []).append(
+                        (str(ir[1] or "").strip().lower(), int(ir[2] or 0), float(ir[3] or 0))
+                    )
+                sku_lower = (sku or "").strip().lower()
+                for o in recent_orders:
+                    oid = o.get("id")
+                    if not oid:
+                        continue
+                    items = items_by_order.get(oid, [])
+                    qty_sku = int(o.get("qty") or 0)
+                    price_sku = float(o.get("precio_unit") or 0)
+                    cost_sku_entry = cost_idx.get(sku_lower)
+                    costo_unit_sku = float(cost_sku_entry.get("costo_con_iva") or 0) if cost_sku_entry else 0.0
+                    if costo_unit_sku > 0:
+                        costo_sku_total = costo_unit_sku * qty_sku
+                        markup_sku_abs = (price_sku - costo_unit_sku) * qty_sku
+                        markup_sku_pct = (markup_sku_abs / costo_sku_total * 100.0) if costo_sku_total > 0 else 0.0
+                        o["sku_has_cost"] = True
+                        o["costo_unit_sku"] = round(costo_unit_sku, 2)
+                        o["costo_total_sku"] = round(costo_sku_total, 2)
+                        o["markup_sku_abs"] = round(markup_sku_abs, 2)
+                        o["markup_sku_pct"] = round(markup_sku_pct, 1)
+                    else:
+                        o["sku_has_cost"] = False
+                        o["costo_unit_sku"] = None
+                        o["costo_total_sku"] = None
+                        o["markup_sku_abs"] = None
+                        o["markup_sku_pct"] = None
+
+                    # Markup total del pedido = suma de (price - costo_con_iva) * qty
+                    # sobre TODOS los items con costo. Si algun item no tiene costo,
+                    # markup_total_pedido es parcial — lo marcamos como tal.
+                    markup_total_pedido = 0.0
+                    items_con_costo = 0
+                    items_sin_costo = 0
+                    for it_sku, it_qty, it_price in items:
+                        cost_entry = cost_idx.get(it_sku)
+                        if not cost_entry or not cost_entry.get("costo_con_iva"):
+                            items_sin_costo += 1
+                            continue
+                        items_con_costo += 1
+                        c_con = float(cost_entry.get("costo_con_iva") or 0)
+                        markup_total_pedido += (it_price - c_con) * it_qty
+                    o["markup_total_pedido_abs"] = round(markup_total_pedido, 2) if items_con_costo > 0 else None
+                    o["pedido_cobertura_costos"] = items_sin_costo == 0
+                    o["pedido_items_sin_costo"] = items_sin_costo
+                    # % de influencia: del markup total del pedido, cuanto aporta este SKU
+                    if (o.get("markup_sku_abs") is not None
+                            and o.get("markup_total_pedido_abs")
+                            and o["markup_total_pedido_abs"] != 0):
+                        pct = o["markup_sku_abs"] / o["markup_total_pedido_abs"] * 100.0
+                        o["pct_influencia_markup"] = round(pct, 1)
+                    else:
+                        o["pct_influencia_markup"] = None
+        except Exception as exc:
+            log.warning("product_detail recent_orders markup enrich fail: %s", exc)
     except Exception as e:
         log.warning("product_detail recent_orders fail: %s", e)
 
