@@ -107,6 +107,8 @@ app.add_middleware(
         r"|127\.0\.0\.1(:\d+)?"
         r"|(.+\.)?unidatacenter\.com\.ar"
         r"|(frontend|backend|mcp)(-production)?-[a-z0-9]+\.up\.railway\.app"
+        # AWS Amplify Hosting: <branch>.<app-id>.amplifyapp.com (main + preview branches).
+        r"|([a-z0-9-]+\.)?[a-z0-9]+\.amplifyapp\.com"
         r")$"
     ),
     allow_credentials=True,
