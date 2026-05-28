@@ -5,7 +5,7 @@ import {
   Bar, ComposedChart, Line, ResponsiveContainer,
   Tooltip, XAxis, YAxis, CartesianGrid, LabelList,
 } from "recharts";
-import { formatNumber } from "@/lib/utils";
+import { formatNumber, formatCurrency } from "@/lib/utils";
 import {
   Package, TrendingUp, TrendingDown, Minus, Calendar,
   Wallet, ChevronRight, AlertTriangle, CheckCircle2, ArrowUpDown, ArrowDown, ArrowUp,
@@ -70,11 +70,7 @@ type SortKey =
 type SortDir = "asc" | "desc";
 type EstadoFilter = "all" | "vigente" | "agotado" | "sin_ventas";
 
-function fmtShortAr(v: number): string {
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-  if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-  return `$${v.toFixed(0)}`;
-}
+const fmtAr = (v: number) => formatCurrency(v, "ARS", 2);
 
 function trendIcon(delta: number) {
   if (delta > 2) return { Icon: TrendingUp, tone: "text-rose-700" };
@@ -232,13 +228,13 @@ export function SkuLotesConsumption({ data, loading }: Props) {
           </div>
           <div className="bg-soft/40 border border-border rounded-lg px-3 py-2">
             <div className="text-[9px] uppercase tracking-wider text-text-muted font-bold">Revenue acumulado</div>
-            <div className="text-xl font-extrabold tabular-nums text-primary">{fmtShortAr(totals.revenue)}</div>
+            <div className="text-xl font-extrabold tabular-nums text-primary">{fmtAr(totals.revenue)}</div>
           </div>
           <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
             <div className="text-[9px] uppercase tracking-wider text-emerald-800 font-bold flex items-center gap-1">
               <Wallet size={9} /> Ganancia neta
             </div>
-            <div className="text-xl font-extrabold tabular-nums text-emerald-900">{fmtShortAr(totals.ganancia)}</div>
+            <div className="text-xl font-extrabold tabular-nums text-emerald-900">{fmtAr(totals.ganancia)}</div>
           </div>
           <div className="bg-primary/5 border border-primary/30 rounded-lg px-3 py-2">
             <div className="text-[9px] uppercase tracking-wider text-primary/80 font-bold">Margen neto promedio</div>
@@ -276,9 +272,9 @@ export function SkuLotesConsumption({ data, loading }: Props) {
                     <div className="text-text-muted text-[10px] mb-2">Ingreso: {String(row.fecha)}</div>
                     <div className="flex justify-between gap-3"><span>Unidades vendidas</span><span className="font-bold tabular-nums">{formatNumber(Number(row.units_sold) || 0)}</span></div>
                     <div className="flex justify-between gap-3"><span>Cantidad lote</span><span className="font-bold tabular-nums">{formatNumber(Number(row.cantidad_lote) || 0)}</span></div>
-                    <div className="flex justify-between gap-3"><span>Ganancia</span><span className="font-bold tabular-nums text-emerald-700">{fmtShortAr(Number(row.ganancia) || 0)}</span></div>
+                    <div className="flex justify-between gap-3"><span>Ganancia</span><span className="font-bold tabular-nums text-emerald-700">{fmtAr(Number(row.ganancia) || 0)}</span></div>
                     <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-border"><span>Costo USD</span><span className="font-bold tabular-nums text-violet-700">US${Number(row.costo_usd).toFixed(2)}</span></div>
-                    <div className="flex justify-between gap-3"><span>Costo ARS</span><span className="font-bold tabular-nums">{fmtShortAr(Number(row.costo_ars) || 0)}</span></div>
+                    <div className="flex justify-between gap-3"><span>Costo ARS</span><span className="font-bold tabular-nums">{fmtAr(Number(row.costo_ars) || 0)}</span></div>
                   </div>
                 );
               }}
@@ -461,7 +457,7 @@ export function SkuLotesConsumption({ data, loading }: Props) {
                 </div>
                 <div className="col-span-1 text-right">
                   <div className="font-bold tabular-nums text-text">
-                    {l.costo_unit_ars !== null ? fmtShortAr(l.costo_unit_ars) : "—"}
+                    {l.costo_unit_ars !== null ? fmtAr(l.costo_unit_ars) : "—"}
                   </div>
                 </div>
                 <div className="col-span-2 text-right">
@@ -469,11 +465,11 @@ export function SkuLotesConsumption({ data, loading }: Props) {
                   <div className="text-[10px] text-text-muted">{l.velocidad_diaria.toFixed(2)} u/d · {l.orders} ord</div>
                 </div>
                 <div className="col-span-1 text-right">
-                  <div className="font-bold tabular-nums text-primary">{fmtShortAr(l.revenue)}</div>
+                  <div className="font-bold tabular-nums text-primary">{fmtAr(l.revenue)}</div>
                 </div>
                 <div className="col-span-1 text-right">
                   <div className={`font-bold tabular-nums ${l.ganancia >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                    {fmtShortAr(l.ganancia)}
+                    {fmtAr(l.ganancia)}
                   </div>
                 </div>
                 <div className="col-span-1 text-right">
