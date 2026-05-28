@@ -58,6 +58,20 @@ type OrderItem = {
   price: number;
   subtotal: number;
   imagen?: string | null;
+  // Enriched by /orders/{id}/detail when cost_index_unistore has the SKU.
+  has_cost?: boolean;
+  costo_unit?: number | null;
+  costo_total?: number | null;
+  markup_abs?: number | null;
+  markup_pct?: number | null;
+  pct_influencia_markup?: number | null;
+};
+
+type OrderMarkupSummary = {
+  total_markup: number | null;
+  items_con_costo: number;
+  items_sin_costo: number;
+  cobertura_pct: number;
 };
 
 export function ExpandableOrderRow({
@@ -66,6 +80,7 @@ export function ExpandableOrderRow({
   onOpenDetail,
   cols = 6,
   extraCells,
+  highlightSku,
 }: {
   order: OrderRowData;
   idx: number;
@@ -76,6 +91,10 @@ export function ExpandableOrderRow({
    * Las usa la tabla de SKU 360 para mostrar Markup $ / Markup % / % infl
    * del SKU especifico en cada pedido. */
   extraCells?: import("react").ReactNode;
+  /** Si esta presente y matchea (case-insensitive) el sku de un item, esa
+   * linea se renderiza con borde resaltado para indicar el SKU del que se
+   * abrio la vista (ej. en producto 360 el SKU actual). */
+  highlightSku?: string;
 }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -83,7 +102,7 @@ export function ExpandableOrderRow({
   const hasPago = order.metodo_pago !== undefined;
   const hasGanancia = order.ganancia !== undefined;
 
-  const orderDetail = useQuery<{ items: OrderItem[] }>({
+  const orderDetail = useQuery<{ items: OrderItem[]; markup_summary?: OrderMarkupSummary }>({
     queryKey: ["order-items-with-img", orderId],
     queryFn: () => api(`/api/drilldowns/orders/${orderId}/detail`),
     enabled: open && !!orderId,
@@ -175,40 +194,147 @@ export function ExpandableOrderRow({
       </tr>
       {open && (
         <tr>
-          <td colSpan={cols} className="bg-bg border-t border-border p-0">
-            <div className="px-12 py-4">
+          <td colSpan={cols} className="bg-gradient-to-b from-soft/50 to-transparent border-t border-border p-0">
+            <div className="px-4 sm:px-6 py-4">
               {orderDetail.isLoading ? (
                 <div className="text-text-muted text-sm py-4">Cargando items...</div>
               ) : orderDetail.data?.items && orderDetail.data.items.length > 0 ? (
                 <>
-                  <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-                    Producto · Unidades · Precio unitario · Total
+                  {/* Tabla de items con grid uniforme. Columnas:
+                       img | producto | qty | precio U | costo U | markup $ | markup % | total
+                     Las columnas de costo/markup quedan vacias si el SKU no
+                     tiene costo cargado (no rompemos el layout). */}
+                  <div className="bg-surface border border-border rounded-lg overflow-hidden">
+                    <div className="grid grid-cols-[44px_minmax(0,1fr)_50px_90px_90px_100px_70px_110px] gap-2 px-3 py-2 bg-soft text-[9px] uppercase tracking-wider text-text-muted font-bold border-b border-border">
+                      <div></div>
+                      <div>Producto</div>
+                      <div className="text-right">Cant</div>
+                      <div className="text-right">Precio U</div>
+                      <div className="text-right">Costo U</div>
+                      <div className="text-right">Markup $</div>
+                      <div className="text-right">Markup %</div>
+                      <div className="text-right">Total</div>
+                    </div>
+                    {orderDetail.data.items.map((it) => {
+                      const tone =
+                        it.markup_pct === null || it.markup_pct === undefined
+                          ? "muted"
+                          : it.markup_pct < 0
+                            ? "neg"
+                            : it.markup_pct < 15
+                              ? "low"
+                              : "ok";
+                      const isHighlighted =
+                        !!highlightSku &&
+                        !!it.sku &&
+                        it.sku.trim().toLowerCase() === highlightSku.trim().toLowerCase();
+                      return (
+                        <a
+                          key={it.id}
+                          href={it.sku ? `/dashboard/productos/${encodeURIComponent(it.sku)}` : "#"}
+                          target={it.sku ? "_blank" : undefined}
+                          rel="noopener noreferrer"
+                          className={
+                            "grid grid-cols-[44px_minmax(0,1fr)_50px_90px_90px_100px_70px_110px] gap-2 items-center px-3 py-2 border-b border-border/40 last:border-0 hover:bg-soft/60 transition" +
+                            (isHighlighted ? " bg-primary/5 ring-1 ring-primary/30 ring-inset" : "")
+                          }
+                        >
+                          <div className="w-11 h-11 rounded border border-border bg-soft overflow-hidden flex items-center justify-center">
+                            {it.imagen ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={it.imagen} alt={it.name} className="w-full h-full object-cover" loading="lazy" />
+                            ) : (
+                              <span className="text-[8px] text-text-muted">sin img</span>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-[11px] font-semibold text-primary truncate flex items-center gap-1">
+                              {it.name}
+                              {isHighlighted && (
+                                <span className="inline-flex items-center gap-0.5 text-[8px] font-bold uppercase tracking-wider bg-primary/15 text-primary px-1.5 py-0.5 rounded-full">
+                                  ★ Este SKU
+                                </span>
+                              )}
+                            </div>
+                            {it.sku && (
+                              <div className="text-[9px] text-text-muted font-mono">SKU {it.sku}</div>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-text text-right tabular-nums">{it.quantity}x</div>
+                          <div className="text-[11px] text-text-muted text-right tabular-nums">{formatCurrency(it.price)}</div>
+                          <div className="text-[11px] text-text-muted text-right tabular-nums">
+                            {it.costo_unit !== null && it.costo_unit !== undefined
+                              ? formatCurrency(it.costo_unit)
+                              : <span className="text-amber-600/70 text-[10px]">sin costo</span>}
+                          </div>
+                          <div
+                            className={
+                              "text-[11px] text-right tabular-nums font-bold " +
+                              (tone === "ok" ? "text-emerald-700" :
+                               tone === "low" ? "text-amber-700" :
+                               tone === "neg" ? "text-error" :
+                               "text-text-muted/60")
+                            }
+                          >
+                            {it.markup_abs !== null && it.markup_abs !== undefined
+                              ? formatCurrency(it.markup_abs)
+                              : "—"}
+                          </div>
+                          <div
+                            className={
+                              "text-[11px] text-right tabular-nums font-bold " +
+                              (tone === "ok" ? "text-emerald-700" :
+                               tone === "low" ? "text-amber-700" :
+                               tone === "neg" ? "text-error" :
+                               "text-text-muted/60")
+                            }
+                          >
+                            {it.markup_pct !== null && it.markup_pct !== undefined
+                              ? `${it.markup_pct.toFixed(1)}%`
+                              : "—"}
+                          </div>
+                          <div className="text-[11px] font-semibold text-text text-right tabular-nums">{formatCurrency(it.subtotal)}</div>
+                        </a>
+                      );
+                    })}
                   </div>
-                  <div className="space-y-1">
-                    {orderDetail.data.items.map((it) => (
-                      <a
-                        key={it.id}
-                        href={it.sku ? `/dashboard/productos/${encodeURIComponent(it.sku)}` : "#"}
-                        target={it.sku ? "_blank" : undefined}
-                        rel="noopener noreferrer"
-                        className="grid grid-cols-[48px_1fr_60px_100px_100px] gap-3 items-center px-2 py-2 rounded hover:bg-soft transition"
-                      >
-                        <div className="w-12 h-12 rounded border border-border bg-soft overflow-hidden flex items-center justify-center">
-                          {it.imagen ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={it.imagen} alt={it.name} className="w-full h-full object-cover" loading="lazy" />
-                          ) : <span className="text-[9px] text-text-muted">sin img</span>}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-primary truncate">{it.name}</div>
-                          {it.sku && <div className="text-[10px] text-text-muted font-mono">SKU {it.sku}</div>}
-                        </div>
-                        <div className="text-xs text-text text-right tabular-nums">{it.quantity}x</div>
-                        <div className="text-xs text-text-muted text-right tabular-nums">{formatCurrency(it.price)}</div>
-                        <div className="text-xs font-semibold text-text text-right tabular-nums">{formatCurrency(it.subtotal)}</div>
-                      </a>
-                    ))}
-                  </div>
+
+                  {/* Footer del expand: resumen del markup total del pedido */}
+                  {orderDetail.data.markup_summary && orderDetail.data.markup_summary.total_markup !== null && (
+                    <div className="mt-2 flex items-center justify-end gap-4 flex-wrap text-[10px] text-text-muted">
+                      <span>
+                        Markup total del pedido:{" "}
+                        <strong
+                          className={
+                            (orderDetail.data.markup_summary.total_markup ?? 0) >= 0
+                              ? "text-emerald-700"
+                              : "text-error"
+                          }
+                        >
+                          {formatCurrency(orderDetail.data.markup_summary.total_markup ?? 0)}
+                        </strong>
+                      </span>
+                      <span>
+                        Cobertura:{" "}
+                        <strong
+                          className={
+                            orderDetail.data.markup_summary.cobertura_pct >= 100
+                              ? "text-emerald-700"
+                              : orderDetail.data.markup_summary.cobertura_pct >= 50
+                                ? "text-amber-700"
+                                : "text-error"
+                          }
+                        >
+                          {orderDetail.data.markup_summary.cobertura_pct.toFixed(0)}%
+                        </strong>
+                        {orderDetail.data.markup_summary.items_sin_costo > 0 && (
+                          <span className="ml-1 text-amber-600">
+                            ({orderDetail.data.markup_summary.items_sin_costo} sin costo)
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="text-text-muted text-sm py-4">Sin items disponibles.</div>

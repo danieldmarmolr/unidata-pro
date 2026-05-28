@@ -186,6 +186,7 @@ export function SkuOrdersTable({
                       order={orderRow}
                       idx={i + 1}
                       cols={10}
+                      highlightSku={sku}
                       // Columnas extras inyectadas entre "Estado del pedido" y "Total orden"
                       extraCells={
                         <>

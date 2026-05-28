@@ -330,6 +330,56 @@ def order_detail_full(order_id: int) -> dict:
         "imagen": x[8],
     } for x in items]
 
+    # Enriquecer cada item con costo + markup usando cost_index_unistore.
+    # Asi el desplegable de toda orden TN muestra cuanto deja CADA SKU + el
+    # markup total del pedido + el % de aporte de cada SKU al markup total.
+    try:
+        from app.services.profit_engine import cost_index_unistore
+        cost_idx = cost_index_unistore()
+        order_total_markup = 0.0
+        items_con_costo = 0
+        items_sin_costo = 0
+        for it in order["items"]:
+            sku_key = (it.get("sku") or "").strip().lower()
+            cost_entry = cost_idx.get(sku_key) if sku_key else None
+            if not cost_entry or not cost_entry.get("costo_con_iva"):
+                items_sin_costo += 1
+                it["has_cost"] = False
+                it["costo_unit"] = None
+                it["costo_total"] = None
+                it["markup_abs"] = None
+                it["markup_pct"] = None
+                continue
+            items_con_costo += 1
+            costo_unit = float(cost_entry.get("costo_con_iva") or 0)
+            qty = int(it.get("quantity") or 0)
+            price = float(it.get("price") or 0)
+            costo_total = costo_unit * qty
+            markup_abs = (price - costo_unit) * qty
+            markup_pct = (markup_abs / costo_total * 100.0) if costo_total > 0 else 0.0
+            it["has_cost"] = True
+            it["costo_unit"] = round(costo_unit, 2)
+            it["costo_total"] = round(costo_total, 2)
+            it["markup_abs"] = round(markup_abs, 2)
+            it["markup_pct"] = round(markup_pct, 1)
+            order_total_markup += markup_abs
+        # % de aporte de cada item al markup total del pedido
+        for it in order["items"]:
+            if it.get("markup_abs") is not None and order_total_markup != 0:
+                it["pct_influencia_markup"] = round(it["markup_abs"] / order_total_markup * 100.0, 1)
+            else:
+                it["pct_influencia_markup"] = None
+        order["markup_summary"] = {
+            "total_markup": round(order_total_markup, 2) if items_con_costo > 0 else None,
+            "items_con_costo": items_con_costo,
+            "items_sin_costo": items_sin_costo,
+            "cobertura_pct": round(
+                items_con_costo / max(1, items_con_costo + items_sin_costo) * 100.0, 1
+            ),
+        }
+    except Exception as exc:
+        log.warning("order_detail_full markup enrich fail: %s", exc)
+
     # Direccion de shipping
     addr = q(eng, """
         SELECT name, phone, address, number, floor, locality, zipcode, city, province, country
