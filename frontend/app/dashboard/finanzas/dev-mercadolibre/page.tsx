@@ -6,11 +6,14 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, Copy,
   ExternalLink, X, Receipt, KeyRound, Truck, PackageCheck, Search,
+  Bell, Image as ImageIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 
-type Bucket = "en_camino" | "recibida_pendiente" | "transferida" | "rechazada" | "todas";
+type MLStatus = "NOTIFICADA" | "EN_CAMINO" | "TRANSFERENCIA_PENDIENTE" | "CERRADA";
+type FZTab = "transferida_fz" | "rechazada_fz";
+type Tab = MLStatus | FZTab | "todas";
 type ActionStatus = "pending" | "transferred" | "rejected";
 
 type FinanceAction = {
@@ -29,10 +32,17 @@ type FinanceAction = {
   updated_at: string;
 };
 
+type ReturnItem = { item_id: string; title: string; sku: string; qty: number; unit_price: number; reason: string };
+type Attachment = { url: string; type: string; created_at: string };
+type HistoryEntry = { from_status: string; to_status: string; actor_id: number | null; note: string; at: string };
+
 type Item = {
-  return_id: number;
+  return_pk: number;
+  claim_id: number | null;
+  return_id_ml: number | null;
+  shipment_id: number | null;
   ml_order_id: number;
-  ml_status: string;
+  ml_status: MLStatus | string;
   reason: string;
   amount_to_refund: number;
   tracking_code: string;
@@ -42,29 +52,18 @@ type Item = {
   discrepancy_photo: string;
   received_at: string | null;
   created_at: string;
+  updated_at: string;
   order_number: string;
   order_total: number;
   order_status: string;
   order_date: string | null;
   order_user_id: number | null;
-  dropshipper: {
-    user_id: number | null;
-    dni: string;
-    name: string;
-    fantasy_name: string;
-    email: string;
-    phone: string;
-    cuit: string;
-  };
-  ml_account: {
-    id: number | null;
-    nickname: string;
-    sin_token: boolean;
-    expires_at: string | null;
-  };
-  external_claim_id: string | null;
-  notified_at: string | null;
-  product: { sku: string; title: string; qty: number; unit_price: number; thumbnail: string } | null;
+  dropshipper: { user_id: number | null; dni: string; name: string; fantasy_name: string; email: string; phone: string; cuit: string };
+  ml_account: { id: number | null; nickname: string; sin_token: boolean; expires_at: string | null };
+  return_items: ReturnItem[];
+  attachments: Attachment[];
+  history: HistoryEntry[];
+  thumbnail: string;
   bank: {
     cbu?: string | null;
     cbu_alias?: string | null;
@@ -73,31 +72,33 @@ type Item = {
     account_owner?: string | null;
     status?: string | null;
   } | null;
-  invoice: {
-    id: string;
-    tipo: string;
-    numero: string;
-    link: string;
-    fecha: string | null;
-    total: number;
-  } | null;
+  invoice: { id: string; tipo: string; numero: string; link: string; fecha: string | null; total: number } | null;
   finance_action: FinanceAction | null;
-  bucket: Bucket;
+  finance_overlay: FZTab | null;
 };
 
 type Resp = {
   items: Item[];
   count: number;
   total: number;
-  counts_by_bucket: Record<Bucket, number>;
+  counts_by_bucket: Record<Tab, number>;
 };
 
-const BUCKET_META: Record<Bucket, { label: string; color: string; bg: string; border: string; icon: typeof Truck }> = {
-  en_camino:           { label: "En camino",     color: "#f59e0b", bg: "bg-amber-50",   border: "border-amber-300",   icon: Truck       },
-  recibida_pendiente:  { label: "A transferir",  color: "#8b5cf6", bg: "bg-violet-50",  border: "border-violet-300",  icon: PackageCheck },
-  transferida:         { label: "Transferida",   color: "#3b82f6", bg: "bg-blue-50",    border: "border-blue-300",    icon: Check       },
-  rechazada:           { label: "Rechazada",     color: "#94a3b8", bg: "bg-zinc-50",    border: "border-zinc-300",    icon: X           },
-  todas:               { label: "Todas",         color: "#6366f1", bg: "bg-indigo-50",  border: "border-indigo-300",  icon: RotateCcw   },
+const TAB_META: Record<Tab, { label: string; color: string; bg: string; border: string; icon: typeof Truck }> = {
+  NOTIFICADA:              { label: "Notificadas",   color: "#f59e0b", bg: "bg-amber-50",   border: "border-amber-300",   icon: Bell        },
+  EN_CAMINO:               { label: "En camino",     color: "#0ea5e9", bg: "bg-sky-50",     border: "border-sky-300",     icon: Truck       },
+  TRANSFERENCIA_PENDIENTE: { label: "A transferir",  color: "#8b5cf6", bg: "bg-violet-50",  border: "border-violet-300",  icon: PackageCheck },
+  CERRADA:                 { label: "Cerradas",      color: "#10b981", bg: "bg-emerald-50", border: "border-emerald-300", icon: Check       },
+  transferida_fz:          { label: "Transferidas Fz", color: "#3b82f6", bg: "bg-blue-50",  border: "border-blue-300",    icon: Check       },
+  rechazada_fz:            { label: "Rechazadas Fz",   color: "#94a3b8", bg: "bg-zinc-50",  border: "border-zinc-300",    icon: X           },
+  todas:                   { label: "Todas",         color: "#6366f1", bg: "bg-indigo-50",  border: "border-indigo-300",  icon: RotateCcw   },
+};
+
+const ML_STATUS_LABEL: Record<string, string> = {
+  NOTIFICADA: "Notificada",
+  EN_CAMINO: "En camino",
+  TRANSFERENCIA_PENDIENTE: "Pend. transferencia",
+  CERRADA: "Cerrada",
 };
 
 function fmtDate(iso: string | null | undefined): string {
@@ -121,7 +122,7 @@ function fmtMoney(v: number | null | undefined): string {
 }
 
 export default function DevMercadoLibrePage() {
-  const [tab, setTab] = useState<Bucket>("recibida_pendiente");
+  const [tab, setTab] = useState<Tab>("TRANSFERENCIA_PENDIENTE");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -143,23 +144,28 @@ export default function DevMercadoLibrePage() {
   });
 
   const items = data?.items ?? [];
-  const counts = data?.counts_by_bucket ?? { en_camino: 0, recibida_pendiente: 0, transferida: 0, rechazada: 0, todas: 0 };
+  const counts = data?.counts_by_bucket ?? {
+    NOTIFICADA: 0, EN_CAMINO: 0, TRANSFERENCIA_PENDIENTE: 0, CERRADA: 0,
+    transferida_fz: 0, rechazada_fz: 0, todas: 0,
+  };
 
   return (
     <>
       <Topbar
         title="Devoluciones — Mercado Libre"
-        subtitle="Gestión de transferencias por devolución de productos ML. Copiá CBU, abrí factura y marcá el estado."
+        subtitle="Gestión de transferencias por devolución. Estados reales del schema ML + tracking interno de Finanzas."
         hidePeriod
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
-            <TabBtn active={tab === "recibida_pendiente"} onClick={() => setTab("recibida_pendiente")} label="A transferir" count={counts.recibida_pendiente} />
-            <TabBtn active={tab === "en_camino"}          onClick={() => setTab("en_camino")}          label="En camino"    count={counts.en_camino} />
-            <TabBtn active={tab === "transferida"}        onClick={() => setTab("transferida")}        label="Transferidas" count={counts.transferida} />
-            <TabBtn active={tab === "rechazada"}          onClick={() => setTab("rechazada")}          label="Rechazadas"   count={counts.rechazada} />
-            <TabBtn active={tab === "todas"}              onClick={() => setTab("todas")}              label="Todas"        count={counts.todas} />
+            <TabBtn active={tab === "TRANSFERENCIA_PENDIENTE"} onClick={() => setTab("TRANSFERENCIA_PENDIENTE")} label="A transferir" count={counts.TRANSFERENCIA_PENDIENTE} />
+            <TabBtn active={tab === "NOTIFICADA"}             onClick={() => setTab("NOTIFICADA")}             label="Notificadas"  count={counts.NOTIFICADA} />
+            <TabBtn active={tab === "EN_CAMINO"}              onClick={() => setTab("EN_CAMINO")}              label="En camino"    count={counts.EN_CAMINO} />
+            <TabBtn active={tab === "CERRADA"}                onClick={() => setTab("CERRADA")}                label="Cerradas"     count={counts.CERRADA} />
+            <TabBtn active={tab === "transferida_fz"}         onClick={() => setTab("transferida_fz")}         label="Transf. Fz"   count={counts.transferida_fz} />
+            <TabBtn active={tab === "rechazada_fz"}           onClick={() => setTab("rechazada_fz")}           label="Rechaz. Fz"   count={counts.rechazada_fz} />
+            <TabBtn active={tab === "todas"}                  onClick={() => setTab("todas")}                  label="Todas"        count={counts.todas} />
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -186,7 +192,7 @@ export default function DevMercadoLibrePage() {
             <Inbox size={32} className="mx-auto text-text-muted mb-3" />
             <div className="text-sm font-bold text-text">Sin devoluciones en este estado</div>
             <div className="text-xs text-text-muted mt-1">
-              {debouncedSearch ? "Probá quitar el filtro de búsqueda." : "Mostrar otro estado para ver más."}
+              {debouncedSearch ? "Probá quitar el filtro de búsqueda." : "Cambiá de tab para ver más."}
             </div>
           </div>
         )}
@@ -194,7 +200,7 @@ export default function DevMercadoLibrePage() {
         {items.length > 0 && (
           <div className="space-y-2">
             {items.map((r) => (
-              <ReturnCard key={`${r.return_id}-${r.ml_order_id}`} item={r} />
+              <ReturnCard key={r.return_pk} item={r} />
             ))}
           </div>
         )}
@@ -226,7 +232,8 @@ function ReturnCard({ item: r }: { item: Item }) {
   const [open, setOpen] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
-  const meta = BUCKET_META[r.bucket];
+  const statusKey = r.ml_status as MLStatus;
+  const meta = statusKey in TAB_META ? TAB_META[statusKey] : TAB_META.todas;
   const Icon = meta.icon;
   const qc = useQueryClient();
 
@@ -267,6 +274,9 @@ function ReturnCard({ item: r }: { item: Item }) {
 
   const dropName = r.dropshipper.name || r.dropshipper.fantasy_name || r.ml_account.nickname || "—";
   const action = r.finance_action;
+  const mlLabel = ML_STATUS_LABEL[r.ml_status] || r.ml_status || "—";
+  const fzOverlay = r.finance_overlay;
+  const firstItemTitle = r.return_items[0]?.title || "";
 
   return (
     <div className={`border-2 rounded-xl ${meta.bg} ${meta.border}`}>
@@ -286,10 +296,25 @@ function ReturnCard({ item: r }: { item: Item }) {
               )}
             </div>
             <div className="text-[10px] uppercase tracking-wider text-text-muted font-bold flex items-center gap-2 flex-wrap justify-end">
-              <span>{meta.label}</span>
+              <span style={{ color: meta.color }}>{mlLabel}</span>
+              {fzOverlay === "transferida_fz" && (
+                <span className="normal-case bg-blue-100 border border-blue-300 text-blue-700 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+                  ✓ Transferida por Finanzas
+                </span>
+              )}
+              {fzOverlay === "rechazada_fz" && (
+                <span className="normal-case bg-zinc-100 border border-zinc-300 text-zinc-700 rounded px-1.5 py-0.5 text-[10px] font-semibold">
+                  ✕ Rechazada por Finanzas
+                </span>
+              )}
               {r.ml_account.sin_token && (
                 <span className="inline-flex items-center gap-1 normal-case bg-red-100 border border-red-300 text-red-700 rounded px-1.5 py-0.5 text-[10px] font-semibold">
                   <KeyRound size={10} /> Sin token
+                </span>
+              )}
+              {r.claim_id && (
+                <span className="font-mono normal-case tracking-normal bg-bg border border-border rounded px-1.5 py-0.5 text-[10px]">
+                  CLAIM {r.claim_id}
                 </span>
               )}
               {r.order_number && (
@@ -306,7 +331,8 @@ function ReturnCard({ item: r }: { item: Item }) {
             {r.ml_account.nickname && <> · ML {r.ml_account.nickname}</>}
             {" · "}
             <span className="font-semibold text-text">{fmtMoney(r.amount_to_refund)}</span>
-            {r.product?.title && <> · {r.product.title.slice(0, 50)}{r.product.title.length > 50 ? "…" : ""}</>}
+            {firstItemTitle && <> · {firstItemTitle.slice(0, 50)}{firstItemTitle.length > 50 ? "…" : ""}</>}
+            {r.return_items.length > 1 && <> +{r.return_items.length - 1}</>}
           </div>
         </div>
         <button
@@ -320,25 +346,36 @@ function ReturnCard({ item: r }: { item: Item }) {
 
       {open && (
         <div className="border-t border-border bg-surface/50 p-4 space-y-4">
-          {/* Producto */}
-          {r.product && (
-            <div className="flex items-center gap-3 bg-bg border border-border rounded p-2">
-              {r.product.thumbnail && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={r.product.thumbnail} alt="" className="w-14 h-14 object-cover rounded border border-border" />
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-text truncate">{r.product.title}</div>
-                <div className="text-[11px] text-text-muted">
-                  SKU <span className="font-mono">{r.product.sku || "—"}</span>
-                  {" · "}qty {r.product.qty}
-                  {" · "}{fmtMoney(r.product.unit_price)}
-                </div>
+          {/* Items devueltos */}
+          {r.return_items.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
+                Productos devueltos ({r.return_items.length})
+              </div>
+              <div className="space-y-1.5">
+                {r.return_items.map((it, idx) => (
+                  <div key={idx} className="flex items-center gap-3 bg-bg border border-border rounded p-2">
+                    {r.thumbnail && idx === 0 && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={r.thumbnail} alt="" className="w-12 h-12 object-cover rounded border border-border flex-shrink-0" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-text">{it.title || "—"}</div>
+                      <div className="text-[11px] text-text-muted">
+                        SKU <span className="font-mono">{it.sku || "—"}</span>
+                        {" · "}qty {it.qty}
+                        {" · "}{fmtMoney(it.unit_price)}
+                        {it.reason && <> · motivo: {it.reason}</>}
+                      </div>
+                    </div>
+                    <div className="text-xs font-semibold text-text">{fmtMoney(it.unit_price * it.qty)}</div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
 
-          {/* Datos bancarios (lo más importante para Finanzas) */}
+          {/* Datos bancarios */}
           <div>
             <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
               Datos bancarios
@@ -362,15 +399,15 @@ function ReturnCard({ item: r }: { item: Item }) {
           {/* Detalle devolución */}
           <div>
             <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-              Detalle de la devolución
+              Detalle del claim ML
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <Field label="Motivo"        value={r.reason || "—"} />
-              <Field label="Estado MELI"   value={r.ml_status || "—"} />
-              <Field label="Tracking"      value={r.tracking_code || "—"} copyable={!!r.tracking_code} mono />
-              <Field label="Transportista" value={r.carrier || "—"} />
-              <Field label="Recibido"      value={r.received_at ? fmtDate(r.received_at) : "Aún no recibido"} />
-              {r.external_claim_id && <Field label="Claim ML" value={r.external_claim_id} copyable mono />}
+              <Field label="Motivo"          value={r.reason || "—"} />
+              <Field label="Estado ML"       value={mlLabel} />
+              <Field label="Tracking"        value={r.tracking_code || "—"} copyable={!!r.tracking_code} mono />
+              <Field label="Transportista"   value={r.carrier || "—"} />
+              <Field label="Recibido"        value={r.received_at ? fmtDate(r.received_at) : "Aún no"} />
+              <Field label="Última actualiz." value={fmtDate(r.updated_at)} />
               {r.discrepancy_type && (
                 <div className="sm:col-span-2">
                   <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-0.5">
@@ -380,12 +417,7 @@ function ReturnCard({ item: r }: { item: Item }) {
                     <span className="font-semibold">{r.discrepancy_type}</span>
                     {r.discrepancy_note && <> · {r.discrepancy_note}</>}
                     {r.discrepancy_photo && (
-                      <a
-                        href={r.discrepancy_photo}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="ml-2 underline text-primary"
-                      >
+                      <a href={r.discrepancy_photo} target="_blank" rel="noopener noreferrer" className="ml-2 underline text-primary">
                         ver foto
                       </a>
                     )}
@@ -395,11 +427,53 @@ function ReturnCard({ item: r }: { item: Item }) {
             </div>
           </div>
 
-          {/* Audit timeline */}
+          {/* Attachments (fotos comprador) */}
+          {r.attachments.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
+                Adjuntos del comprador ({r.attachments.length})
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {r.attachments.map((a, idx) => (
+                  <a
+                    key={idx}
+                    href={a.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-bg text-[11px] text-text hover:bg-surface transition"
+                    title={`${a.type} · ${fmtDate(a.created_at)}`}
+                  >
+                    <ImageIcon size={11} /> {a.type || "archivo"} #{idx + 1}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Timeline ML (history real) */}
+          {r.history.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
+                Timeline ML
+              </div>
+              <div className="space-y-1.5 text-xs">
+                {r.history.map((h, idx) => (
+                  <TimelineItem
+                    key={idx}
+                    label={`${ML_STATUS_LABEL[h.from_status] ?? h.from_status ?? "—"} → ${ML_STATUS_LABEL[h.to_status] ?? h.to_status}`}
+                    date={h.at}
+                    detail={[h.actor_id ? `actor #${h.actor_id}` : null, h.note ? `"${h.note}"` : null].filter(Boolean).join(" · ")}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Historial Finanzas */}
           {action && (
             <div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-                Historial Finanzas
+                Historial Finanzas (interno UNIDATA)
               </div>
               <div className="space-y-1.5 text-xs">
                 {action.transferred_at && (
@@ -415,7 +489,7 @@ function ReturnCard({ item: r }: { item: Item }) {
                 )}
                 {action.rejected_at && (
                   <TimelineItem
-                    label="Rechazada"
+                    label="Rechazada por Finanzas"
                     date={action.rejected_at}
                     detail={[
                       action.rejected_by_email,
@@ -554,14 +628,7 @@ function InvoiceButton({ invoice }: { invoice: NonNullable<Item["invoice"]> }) {
   );
 }
 
-function Field({
-  label, value, copyable, mono,
-}: {
-  label: string;
-  value: string;
-  copyable?: boolean;
-  mono?: boolean;
-}) {
+function Field({ label, value, copyable, mono }: { label: string; value: string; copyable?: boolean; mono?: boolean }) {
   const [copied, setCopied] = useState(false);
   async function doCopy() {
     try {
@@ -572,9 +639,7 @@ function Field({
   }
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-0.5">
-        {label}
-      </div>
+      <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-0.5">{label}</div>
       <div className={`flex items-center gap-2 ${mono ? "font-mono" : ""}`}>
         <span className="text-text">{value}</span>
         {copyable && value && value !== "—" && (
@@ -592,13 +657,7 @@ function Field({
   );
 }
 
-function TimelineItem({
-  label, date, detail,
-}: {
-  label: string;
-  date: string;
-  detail?: string | null;
-}) {
+function TimelineItem({ label, date, detail }: { label: string; date: string; detail?: string | null }) {
   return (
     <div className="flex items-baseline gap-2">
       <div className="w-1.5 h-1.5 rounded-full bg-primary mt-1.5 flex-shrink-0" />

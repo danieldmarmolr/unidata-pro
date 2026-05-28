@@ -1,24 +1,26 @@
 """Vista unificada de devoluciones de Mercado Libre para Finanzas.
 
-Junta:
-- mercado_libre_dev."MercadoLibreReturn"    — claim/devolucion (estado MELI)
-- mercado_libre_dev."OrderMercadoLibre"     — number DROP-{dni}-N, monto, foto
-- public."User"                             — dropshipper (nombre, email, DNI, fantasy)
-- public."CustomerPaymentAccount"           — CBU, alias, titular (para transferir)
-- mercado_libre_dev."MercadoLibreUserAccount" — nickname + flag "sin token"
-- contabillium_dev."ContabilliumInvoice"    — link factura, numero
-- ml_return_actions (Supabase)              — estado interno Finanzas + audit
+Junta (todo en unidrop_api):
+- mercado_libre_dev."MercadoLibreReturn"          — claim/devolucion (fuente principal)
+- mercado_libre_dev."MercadoLibreReturnItem"      — lineas devueltas (sku, qty, monto)
+- mercado_libre_dev."MercadoLibreReturnAttachment"— fotos del comprador
+- mercado_libre_dev."MercadoLibreReturnHistory"   — timeline real de transiciones
+- mercado_libre_dev."OrderMercadoLibre"           — number DROP-{dni}-N, foto, monto
+- public."User"                                   — dropshipper (nombre, email, DNI)
+- public."CustomerPaymentAccount"                 — CBU, alias, titular (para transferir)
+- mercado_libre_dev."MercadoLibreUserAccount"     — nickname + flag "sin token"
+- contabillium_dev."ContabilliumInvoice"          — link factura, numero
+- ml_return_actions (Supabase)                    — estado interno Finanzas + audit
 
-El listing soporta tabs derivados de la combinacion entre estado del claim ML
-(receivedAt) y la accion de Finanzas (status en Supabase):
+Tabs por `MercadoLibreReturn.status` (enum real del schema):
+- NOTIFICADA             (128) — claim recien notificado por ML
+- EN_CAMINO              (113) — mercaderia volviendo al deposito
+- TRANSFERENCIA_PENDIENTE (60) — llego, falta plata al dropshipper (cola accionable)
+- CERRADA                 (27) — caso terminado en ML
 
- - en_camino           : la mercaderia todavia no llego (receivedAt IS NULL)
-                         y Finanzas no transfirio ni rechazo
- - recibida_pendiente  : llego mercaderia (receivedAt IS NOT NULL) y Finanzas
-                         no transfirio aun (= cola accionable)
- - transferida         : Finanzas transfirio
- - rechazada           : Finanzas rechazo (no se devuelve la plata)
- - todas               : sin filtro
+Mas pseudo-tabs derivados de finance_action (NO del schema ML):
+- TRANSFERIDA_FZ — Finanzas marco como transferido
+- RECHAZADA_FZ  — Finanzas rechazo
 """
 from __future__ import annotations
 
@@ -32,15 +34,11 @@ from app.services._utils import list_columns, q
 log = logging.getLogger("unidata.ml_returns_finance")
 
 
-def _ml_action_state(rec_at: str | None, action: dict | None) -> str:
-    """Deriva el bucket de tab desde receivedAt + action.status."""
-    if action and action.get("status") == "transferred":
-        return "transferida"
-    if action and action.get("status") == "rejected":
-        return "rechazada"
-    if rec_at:
-        return "recibida_pendiente"
-    return "en_camino"
+# Buckets validos para el filtro de tab. Los 4 primeros vienen del enum status
+# de MercadoLibreReturn; los 2 ultimos los gestionamos nosotros en Supabase.
+ML_STATUSES = ("NOTIFICADA", "EN_CAMINO", "TRANSFERENCIA_PENDIENTE", "CERRADA")
+FZ_STATUSES = ("transferida_fz", "rechazada_fz")
+TABS = ("todas", *ML_STATUSES, *FZ_STATUSES)
 
 
 def list_ml_returns(
@@ -50,35 +48,19 @@ def list_ml_returns(
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
-    """Devuelve devoluciones ML con datos para gestionar transferencias por Finanzas.
-
-    tab: en_camino | recibida_pendiente | transferida | rechazada | todas
-    search: prefix-match contra DNI, nombre, email, number, return id, tracking
+    """
+    tab: NOTIFICADA | EN_CAMINO | TRANSFERENCIA_PENDIENTE | CERRADA | transferida_fz | rechazada_fz | todas
+    search: prefix-match contra DNI, nombre, email, number, claim, tracking, sku, titulo item
     """
     eng = get_engine("unidrop")
 
-    # Schema discovery defensivo - algunas instalaciones de unidrop_api tienen mas
-    # columnas opcionales en MercadoLibreReturn (notif, externalClaimId, etc).
-    ret_cols = list_columns(eng, "mercado_libre_dev", "MercadoLibreReturn")
-
-    # Columnas opcionales: las pedimos solo si existen en el schema actual
-    extra_selects = []
-    if "externalClaimId" in ret_cols:
-        extra_selects.append('r."externalClaimId"::text AS external_claim_id')
-    elif "claimId" in ret_cols:
-        extra_selects.append('r."claimId"::text AS external_claim_id')
-    else:
-        extra_selects.append("NULL::text AS external_claim_id")
-
-    if "notifiedAt" in ret_cols:
-        extra_selects.append('r."notifiedAt"::text AS notified_at')
-    else:
-        extra_selects.append("NULL::text AS notified_at")
-
-    extra_select_sql = (", " + ", ".join(extra_selects)) if extra_selects else ""
-
     where: list[str] = []
     params: dict[str, Any] = {}
+    # Si el tab es un status del enum ML, filtramos en SQL (mas barato).
+    if tab in ML_STATUSES:
+        where.append('r.status::text = :sql_status')
+        params["sql_status"] = tab
+
     if search:
         params["s"] = f"%{search.strip()}%"
         params["s_exact"] = search.strip()
@@ -89,27 +71,33 @@ def list_ml_returns(
             "OR u.fantasy_name ILIKE :s "
             "OR o.\"number\" ILIKE :s "
             "OR r.\"orderId\"::text = :s_exact "
+            "OR r.\"claimId\"::text = :s_exact "
             "OR r.\"returnTrackingCode\" ILIKE :s "
             "OR mla.nickname ILIKE :s)"
         )
 
     where_sql = (" AND " + " AND ".join(where)) if where else ""
 
-    # 1) Query principal: junta todo lo que vive en unidrop_api
+    # 1) Query principal: MercadoLibreReturn + OML + User + MLA
     rows = q(eng, f"""
         SELECT
-            r.id::bigint                                    AS return_id,
+            r.id::int                                       AS return_pk,
+            r."claimId"::bigint                             AS claim_id,
+            r."returnId"::bigint                            AS return_id_ml,
+            r."shipmentId"::bigint                          AS shipment_id,
             r."orderId"::bigint                             AS ml_order_id,
-            COALESCE(r.status, '')                          AS ml_status,
-            COALESCE(r.reason, '')                          AS reason,
+            r."mlAccountId"::int                            AS return_mla_id,
+            r.status::text                                  AS ml_status,
+            COALESCE(r.reason::text, '')                    AS reason,
             COALESCE(r."amountToRefund", 0)::float          AS amount_to_refund,
             COALESCE(r."returnTrackingCode", '')            AS tracking_code,
             COALESCE(r.carrier, '')                         AS carrier,
-            COALESCE(r."discrepancyType", '')               AS discrepancy_type,
+            COALESCE(r."discrepancyType"::text, '')         AS discrepancy_type,
             COALESCE(r."discrepancyNote", '')               AS discrepancy_note,
             COALESCE(r."discrepancyPhotoUrl", '')           AS discrepancy_photo,
             r."receivedAt"::text                            AS received_at,
             r."createdAt"::text                             AS created_at,
+            r."updatedAt"::text                             AS updated_at,
             o."number"                                      AS order_number,
             COALESCE(o."totalAmount", 0)::float             AS order_total,
             COALESCE(o."status", '')                        AS order_status,
@@ -127,7 +115,6 @@ def list_ml_returns(
             COALESCE(mla.nickname, '')                      AS mla_nickname,
             COALESCE(mla."requiresReauth", false)           AS sin_token,
             mla."expiresAt"::text                           AS token_expira
-            {extra_select_sql}
         FROM mercado_libre_dev."MercadoLibreReturn" r
         LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
         LEFT JOIN public."User" u ON u.id = o."userId"
@@ -139,31 +126,87 @@ def list_ml_returns(
     """, {**params, "limit": int(limit) + 200, "offset": int(offset)}) or []
 
     if not rows:
-        return {"items": [], "count": 0, "total": 0}
+        return {"items": [], "count": 0, "total": 0, "counts_by_bucket": _empty_counts()}
 
-    # 2) Items / foto / SKU — top item por order
-    ml_order_ids = list({int(r[1]) for r in rows if r[1]})
-    items_by_oid: dict[int, dict] = {}
-    if ml_order_ids:
+    return_pks = list({int(r[0]) for r in rows if r[0] is not None})
+    ml_order_ids = list({int(r[4]) for r in rows if r[4]})
+    user_ids = list({int(r[23]) for r in rows if r[23]})
+
+    # 2) Items devueltos por return (MercadoLibreReturnItem.returnId = MercadoLibreReturn.id)
+    items_by_return: dict[int, list[dict]] = {}
+    if return_pks:
         item_rows = q(eng, """
+            SELECT "returnId"::int       AS rid,
+                   "itemId"              AS item_id,
+                   title,
+                   COALESCE(sku, '')     AS sku,
+                   quantity::int         AS qty,
+                   COALESCE("unitPrice", 0)::float AS unit_price,
+                   COALESCE(reason, '')  AS reason
+            FROM mercado_libre_dev."MercadoLibreReturnItem"
+            WHERE "returnId" = ANY(:ids)
+            ORDER BY id ASC
+        """, {"ids": return_pks}) or []
+        for ir in item_rows:
+            items_by_return.setdefault(int(ir[0]), []).append({
+                "item_id": ir[1], "title": ir[2] or "", "sku": ir[3] or "",
+                "qty": int(ir[4] or 1), "unit_price": round(float(ir[5] or 0), 2),
+                "reason": ir[6] or "",
+            })
+
+    # 3) Attachments (fotos del comprador) por return
+    attachments_by_return: dict[int, list[dict]] = {}
+    if return_pks:
+        att_rows = q(eng, """
+            SELECT "returnId"::int  AS rid,
+                   url,
+                   type,
+                   "createdAt"::text AS at
+            FROM mercado_libre_dev."MercadoLibreReturnAttachment"
+            WHERE "returnId" = ANY(:ids)
+            ORDER BY id ASC
+        """, {"ids": return_pks}) or []
+        for ar in att_rows:
+            attachments_by_return.setdefault(int(ar[0]), []).append({
+                "url": ar[1], "type": ar[2] or "image", "created_at": ar[3],
+            })
+
+    # 4) Historial (timeline) por return
+    history_by_return: dict[int, list[dict]] = {}
+    if return_pks:
+        hist_rows = q(eng, """
+            SELECT "returnId"::int                  AS rid,
+                   COALESCE("fromStatus"::text, '') AS from_status,
+                   "toStatus"::text                 AS to_status,
+                   "actorId"::int                   AS actor_id,
+                   COALESCE(note, '')               AS note,
+                   "createdAt"::text                AS at
+            FROM mercado_libre_dev."MercadoLibreReturnHistory"
+            WHERE "returnId" = ANY(:ids)
+            ORDER BY "createdAt" ASC, id ASC
+        """, {"ids": return_pks}) or []
+        for hr in hist_rows:
+            history_by_return.setdefault(int(hr[0]), []).append({
+                "from_status": hr[1] or "",
+                "to_status": hr[2] or "",
+                "actor_id": int(hr[3]) if hr[3] is not None else None,
+                "note": hr[4] or "",
+                "at": hr[5],
+            })
+
+    # 5) Thumbnail/foto fallback desde OrderItemMercadoLibre (top 1 por order)
+    thumb_by_oid: dict[int, str] = {}
+    if ml_order_ids:
+        thumb_rows = q(eng, """
             SELECT DISTINCT ON (oi."orderId")
-                   oi."orderId"::bigint                 AS oid,
-                   COALESCE(oi."sellerSku", '')         AS sku,
-                   COALESCE(oi.title, '')               AS title,
-                   COALESCE(oi.quantity, 1)::int        AS qty,
-                   COALESCE(oi."unitPrice", 0)::float   AS unit_price,
-                   COALESCE(oi.thumbnail, '')           AS thumbnail
+                   oi."orderId"::bigint, COALESCE(oi.thumbnail, '')
             FROM mercado_libre_dev."OrderItemMercadoLibre" oi
             WHERE oi."orderId" = ANY(:ids)
             ORDER BY oi."orderId", oi.id ASC
         """, {"ids": ml_order_ids}) or []
-        items_by_oid = {int(r[0]): {
-            "sku": r[1], "title": r[2], "qty": int(r[3] or 1),
-            "unit_price": float(r[4] or 0), "thumbnail": r[5],
-        } for r in item_rows}
+        thumb_by_oid = {int(r[0]): r[1] for r in thumb_rows if r[1]}
 
-    # 3) Datos bancarios (CustomerPaymentAccount) por userId
-    user_ids = list({int(r[18]) for r in rows if r[18]})
+    # 6) Bank accounts del dropshipper
     bank_by_uid: dict[int, dict] = {}
     if user_ids:
         cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
@@ -188,7 +231,7 @@ def list_ml_returns(
                 d[col] = br[i] if br[i] else None
             bank_by_uid[int(br[0])] = d
 
-    # 4) Facturas Contabilium por order ID (linkPublico, numero, tipo, total, fecha)
+    # 7) Facturas Contabilium por order ID
     invoice_by_oid: dict[int, dict] = {}
     if ml_order_ids:
         ids_lit = ",".join(str(i) for i in ml_order_ids)
@@ -209,86 +252,104 @@ def list_ml_returns(
                 "link": ir[4], "fecha": ir[5], "total": round(float(ir[6]), 2),
             }
 
-    # 5) Acciones de Finanzas desde Supabase
+    # 8) Acciones de Finanzas (Supabase) por ml_order_id
     actions_by_key = ml_return_actions_db.list_actions(ml_order_ids)
-    # Para indexar por (ml_order_id, return_idx). El return_idx aca lo dejamos en 1
-    # porque ahora no tenemos un mapeo 1:N tracking (un order = un return en la
-    # practica). Si en el futuro queremos soportar multiples returns por order,
-    # se cambia el index aca y en la tabla.
     actions_by_oid: dict[int, dict] = {}
     for (oid, _idx), act in actions_by_key.items():
         if oid not in actions_by_oid:
             actions_by_oid[oid] = act
 
-    # 6) Compose
+    # 9) Compose
     items: list[dict] = []
     for r in rows:
-        ml_order_id = int(r[1]) if r[1] else 0
-        user_id = int(r[18]) if r[18] else None
-        received_at = r[10]
+        return_pk = int(r[0])
+        ml_order_id = int(r[4]) if r[4] else 0
+        user_id = int(r[23]) if r[23] else None
+        ml_status = r[6] or ""
         action = actions_by_oid.get(ml_order_id)
-        bucket = _ml_action_state(received_at, action)
+
+        finance_overlay = None
+        if action and action.get("status") == "transferred":
+            finance_overlay = "transferida_fz"
+        elif action and action.get("status") == "rejected":
+            finance_overlay = "rechazada_fz"
 
         items.append({
-            "return_id": int(r[0]),
+            "return_pk": return_pk,
+            "claim_id": int(r[1]) if r[1] is not None else None,
+            "return_id_ml": int(r[2]) if r[2] is not None else None,
+            "shipment_id": int(r[3]) if r[3] is not None else None,
             "ml_order_id": ml_order_id,
-            "ml_status": r[2],
-            "reason": r[3],
-            "amount_to_refund": round(float(r[4] or 0), 2),
-            "tracking_code": r[5],
-            "carrier": r[6],
-            "discrepancy_type": r[7],
-            "discrepancy_note": r[8],
-            "discrepancy_photo": r[9],
-            "received_at": received_at,
-            "created_at": r[11],
-            "order_number": r[12] or "",
-            "order_total": round(float(r[13] or 0), 2),
-            "order_status": r[14],
-            "order_date": r[15],
-            "order_user_id": int(r[16]) if r[16] else None,
+            "return_mla_id": int(r[5]) if r[5] is not None else None,
+            "ml_status": ml_status,
+            "reason": r[7],
+            "amount_to_refund": round(float(r[8] or 0), 2),
+            "tracking_code": r[9],
+            "carrier": r[10],
+            "discrepancy_type": r[11],
+            "discrepancy_note": r[12],
+            "discrepancy_photo": r[13],
+            "received_at": r[14],
+            "created_at": r[15],
+            "updated_at": r[16],
+            "order_number": r[17] or "",
+            "order_total": round(float(r[18] or 0), 2),
+            "order_status": r[19],
+            "order_date": r[20],
+            "order_user_id": int(r[21]) if r[21] else None,
             "dropshipper": {
                 "user_id": user_id,
-                "dni": r[19] or "",
-                "name": r[20] or "",
-                "fantasy_name": r[21] or "",
-                "email": r[22] or "",
-                "phone": r[23] or "",
-                "cuit": r[24] or "",
+                "dni": r[24] or "",
+                "name": r[25] or "",
+                "fantasy_name": r[26] or "",
+                "email": r[27] or "",
+                "phone": r[28] or "",
+                "cuit": r[29] or "",
             },
             "ml_account": {
-                "id": int(r[25]) if r[25] else None,
-                "nickname": r[26] or "",
-                "sin_token": bool(r[27]),
-                "expires_at": r[28],
+                "id": int(r[30]) if r[30] else None,
+                "nickname": r[31] or "",
+                "sin_token": bool(r[32]),
+                "expires_at": r[33],
             },
-            "external_claim_id": r[29] if len(r) > 29 else None,
-            "notified_at": r[30] if len(r) > 30 else None,
-            "product": items_by_oid.get(ml_order_id),
+            "return_items": items_by_return.get(return_pk, []),
+            "attachments": attachments_by_return.get(return_pk, []),
+            "history": history_by_return.get(return_pk, []),
+            "thumbnail": thumb_by_oid.get(ml_order_id) or "",
             "bank": bank_by_uid.get(user_id) if user_id else None,
             "invoice": invoice_by_oid.get(ml_order_id),
             "finance_action": action,
-            "bucket": bucket,
+            "finance_overlay": finance_overlay,
         })
 
-    # 7) Filtro por tab (lo hacemos en Python despues de combinar todo)
-    if tab in ("en_camino", "recibida_pendiente", "transferida", "rechazada"):
-        items = [it for it in items if it["bucket"] == tab]
+    # 10) Filtro por finance_overlay (transferida_fz / rechazada_fz)
+    if tab in FZ_STATUSES:
+        items = [it for it in items if it["finance_overlay"] == tab]
 
-    # 8) Counts por bucket (sobre el universo de search, no del tab actual)
-    # Para los counters de tabs (UI) traemos los totales por bucket.
-    counts = {
-        "en_camino": 0,
-        "recibida_pendiente": 0,
-        "transferida": 0,
-        "rechazada": 0,
-        "todas": len(rows),
-    }
-    for r in rows:
-        ml_oid = int(r[1]) if r[1] else 0
-        act = actions_by_oid.get(ml_oid)
-        b = _ml_action_state(r[10], act)
-        counts[b] = counts.get(b, 0) + 1
+    # 11) Counts por tab
+    # Cuenta sobre el universo ya filtrado por search (status ML count incluye
+    # solo lo del tab si tab in ML_STATUSES). Para los tabs ML, el count global
+    # se recalcula con una query agregada barata.
+    counts = _empty_counts()
+    if tab in ML_STATUSES or tab in FZ_STATUSES or tab == "todas":
+        # Counts globales por status ML (independiente del tab actual) — query barata
+        status_counts = q(eng, """
+            SELECT status::text, COUNT(*)::int
+            FROM mercado_libre_dev."MercadoLibreReturn"
+            GROUP BY 1
+        """) or []
+        for sc in status_counts:
+            if sc[0] in ML_STATUSES:
+                counts[sc[0]] = int(sc[1] or 0)
+        counts["todas"] = sum(counts[s] for s in ML_STATUSES)
+        # Overlay Finanzas counts (cruzando todas las actions con returns existentes)
+        all_actions = ml_return_actions_db.list_actions(None)
+        counts["transferida_fz"] = sum(
+            1 for v in all_actions.values() if v.get("status") == "transferred"
+        )
+        counts["rechazada_fz"] = sum(
+            1 for v in all_actions.values() if v.get("status") == "rejected"
+        )
 
     return {
         "items": items[:limit],
@@ -298,17 +359,20 @@ def list_ml_returns(
     }
 
 
+def _empty_counts() -> dict:
+    return {
+        "NOTIFICADA": 0,
+        "EN_CAMINO": 0,
+        "TRANSFERENCIA_PENDIENTE": 0,
+        "CERRADA": 0,
+        "transferida_fz": 0,
+        "rechazada_fz": 0,
+        "todas": 0,
+    }
+
+
 def get_ml_return(ml_order_id: int) -> dict | None:
-    """Detalle de una devolucion ML especifica. Usa la misma query del listing
-    filtrada por orderId."""
-    eng = get_engine("unidrop")
-    rows = q(eng, """
-        SELECT r."orderId"::text FROM mercado_libre_dev."MercadoLibreReturn" r
-        WHERE r."orderId" = :oid LIMIT 1
-    """, {"oid": int(ml_order_id)})
-    if not rows:
-        return None
-    # Reusamos list con search en order ID
+    """Detalle de una devolucion ML especifica."""
     res = list_ml_returns(search=str(ml_order_id), tab="todas", limit=5)
     for it in res["items"]:
         if it["ml_order_id"] == int(ml_order_id):
