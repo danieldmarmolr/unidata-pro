@@ -203,16 +203,23 @@ def sales_unistore(
         })
 
     # ---------- Daily revenue del periodo (enriquecido por canal) ----------
-    # Usamos from_ts/to_ts para mayor precision en custom/today/yesterday.
+    # Si el filtro es HOY/AYER, agrupamos por HORA del dia (24 buckets) en vez
+    # de por DIA. El frontend reconoce el formato "YYYY-MM-DD HH:00" y muestra
+    # el eje X en formato horario.
     daily_params = {"from_ts": from_ts, "to_ts": to_ts}
+    is_intraday = period in ("today", "yesterday")
+    trunc_unit = "hour" if is_intraday else "day"
+    # Casteamos a timestamp (no a ::date) cuando trunc=hour para no perder la hora
+    bucket_cast = "::timestamp" if is_intraday else "::date"
+    bucket_fmt = "%Y-%m-%d %H:00" if is_intraday else "%Y-%m-%d"
 
-    # Acumular por fecha (str YYYY-MM-DD)
+    # Acumular por bucket (str)
     daily_map: dict[str, dict] = {}
 
     if include_tn:
-        tn_rows = _q(eng, """
+        tn_rows = _q(eng, f"""
             WITH orders AS (
-              SELECT date_trunc('day', o."createdAt")::date AS day,
+              SELECT date_trunc('{trunc_unit}', o."createdAt"){bucket_cast} AS bucket,
                      COUNT(*) FILTER (WHERE o."paymentStatus"='paid')::int AS orders_paid,
                      COALESCE(SUM(CASE WHEN o."paymentStatus"='paid' THEN o.total ELSE 0 END), 0)::float AS revenue,
                      COUNT(*) FILTER (WHERE o."paymentStatus" IN ('refunded','voided','abandoned'))::int AS devoluciones
@@ -221,7 +228,7 @@ def sales_unistore(
               GROUP BY 1
             ),
             items AS (
-              SELECT date_trunc('day', o."createdAt")::date AS day,
+              SELECT date_trunc('{trunc_unit}', o."createdAt"){bucket_cast} AS bucket,
                      COALESCE(SUM(oi.quantity), 0)::int AS units,
                      COUNT(DISTINCT oi.sku)::int AS skus
               FROM tienda_nube."OrderItem" oi
@@ -230,7 +237,7 @@ def sales_unistore(
                 AND o."paymentStatus" = 'paid'
               GROUP BY 1
             )
-            SELECT COALESCE(ord.day, it.day) AS day,
+            SELECT COALESCE(ord.bucket, it.bucket) AS bucket,
                    COALESCE(ord.revenue, 0) AS revenue_tn,
                    COALESCE(ord.orders_paid, 0) AS orders_tn,
                    COALESCE(ord.devoluciones, 0) AS devoluciones,
@@ -239,13 +246,13 @@ def sales_unistore(
                    CASE WHEN COALESCE(ord.orders_paid, 0) > 0
                         THEN COALESCE(ord.revenue, 0) / ord.orders_paid
                         ELSE 0 END AS ticket_avg_tn
-            FROM orders ord FULL OUTER JOIN items it ON it.day = ord.day
+            FROM orders ord FULL OUTER JOIN items it ON it.bucket = ord.bucket
             ORDER BY 1
         """, daily_params) or []
         for r in tn_rows:
             if not r[0]:
                 continue
-            d = r[0].strftime("%Y-%m-%d")
+            d = r[0].strftime(bucket_fmt)
             daily_map[d] = {
                 "date": d,
                 "revenue_tn": float(r[1] or 0),
@@ -259,8 +266,8 @@ def sales_unistore(
             }
 
     if include_ml:
-        ml_rows = _q(eng, """
-            SELECT date_trunc('day', date_created)::date AS day,
+        ml_rows = _q(eng, f"""
+            SELECT date_trunc('{trunc_unit}', date_created){bucket_cast} AS bucket,
                    COALESCE(SUM(total_amount), 0)::float AS revenue_ml,
                    COUNT(*)::int AS orders_ml
             FROM meli.meli_orders
@@ -271,7 +278,7 @@ def sales_unistore(
         for r in ml_rows:
             if not r[0]:
                 continue
-            d = r[0].strftime("%Y-%m-%d")
+            d = r[0].strftime(bucket_fmt)
             if d in daily_map:
                 daily_map[d]["revenue_ml"] = float(r[1] or 0)
                 daily_map[d]["orders_ml"] = int(r[2] or 0)
@@ -288,11 +295,85 @@ def sales_unistore(
                     "orders_ml": int(r[2] or 0),
                 }
 
+    # Para HOY/AYER pre-seedeamos las 24 horas vacias para que el chart muestre
+    # la grilla completa de 0:00 a 23:00 incluso si no hubo ventas en algunas.
+    if is_intraday:
+        # Usamos el dia del to_ts-1 para HOY/AYER. from_ts marca medianoche AR.
+        base_day = from_ts.strftime("%Y-%m-%d")
+        for h in range(24):
+            key = f"{base_day} {h:02d}:00"
+            if key not in daily_map:
+                daily_map[key] = {
+                    "date": key,
+                    "revenue_tn": 0.0,
+                    "orders_tn": 0,
+                    "devoluciones": 0,
+                    "units": 0,
+                    "skus": 0,
+                    "ticket_avg": 0.0,
+                    "revenue_ml": 0.0,
+                    "orders_ml": 0,
+                }
+
     daily: list[dict] = []
     for pt in sorted(daily_map.values(), key=lambda x: x["date"]):
         pt["value"] = pt["revenue_tn"] + pt["revenue_ml"]
         pt["orders"] = pt["orders_tn"] + pt["orders_ml"]
         daily.append(pt)
+
+    # ---------- by_hour: distribucion horaria del periodo (todos los periods) ----------
+    # Alimenta la tabla "Analisis horario" en /ventas. Para Unistore agrupamos
+    # Orders TN paid + ML paid por hora del dia (0-23) en timezone Argentina.
+    # Combina ambos canales (mismo schema que sales.py).
+    by_hour_data: list[dict] = []
+    try:
+        hour_buckets: dict[int, dict] = {h: {"orders": 0, "revenue": 0.0} for h in range(24)}
+        if include_tn:
+            rows = _q(eng, """
+                SELECT EXTRACT(hour FROM o."createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS h,
+                       COUNT(*)::int AS orders,
+                       COALESCE(SUM(o.total), 0)::float AS revenue
+                FROM tienda_nube."Order" o
+                WHERE o."createdAt" >= :from_ts AND o."createdAt" < :to_ts
+                  AND o."paymentStatus" = 'paid'
+                GROUP BY 1
+            """, p) or []
+            for r in rows:
+                h = int(r[0] or 0)
+                if 0 <= h <= 23:
+                    hour_buckets[h]["orders"] += int(r[1] or 0)
+                    hour_buckets[h]["revenue"] += float(r[2] or 0)
+        if include_ml:
+            rows = _q(eng, """
+                SELECT EXTRACT(hour FROM date_created AT TIME ZONE 'America/Argentina/Buenos_Aires')::int AS h,
+                       COUNT(*)::int AS orders,
+                       COALESCE(SUM(total_amount), 0)::float AS revenue
+                FROM meli.meli_orders
+                WHERE date_created >= :from_ts AND date_created < :to_ts
+                  AND status IN ('paid','confirmed','shipped','delivered')
+                GROUP BY 1
+            """, p) or []
+            for r in rows:
+                h = int(r[0] or 0)
+                if 0 <= h <= 23:
+                    hour_buckets[h]["orders"] += int(r[1] or 0)
+                    hour_buckets[h]["revenue"] += float(r[2] or 0)
+        for h in range(24):
+            bucket = hour_buckets[h]
+            ordenes = int(bucket["orders"])
+            revenue = float(bucket["revenue"])
+            ticket_avg = (revenue / ordenes) if ordenes > 0 else 0.0
+            by_hour_data.append({
+                "category": f"{h:02d}:00",
+                "value": ordenes,
+                "extra": {
+                    "ticket_avg": round(ticket_avg, 0),
+                    "revenue": round(revenue, 0),
+                },
+            })
+    except Exception as exc:
+        log.warning("sales_unistore by_hour fail: %s", exc)
+        by_hour_data = []
 
     # ---------- Distribucion paymentStatus (TN) ----------
     payment_status: list[dict] = []
@@ -422,5 +503,6 @@ def sales_unistore(
         "top_markup": top_markup,
         "cost_data_available": cost_data_available,
         "daily_revenue": daily,
+        "by_hour": by_hour_data,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
     }

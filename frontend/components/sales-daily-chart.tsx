@@ -19,6 +19,7 @@ import { useMemo, useState } from "react";
 import {
   ComposedChart,
   Area,
+  Bar,
   Line,
   XAxis,
   YAxis,
@@ -125,6 +126,26 @@ export function SalesDailyChart({
   const splittable = opt.splittable;
   const canStack = splittable && channels.has("tn") && channels.has("ml");
 
+  // Detectar si los datos vienen agrupados por HORA (period=today/yesterday).
+  // El backend emite "YYYY-MM-DD HH:00" (17 chars con espacio) en ese caso.
+  // Para granularidad diaria emite "YYYY-MM-DD" (10 chars).
+  const isHourly = useMemo(() => {
+    if (!points || !points.length) return false;
+    const sample = points.find((p) => p.date)?.date ?? "";
+    return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(sample);
+  }, [points]);
+
+  // Formatter del eje X: HH cuando es horario, MM-DD cuando es diario.
+  const xTickFormatter = (v: string) => {
+    if (!v) return "";
+    if (isHourly) {
+      // "2026-05-28 14:00" -> "14:00"
+      const space = v.indexOf(" ");
+      return space >= 0 ? v.slice(space + 1, space + 6) : v;
+    }
+    return v.slice(5); // MM-DD
+  };
+
   // Trend numeric resumen (delta primera mitad vs segunda mitad)
   const trend = useMemo(() => {
     if (!points || points.length < 4) return null;
@@ -162,9 +183,15 @@ export function SalesDailyChart({
       <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
         <div className="min-w-0">
           <div className="text-sm font-bold text-text">
-            {caption ?? `${opt.label} diaria${unitLabel ? ` · ${unitLabel}` : ""}`}
+            {isHourly
+              ? `Métricas horarias${unitLabel ? ` · ${unitLabel}` : ""}`
+              : (caption ?? `${opt.label} diaria${unitLabel ? ` · ${unitLabel}` : ""}`)}
           </div>
-          {subtitle && <div className="text-[10px] text-text-muted mt-0.5">{subtitle}</div>}
+          {subtitle && (
+            <div className="text-[10px] text-text-muted mt-0.5">
+              {isHourly ? "Distribución por hora del día (24 buckets, timezone Argentina)" : subtitle}
+            </div>
+          )}
           <div className="text-[10px] text-text-muted mt-1 flex items-center gap-2 flex-wrap">
             <span>Total del periodo: <strong className="text-text tabular-nums">{fmtTooltipValue(totalSum, unit)}</strong></span>
             {trend && (
@@ -269,8 +296,9 @@ export function SalesDailyChart({
           <XAxis
             dataKey="date"
             tick={{ fontSize: 10 }}
-            tickFormatter={(v: string) => (v ? v.slice(5) : "")}
-            minTickGap={20}
+            tickFormatter={xTickFormatter}
+            minTickGap={isHourly ? 8 : 20}
+            interval={isHourly ? 1 : "preserveStartEnd"}
           />
           <YAxis
             tick={{ fontSize: 10 }}
@@ -282,8 +310,45 @@ export function SalesDailyChart({
             contentStyle={{ borderRadius: 8, fontSize: 11 }}
           />
 
-          {/* Si la variable es splittable y stacked: areas apiladas TN + ML */}
-          {splittable && stacked && opt.tnKey && opt.mlKey && (
+          {/* Modo horario (HOY/AYER): barras stacked TN + ML por hora */}
+          {isHourly && splittable && opt.tnKey && opt.mlKey && (
+            <>
+              {channels.has("tn") && (
+                <Bar
+                  dataKey={opt.tnKey as string}
+                  name={CHANNEL_META.tn.label}
+                  stackId="ch"
+                  fill={CHANNEL_META.tn.color}
+                  isAnimationActive={false}
+                  radius={[2, 2, 0, 0]}
+                />
+              )}
+              {channels.has("ml") && (
+                <Bar
+                  dataKey={opt.mlKey as string}
+                  name={CHANNEL_META.ml.label}
+                  stackId="ch"
+                  fill={CHANNEL_META.ml.color}
+                  isAnimationActive={false}
+                  radius={[2, 2, 0, 0]}
+                />
+              )}
+            </>
+          )}
+
+          {/* Modo horario y variable NO splittable: una sola barra */}
+          {isHourly && !splittable && (
+            <Bar
+              dataKey={opt.totalKey as string}
+              name={opt.label}
+              fill="#7a3eae"
+              isAnimationActive={false}
+              radius={[2, 2, 0, 0]}
+            />
+          )}
+
+          {/* Modo diario: areas apiladas TN + ML */}
+          {!isHourly && splittable && stacked && opt.tnKey && opt.mlKey && (
             <>
               {channels.has("tn") && (
                 <Area
@@ -312,8 +377,8 @@ export function SalesDailyChart({
             </>
           )}
 
-          {/* Si splittable y NO stacked: areas superpuestas separadas */}
-          {splittable && !stacked && opt.tnKey && opt.mlKey && (
+          {/* Modo diario y NO stacked: areas superpuestas separadas */}
+          {!isHourly && splittable && !stacked && opt.tnKey && opt.mlKey && (
             <>
               {channels.has("tn") && (
                 <Area
@@ -342,8 +407,8 @@ export function SalesDailyChart({
             </>
           )}
 
-          {/* Si NO es splittable: area unica con el total */}
-          {!splittable && (
+          {/* Modo diario y NO splittable: area unica con el total */}
+          {!isHourly && !splittable && (
             <Area
               type="monotone"
               dataKey={opt.totalKey as string}
@@ -355,8 +420,9 @@ export function SalesDailyChart({
             />
           )}
 
-          {/* Linea Total — siempre visible si el canal "total" esta activo y la variable es splittable */}
-          {splittable && channels.has("total") && (
+          {/* Linea Total — solo en modo DIARIO con canal "total" activo
+              (en modo horario las barras stacked ya muestran el total naturalmente). */}
+          {!isHourly && splittable && channels.has("total") && (
             <Line
               type="monotone"
               dataKey={opt.totalKey as string}
@@ -368,7 +434,7 @@ export function SalesDailyChart({
             />
           )}
 
-          {todayRef && (
+          {todayRef && !isHourly && (
             <ReferenceLine
               x={todayRef}
               stroke="#374151"
