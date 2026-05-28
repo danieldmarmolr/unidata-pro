@@ -75,12 +75,13 @@ type Item = {
   history: HistoryEntry[];
   thumbnail: string;
   bank: {
-    cbu?: string | null;
-    cbu_alias?: string | null;
+    cvu?: string | null;
     alias?: string | null;
-    bank_name?: string | null;
-    account_owner?: string | null;
-    status?: string | null;
+    name?: string | null;
+    email?: string | null;
+    customer_id?: string | null;
+    is_active?: boolean;
+    needs_cvu?: boolean;
   } | null;
   invoice: { id: string; tipo: string; numero: string; link: string; fecha: string | null; total: number } | null;
   finance_action: FinanceAction | null;
@@ -344,22 +345,44 @@ function ReturnCard({ item: r }: { item: Item }) {
             {firstItemTitle && <> · {firstItemTitle.slice(0, 50)}{firstItemTitle.length > 50 ? "…" : ""}</>}
             {r.return_items.length > 1 && <> +{r.return_items.length - 1}</>}
           </div>
-          {/* CBU prominente + WhatsApp directo al dropper si sin token (lo mas
-              usado por Finanzas para agilizar la transferencia) */}
+          {/* CVU/Alias copy + flags WhatsApp accionables.
+              Lo mas pedido por Finanzas: copiar CVU sin abrir el detalle. */}
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            {r.bank?.cbu && (
-              <CopyChip
-                label="CBU"
-                value={r.bank.cbu}
-                mono
-                hint={r.bank.bank_name ?? undefined}
-              />
+            {r.bank?.cvu && (
+              <CopyChip label="CVU" value={r.bank.cvu} mono hint="Talo · click para copiar" />
             )}
-            {(r.bank?.cbu_alias || r.bank?.alias) && (
-              <CopyChip
-                label="Alias"
-                value={(r.bank.cbu_alias || r.bank.alias) as string}
-              />
+            {r.bank?.alias && (
+              <CopyChip label="Alias" value={r.bank.alias} hint="Talo · click para copiar" />
+            )}
+            {r.bank?.needs_cvu && (
+              <span
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-semibold"
+                title="El dropper tiene cuenta Talo pero no cargo CVU todavia"
+              >
+                ⚠️ Falta CVU
+              </span>
+            )}
+            {!r.bank && (
+              <span
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-100 border border-red-300 text-red-700 text-[11px] font-semibold"
+                title="No hay cuenta Talo registrada — el dropper tiene que crearla en Unidrop"
+              >
+                ⛔ Sin cuenta Talo
+              </span>
+            )}
+            {r.bank?.needs_cvu && r.dropshipper.phone && (
+              <a
+                href={`https://wa.me/${r.dropshipper.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(
+                  `Hola ${r.dropshipper.name || ""}, necesitamos tu CVU de Talo para devolverte la plata del claim ${r.claim_id ?? ""} (monto ${r.amount_to_refund}). Por favor cargalo desde unidrop.com.ar.`,
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-200 transition"
+                onClick={(e) => e.stopPropagation()}
+                title="WhatsApp: pedir al dropper que cargue el CVU"
+              >
+                <MessageCircle size={11} /> Pedir CVU
+              </a>
             )}
             {r.ml_account.sin_token && r.dropshipper.phone && (
               <a
@@ -372,7 +395,7 @@ function ReturnCard({ item: r }: { item: Item }) {
                 onClick={(e) => e.stopPropagation()}
                 title={`WhatsApp al dropper (${r.dropshipper.phone})`}
               >
-                <MessageCircle size={11} /> WhatsApp dropper
+                <MessageCircle size={11} /> Renovar token
               </a>
             )}
           </div>
@@ -480,24 +503,34 @@ function ReturnCard({ item: r }: { item: Item }) {
             </div>
           )}
 
-          {/* Datos bancarios */}
+          {/* Cuenta Talo (CVU + alias) — info para transferir */}
           <div>
             <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-              Datos bancarios
+              Cuenta Talo del dropshipper
             </div>
             {!r.bank ? (
-              <div className="text-xs text-text-muted bg-red-50 border border-red-200 rounded p-2">
-                Sin cuenta bancaria registrada en Talo para este dropshipper. Pedile al equipo que la cargue desde Unidrop.
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
+                ⛔ Sin cuenta Talo registrada. El dropper tiene que crearla en{" "}
+                <a href="https://unidrop.com.ar" target="_blank" rel="noopener noreferrer" className="underline">unidrop.com.ar</a>{" "}
+                antes de que podamos transferirle.
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <Field label="Titular"   value={r.bank.account_owner ?? "—"} />
-                <Field label="CUIT"      value={r.dropshipper.cuit || "—"} copyable={!!r.dropshipper.cuit} />
-                <Field label="Banco"     value={r.bank.bank_name ?? "—"} />
-                <Field label="CBU/CVU"   value={r.bank.cbu ?? "—"} copyable={!!r.bank.cbu} mono />
-                <Field label="Alias"     value={r.bank.cbu_alias || r.bank.alias || "—"} copyable={!!(r.bank.cbu_alias || r.bank.alias)} />
-                <Field label="Monto a devolver" value={fmtMoney(r.amount_to_refund)} />
-              </div>
+              <>
+                {r.bank.needs_cvu && (
+                  <div className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-2 mb-2">
+                    ⚠️ Tiene cuenta Talo (alias <span className="font-mono">{r.bank.alias}</span>) pero <strong>no cargó el CVU</strong>.
+                    Sin CVU no se puede transferir. Usá el botón "Pedir CVU" del header para mandarle WhatsApp.
+                  </div>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <Field label="Titular"        value={r.bank.name || "—"} />
+                  <Field label="CUIT"           value={r.dropshipper.cuit || "—"} copyable={!!r.dropshipper.cuit} />
+                  <Field label="CVU"            value={r.bank.cvu ?? "—"} copyable={!!r.bank.cvu} mono />
+                  <Field label="Alias"          value={r.bank.alias ?? "—"} copyable={!!r.bank.alias} />
+                  <Field label="Email Talo"     value={r.bank.email ?? "—"} />
+                  <Field label="Monto a devolver" value={fmtMoney(r.amount_to_refund)} />
+                </div>
+              </>
             )}
           </div>
 

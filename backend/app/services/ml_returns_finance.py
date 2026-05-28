@@ -245,19 +245,28 @@ def list_ml_returns(
         """, {"ids": ml_order_ids}) or []
         thumb_by_oid = {int(r[0]): r[1] for r in thumb_rows if r[1]}
 
-    # 6) Bank accounts del dropshipper
+    # 6) Cuentas Talo del dropshipper. Schema real (verificado):
+    #    id, user_id (uuid), customer_id (int), cvu, alias, name, email,
+    #    webhook_url, isActive, userId (int), createdAt, updatedAt.
+    # NO existe `cbu`/`bank_name`/`account_owner` que yo habia asumido — esta
+    # tabla guarda cuentas Talo (CVU + alias), no cuentas bancarias clasicas.
+    # Si el dropper no cargo CVU todavia, la cuenta tiene alias pero cvu='' →
+    # Finanzas no puede transferir y hay que pedirle que complete el setup.
     bank_by_uid: dict[int, dict] = {}
     if user_ids:
         cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
         bank_select = ['"userId"::bigint AS uid']
         bank_extra: list[str] = []
-        for col in ("cbu", "cbu_alias", "alias", "bank_name", "account_owner"):
+        for col in ("cvu", "alias", "name", "email", "customer_id"):
             if col in cpa_cols:
-                bank_select.append(f'COALESCE("{col}", \'\') AS {col}')
+                if col == "customer_id":
+                    bank_select.append('"customer_id"::text AS customer_id')
+                else:
+                    bank_select.append(f'COALESCE("{col}", \'\') AS {col}')
                 bank_extra.append(col)
-        if "status" in cpa_cols:
-            bank_select.append('COALESCE(status::text, \'\') AS status')
-            bank_extra.append("status")
+        if "isActive" in cpa_cols:
+            bank_select.append('COALESCE("isActive", true) AS is_active')
+            bank_extra.append("is_active")
         bank_rows = q(eng, f"""
             SELECT DISTINCT ON ("userId") {', '.join(bank_select)}
             FROM public."CustomerPaymentAccount"
@@ -267,7 +276,9 @@ def list_ml_returns(
         for br in bank_rows:
             d: dict = {}
             for i, col in enumerate(bank_extra, 1):
-                d[col] = br[i] if br[i] else None
+                d[col] = br[i] if br[i] not in ("", None) else None
+            # Flag derivado: Finanzas necesita CVU para poder transferir.
+            d["needs_cvu"] = not bool(d.get("cvu"))
             bank_by_uid[int(br[0])] = d
 
     # 7) Facturas Contabilium por order ID
