@@ -189,18 +189,12 @@ export function ProfitConsolidatedChart({ data }: { data: ProfitConsolidatedResp
           />
           <YAxis
             tick={{ fontSize: 10 }}
-            tickFormatter={(v: number) =>
-              Math.abs(v) >= 1_000_000
-                ? `$${(v / 1_000_000).toFixed(1)}M`
-                : Math.abs(v) >= 1_000
-                  ? `$${(v / 1_000).toFixed(0)}k`
-                  : `$${v}`
-            }
+            tickFormatter={(v: number) => formatCurrency(v, "ARS", 0)}
           />
           <Tooltip
             formatter={(value, name) => {
               const v = Number(value ?? 0);
-              return [formatCurrency(v), String(name ?? "")];
+              return [formatCurrency(v, "ARS", 2), String(name ?? "")];
             }}
             labelFormatter={(label) => `Fecha: ${label}`}
             contentStyle={{ borderRadius: 8, fontSize: 11 }}

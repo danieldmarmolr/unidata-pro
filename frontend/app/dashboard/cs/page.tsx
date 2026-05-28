@@ -19,6 +19,7 @@ import { OrderDetailModal } from "@/components/order-detail-modal";
 import { ExpandableOrderRow, type OrderRowData } from "@/components/expandable-order-row";
 import { SmartSearch } from "@/components/smart-search";
 import { api } from "@/lib/api";
+import { formatCurrency } from "@/lib/utils";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { useUnitFromQuery, type Unit } from "@/lib/use-unit-from-query";
 import type { KpiCard as KpiCardT, CategoryValue, TimeSeriesPoint } from "@/lib/types";
@@ -554,7 +555,7 @@ function VipCsSection({
       </div>
       <div className="text-2xl font-extrabold text-text tabular-nums">{c.count.toLocaleString("es-AR")}</div>
       <div className="text-[10px] text-text-muted mt-0.5">
-       Lifetime: <span className="font-bold text-text">$ {(c.lifetime / 1_000_000).toFixed(1)}M</span>
+       Lifetime: <span className="font-bold text-text">{formatCurrency(c.lifetime, "ARS", 2)}</span>
       </div>
      </button>
     ))}

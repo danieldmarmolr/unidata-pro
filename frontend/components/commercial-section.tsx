@@ -275,14 +275,10 @@ export function CommercialSection() {
                   <XAxis dataKey="bucket" tick={{ fontSize: 10 }} tickFormatter={fmtTickX} minTickGap={20} />
                   <YAxis
                     tick={{ fontSize: 10 }}
-                    tickFormatter={(v: number) =>
-                      Math.abs(v) >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M`
-                      : Math.abs(v) >= 1_000 ? `$${(v / 1_000).toFixed(0)}k`
-                      : `$${v}`
-                    }
+                    tickFormatter={(v: number) => formatCurrency(v, "ARS", 0)}
                   />
                   <Tooltip
-                    formatter={(value, name) => [formatCurrency(Number(value ?? 0)), String(name ?? "")]}
+                    formatter={(value, name) => [formatCurrency(Number(value ?? 0), "ARS", 2), String(name ?? "")]}
                     labelFormatter={(l) => `Periodo: ${l}`}
                     contentStyle={{ borderRadius: 8, fontSize: 11 }}
                   />
@@ -308,14 +304,10 @@ export function CommercialSection() {
                   <XAxis dataKey="bucket" tick={{ fontSize: 10 }} tickFormatter={fmtTickX} minTickGap={20} />
                   <YAxis
                     tick={{ fontSize: 10 }}
-                    tickFormatter={(v: number) =>
-                      Math.abs(v) >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M`
-                      : Math.abs(v) >= 1_000 ? `$${(v / 1_000).toFixed(0)}k`
-                      : `$${v}`
-                    }
+                    tickFormatter={(v: number) => formatCurrency(v, "ARS", 0)}
                   />
                   <Tooltip
-                    formatter={(value, name) => [formatCurrency(Number(value ?? 0)), String(name ?? "")]}
+                    formatter={(value, name) => [formatCurrency(Number(value ?? 0), "ARS", 2), String(name ?? "")]}
                     labelFormatter={(l) => `Periodo: ${l}`}
                     contentStyle={{ borderRadius: 8, fontSize: 11 }}
                   />

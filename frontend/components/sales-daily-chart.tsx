@@ -85,15 +85,7 @@ type Channel = keyof typeof CHANNEL_META;
 const ALL_CHANNELS: Channel[] = ["tn", "ml", "total"];
 
 function compactAxis(v: number, unit: "currency" | "number"): string {
-  const abs = Math.abs(v);
-  if (unit === "currency") {
-    if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-    if (abs >= 1_000) return `$${(v / 1_000).toFixed(0)}k`;
-    return `$${v}`;
-  }
-  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-  return String(Math.round(v));
+  return unit === "currency" ? formatCurrency(v, "ARS", 0) : formatNumber(Math.round(v));
 }
 
 function fmtTooltipValue(v: number, unit: "currency" | "number"): string {

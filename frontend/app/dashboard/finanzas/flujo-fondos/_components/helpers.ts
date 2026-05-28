@@ -16,9 +16,12 @@ export function fmtArsCompact(n: number | string | null | undefined): string {
   if (n === null || n === undefined) return "—";
   const v = typeof n === "string" ? Number(n) : n;
   if (!Number.isFinite(v)) return "—";
-  if (Math.abs(v) >= 1_000_000) return `$ ${(v / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(v) >= 1_000) return `$ ${(v / 1_000).toFixed(1)}k`;
-  return `$ ${v.toFixed(0)}`;
+  return new Intl.NumberFormat("es-AR", {
+    style: "currency",
+    currency: "ARS",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(v);
 }
 
 export function fmtDate(iso: string | null | undefined): string {

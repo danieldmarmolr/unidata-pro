@@ -73,13 +73,8 @@ type Metric = "units" | "revenue";
 type Mode = "stacked" | "total";
 
 function fmt(v: number, metric: Metric) {
-  if (metric === "revenue") {
-    if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-    return `$${v.toFixed(0)}`;
-  }
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-  return v.toString();
+  if (metric === "revenue") return formatCurrency(v, "ARS", 0);
+  return formatNumber(Math.round(v));
 }
 
 function fmtFull(v: number, metric: Metric) {

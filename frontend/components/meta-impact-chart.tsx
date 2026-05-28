@@ -30,11 +30,7 @@ type CampaignDailyPoint = { d: string; spend: number; clicks: number; impression
 
 type Campaign = { id: string; name: string; spend: number; status: string; effective_status: string };
 
-const shortCurrency = (v: number) => {
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-  if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-  return `$${v.toFixed(0)}`;
-};
+const shortCurrency = (v: number) => formatCurrency(v, "ARS", 0);
 
 export function MetaImpactChart({
   daily,

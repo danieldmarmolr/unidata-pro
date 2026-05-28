@@ -1303,8 +1303,8 @@ export default function GerenciaUnificadaPage() {
                   <LineChart data={d360.cash_flow_30d.saldo_serie}>
                     <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
                     <XAxis dataKey="date" tickFormatter={(v) => (v ? v.slice(5) : "")} tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-                    <Tooltip formatter={(value) => formatCurrency(Number(value ?? 0))} />
+                    <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => formatCurrency(Number(v) || 0, "ARS", 0)} />
+                    <Tooltip formatter={(value) => formatCurrency(Number(value ?? 0), "ARS", 2)} />
                     <Line type="monotone" dataKey="saldo" stroke="#a855f7" strokeWidth={2} dot={false} name="Saldo final dia" />
                   </LineChart>
                 </ResponsiveContainer>

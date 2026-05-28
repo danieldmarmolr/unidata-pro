@@ -87,19 +87,11 @@ const ALL_CHANNELS: Channel[] = ["unistore_tn", "unistore_ml", "unidrop", "total
 
 function fmtValue(v: number, unit: "currency" | "number"): string {
   if (!Number.isFinite(v)) return "—";
-  return unit === "currency" ? formatCurrency(v) : formatNumber(v);
+  return unit === "currency" ? formatCurrency(v, "ARS", 2) : formatNumber(v);
 }
 
 function compactAxis(v: number, unit: "currency" | "number"): string {
-  const abs = Math.abs(v);
-  if (unit === "currency") {
-    if (abs >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-    if (abs >= 1_000) return `$${(v / 1_000).toFixed(0)}k`;
-    return `$${v}`;
-  }
-  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-  return String(Math.round(v));
+  return unit === "currency" ? formatCurrency(v, "ARS", 0) : formatNumber(Math.round(v));
 }
 
 export function DailyMetricChart({

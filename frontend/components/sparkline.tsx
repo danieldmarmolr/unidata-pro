@@ -17,11 +17,7 @@ export function DailyRevenueChart({
   height?: number;
 }) {
   const total = points.reduce((s, p) => s + p.value, 0);
-  const tickFmt = (v: number) => {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(0)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
-    return v.toString();
-  };
+  const tickFmt = (v: number) => formatCurrency(v, "ARS", 0);
   return (
     <div className="bg-surface border border-border rounded-xl p-5">
       <div className="flex items-baseline justify-between mb-3">

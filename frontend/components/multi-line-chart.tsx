@@ -40,12 +40,8 @@ export function MultiLineChart({
     return row;
   });
 
-  const fmt = (v: number) => (formatter === "currency" ? formatCurrency(v) : formatNumber(v));
-  const tickFmt = (v: number) => {
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(0)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
-    return v.toString();
-  };
+  const fmt = (v: number) => (formatter === "currency" ? formatCurrency(v, "ARS", 2) : formatNumber(v));
+  const tickFmt = (v: number) => (formatter === "currency" ? formatCurrency(v, "ARS", 0) : formatNumber(v));
 
   return (
     <div className="bg-surface border border-border rounded-xl p-5">

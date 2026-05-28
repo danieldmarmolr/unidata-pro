@@ -33,20 +33,14 @@ const PALETTE = [
 
 function fmtValue(v: unknown, kind: MetricDef["kind"] = "number"): string {
   const n = Number(v) || 0;
-  if (kind === "currency") return formatCurrency(n);
-  if (kind === "percent") return `${n.toFixed(1)}%`;
+  if (kind === "currency") return formatCurrency(n, "ARS", 2);
+  if (kind === "percent") return `${n.toFixed(2)}%`;
   return formatNumber(n);
 }
 
 function tickFmt(v: number, kind: MetricDef["kind"] = "number"): string {
-  if (kind === "currency") {
-    if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-    return `$${v.toFixed(0)}`;
-  }
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (v >= 1_000) return `${(v / 1_000).toFixed(0)}K`;
-  return v.toString();
+  if (kind === "currency") return formatCurrency(v, "ARS", 0);
+  return formatNumber(Math.round(v));
 }
 
 const VIZ_ICONS: Record<VizType, React.ReactNode> = {
