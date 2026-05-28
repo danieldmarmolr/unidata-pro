@@ -945,6 +945,9 @@ def lotes_consumption(sku: str) -> dict:
     today_iso = dt.date.today().isoformat()
     out["available"] = True
 
+    # USD del lote anterior cronologico (para calcular delta vs prev)
+    prev_usd: float | None = None
+
     # Construir periodos: lote[i].fecha_fin = lote[i+1].fecha_ingreso (o today)
     for idx, h in enumerate(enriched):
         from_d = h["_fecha"]
@@ -965,15 +968,35 @@ def lotes_consumption(sku: str) -> dict:
 
         sales = _sales_in_period(sku, from_d, to_d)
         cantidad_lote = int(h.get("cantidad") or 0)
+        # Costos: distinguimos s/IVA y c/IVA (la tabla viene de Costos con
+        # ambos campos). Si solo viene uno usamos el fallback.
+        costo_unit_ars_sin_iva = float(h.get("costo_unit_ars") or 0)
         costo_unit_ars_iva = float(
             h.get("costo_con_iva_unit_ars")
-            or h.get("costo_unit_ars")
+            or (costo_unit_ars_sin_iva * 1.21 if costo_unit_ars_sin_iva else 0)
             or h.get("cost_ars") or 0
         )
         costo_unit_usd = float(
             h.get("costo_unit_usd_max")
             or h.get("cost_usd") or 0
         )
+        precio_sugerido = float(h.get("precio_ars") or 0) or None
+
+        # Margen sugerido teorico: usando el precio sugerido del lote vs costo
+        # c/IVA. Da "cuanto deberia dejar este lote vendiendo a precio sugerido"
+        margen_sugerido_pct: float | None = None
+        if precio_sugerido and precio_sugerido > 0 and costo_unit_ars_iva > 0:
+            margen_sugerido_pct = round(
+                (precio_sugerido - costo_unit_ars_iva) / precio_sugerido * 100, 1,
+            )
+
+        # Delta del costo USD vs lote anterior cronologico
+        delta_usd_pct: float | None = None
+        if prev_usd and prev_usd > 0 and costo_unit_usd > 0:
+            delta_usd_pct = round((costo_unit_usd - prev_usd) / prev_usd * 100, 1)
+        if costo_unit_usd > 0:
+            prev_usd = costo_unit_usd
+
         units_sold = sales["units"]
         revenue = sales["revenue"]
         costo_total = units_sold * costo_unit_ars_iva
@@ -993,7 +1016,10 @@ def lotes_consumption(sku: str) -> dict:
             "cantidad_lote": cantidad_lote,
             "costo_unit_usd": round(costo_unit_usd, 2) if costo_unit_usd else None,
             "costo_unit_ars": round(costo_unit_ars_iva, 0) if costo_unit_ars_iva else None,
-            "precio_ars_sugerido": float(h.get("precio_ars") or 0) or None,
+            "costo_unit_ars_sin_iva": round(costo_unit_ars_sin_iva, 0) if costo_unit_ars_sin_iva else None,
+            "delta_usd_pct": delta_usd_pct,
+            "precio_ars_sugerido": precio_sugerido,
+            "margen_sugerido_pct": margen_sugerido_pct,
             "units_sold": units_sold,
             "orders": sales["orders"],
             "revenue": round(revenue, 0),

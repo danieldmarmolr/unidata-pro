@@ -27,8 +27,11 @@ export type LoteConsumption = {
   dias: number;
   cantidad_lote: number;
   costo_unit_usd: number | null;
-  costo_unit_ars: number | null;
+  costo_unit_ars: number | null;             // ARS c/IVA
+  costo_unit_ars_sin_iva?: number | null;    // ARS s/IVA
+  delta_usd_pct?: number | null;             // delta vs lote anterior cronologico
   precio_ars_sugerido: number | null;
+  margen_sugerido_pct?: number | null;       // (precio - costo c/IVA) / precio * 100
   units_sold: number;
   orders: number;
   revenue: number;
@@ -399,116 +402,184 @@ export function SkuLotesConsumption({ data, loading }: Props) {
       </div>
       )}
 
-      {/* Tabla detalle por lote */}
-      <div className="border border-border rounded-lg overflow-hidden">
-        <div className="bg-soft/60 px-3 py-2 grid grid-cols-12 gap-2 text-[10px] uppercase tracking-wider text-text-muted font-bold">
-          <SortHeader col="col-span-3" sortKey="fecha" current={sortKey} dir={sortDir} onClick={clickSort}>Lote · Período</SortHeader>
-          <SortHeader col="col-span-1 text-right" sortKey="costo_usd" current={sortKey} dir={sortDir} onClick={clickSort}>Costo USD</SortHeader>
-          <SortHeader col="col-span-1 text-right" sortKey="costo_ars" current={sortKey} dir={sortDir} onClick={clickSort}>Costo ARS</SortHeader>
-          <SortHeader col="col-span-2 text-right" sortKey="units_sold" current={sortKey} dir={sortDir} onClick={clickSort}>Vendidas · vel/d</SortHeader>
-          <SortHeader col="col-span-1 text-right" sortKey="revenue" current={sortKey} dir={sortDir} onClick={clickSort}>Revenue</SortHeader>
-          <SortHeader col="col-span-1 text-right" sortKey="ganancia" current={sortKey} dir={sortDir} onClick={clickSort}>Ganancia</SortHeader>
-          <SortHeader col="col-span-1 text-right" sortKey="margen_pct" current={sortKey} dir={sortDir} onClick={clickSort}>Margen</SortHeader>
-          <SortHeader col="col-span-2" sortKey="consumido_pct" current={sortKey} dir={sortDir} onClick={clickSort}>Consumido del lote</SortHeader>
-        </div>
-        <div className="divide-y divide-border">
-          {filteredLotes.length === 0 && (
-            <div className="px-3 py-6 text-center text-text-muted text-xs italic">
-              Ningún lote coincide con los filtros aplicados.
-            </div>
-          )}
-          {filteredLotes.map((l) => {
-            const consumed = l.consumido_pct ?? 0;
-            const cap = Math.min(100, consumed);
-            const over = consumed > 100;
-            return (
-              <div key={`${l.lote}-${l.fecha_ingreso}`} className="grid grid-cols-12 gap-2 items-center px-3 py-2.5 text-sm hover:bg-soft/30 transition">
-                <div className="col-span-3 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <Package size={11} className="text-primary shrink-0" />
-                    {l.lote_id ? (
-                      <a
-                        href={`/dashboard/costos?lote_id=${l.lote_id}`}
-                        className="font-mono text-xs font-bold truncate text-primary hover:underline inline-flex items-center gap-1 group"
-                        title={`Ver detalle del lote ${l.lote ?? l.lote_id}`}
-                      >
-                        {l.lote ?? `#${l.lote_id}`}
-                        <ExternalLink size={9} className="opacity-50 group-hover:opacity-100" />
-                      </a>
-                    ) : (
-                      <span className="font-mono text-xs font-bold truncate" title={l.lote ?? ""}>{l.lote ?? "?"}</span>
-                    )}
-                    {l.vigente && (
-                      <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
-                        <CheckCircle2 size={8} /> vigente
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[10px] text-text-muted mt-0.5 flex items-center gap-1 flex-wrap">
-                    <Calendar size={9} />
-                    {l.fecha_ingreso} → {l.fecha_fin} <span className="opacity-70">({l.dias}d)</span>
-                    {l.proveedor && <span className="opacity-70">· {l.proveedor}</span>}
-                  </div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className="font-bold tabular-nums text-violet-700">
-                    {l.costo_unit_usd !== null ? `$${l.costo_unit_usd.toFixed(2)}` : "—"}
-                  </div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className="font-bold tabular-nums text-text">
-                    {l.costo_unit_ars !== null ? fmtAr(l.costo_unit_ars) : "—"}
-                  </div>
-                </div>
-                <div className="col-span-2 text-right">
-                  <div className="font-extrabold tabular-nums text-text">{formatNumber(l.units_sold)}</div>
-                  <div className="text-[10px] text-text-muted">{l.velocidad_diaria.toFixed(2)} u/d · {l.orders} ord</div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className="font-bold tabular-nums text-primary">{fmtAr(l.revenue)}</div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className={`font-bold tabular-nums ${l.ganancia >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
-                    {fmtAr(l.ganancia)}
-                  </div>
-                </div>
-                <div className="col-span-1 text-right">
-                  <div className={`text-xs font-bold tabular-nums ${
-                    l.margen_pct === null ? "text-text-muted" :
-                    l.margen_pct > 30 ? "text-emerald-700" :
-                    l.margen_pct > 10 ? "text-amber-700" : "text-rose-700"
-                  }`}>
-                    {l.margen_pct !== null ? `${l.margen_pct}%` : "—"}
-                  </div>
-                </div>
-                <div className="col-span-2">
-                  {l.cantidad_lote > 0 ? (
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-2 bg-soft rounded-full overflow-hidden relative">
-                        <div
-                          className={over ? "bg-rose-500" : cap > 80 ? "bg-amber-500" : "bg-emerald-500"}
-                          style={{ width: `${cap}%`, height: "100%" }}
-                        />
-                      </div>
-                      <span className={`text-[10px] tabular-nums font-bold w-12 text-right ${
-                        over ? "text-rose-700" : "text-text"
+      {/* Tabla UNIFICADA: combina toda la info del lote (catalogo) con el
+          cruce de ventas reales. Reemplaza la antigua "Historial de lotes"
+          + "Consumo lote a lote" en una sola fila por lote. */}
+      <div className="border border-border rounded-lg overflow-hidden overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-soft/60 text-[10px] uppercase tracking-wider text-text-muted font-bold">
+              <TH onClick={() => clickSort("fecha")} active={sortKey === "fecha"} dir={sortDir} align="left">Lote · Periodo · Proveedor</TH>
+              <TH align="right">Cantidad</TH>
+              <TH onClick={() => clickSort("costo_usd")} active={sortKey === "costo_usd"} dir={sortDir} align="right">Costo USD</TH>
+              <TH onClick={() => clickSort("costo_ars")} active={sortKey === "costo_ars"} dir={sortDir} align="right">Costo ARS s/c IVA</TH>
+              <TH align="right">Precio sug.</TH>
+              <TH align="right">Margen sug.</TH>
+              <TH onClick={() => clickSort("units_sold")} active={sortKey === "units_sold"} dir={sortDir} align="right">Vendidas · vel/d</TH>
+              <TH onClick={() => clickSort("revenue")} active={sortKey === "revenue"} dir={sortDir} align="right">Revenue</TH>
+              <TH onClick={() => clickSort("ganancia")} active={sortKey === "ganancia"} dir={sortDir} align="right">Ganancia</TH>
+              <TH onClick={() => clickSort("margen_pct")} active={sortKey === "margen_pct"} dir={sortDir} align="right">Margen real</TH>
+              <TH onClick={() => clickSort("consumido_pct")} active={sortKey === "consumido_pct"} dir={sortDir} align="left">Consumido</TH>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {filteredLotes.length === 0 && (
+              <tr>
+                <td colSpan={11} className="px-3 py-6 text-center text-text-muted text-xs italic">
+                  Ningún lote coincide con los filtros aplicados.
+                </td>
+              </tr>
+            )}
+            {filteredLotes.map((l) => {
+              const consumed = l.consumido_pct ?? 0;
+              const cap = Math.min(100, consumed);
+              const over = consumed > 100;
+              const deltaUsd = l.delta_usd_pct;
+              return (
+                <tr key={`${l.lote}-${l.fecha_ingreso}`} className="hover:bg-soft/30 transition">
+                  {/* Lote · Periodo · Proveedor */}
+                  <td className="px-3 py-2.5 min-w-[200px]">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Package size={11} className="text-primary shrink-0" />
+                      {l.lote_id ? (
+                        <a
+                          href={`/dashboard/costos?lote_id=${l.lote_id}`}
+                          className="font-mono text-xs font-bold text-primary hover:underline inline-flex items-center gap-1 group"
+                          title={`Ver detalle del lote ${l.lote ?? l.lote_id}`}
+                        >
+                          {l.lote ?? `#${l.lote_id}`}
+                          <ExternalLink size={9} className="opacity-50 group-hover:opacity-100" />
+                        </a>
+                      ) : (
+                        <span className="font-mono text-xs font-bold" title={l.lote ?? ""}>{l.lote ?? "?"}</span>
+                      )}
+                      {l.vigente && (
+                        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-200">
+                          <CheckCircle2 size={8} /> vigente
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-text-muted mt-0.5 flex items-center gap-1 flex-wrap">
+                      <Calendar size={9} />
+                      {l.fecha_ingreso} → {l.fecha_fin} <span className="opacity-70">({l.dias}d)</span>
+                      {l.proveedor && <span className="opacity-70">· {l.proveedor}</span>}
+                    </div>
+                  </td>
+
+                  {/* Cantidad importada */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-bold tabular-nums text-text">
+                      {l.cantidad_lote > 0 ? formatNumber(l.cantidad_lote) : "—"}
+                    </div>
+                    <div className="text-[9px] text-text-muted">importadas</div>
+                  </td>
+
+                  {/* Costo USD + Δ vs prev */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-bold tabular-nums text-violet-700">
+                      {l.costo_unit_usd !== null ? `US$${l.costo_unit_usd.toFixed(2)}` : "—"}
+                    </div>
+                    {typeof deltaUsd === "number" && (
+                      <div className={`text-[9px] tabular-nums inline-flex items-center gap-0.5 ${
+                        deltaUsd > 2 ? "text-rose-700" :
+                        deltaUsd < -2 ? "text-emerald-700" : "text-text-muted"
                       }`}>
-                        {l.consumido_pct?.toFixed(0)}%
-                      </span>
+                        {deltaUsd > 2 ? <TrendingUp size={8} /> : deltaUsd < -2 ? <TrendingDown size={8} /> : <Minus size={8} />}
+                        {deltaUsd >= 0 ? "+" : ""}{deltaUsd.toFixed(1)}% prev
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Costo ARS: s/IVA y c/IVA stacked */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-bold tabular-nums text-text">
+                      {l.costo_unit_ars !== null ? fmtAr(l.costo_unit_ars) : "—"}
                     </div>
-                  ) : (
-                    <span className="text-[10px] text-text-muted italic">Sin cantidad de lote</span>
-                  )}
-                  {over && (
-                    <div className="text-[9px] text-rose-700 mt-0.5 inline-flex items-center gap-1">
-                      <AlertTriangle size={9} /> Excede el lote (ventas cubiertas por otros lotes)
+                    <div className="text-[9px] text-text-muted">
+                      {l.costo_unit_ars_sin_iva ? `s/IVA ${fmtAr(l.costo_unit_ars_sin_iva)}` : "c/IVA"}
                     </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                  </td>
+
+                  {/* Precio sugerido */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-bold tabular-nums text-text">
+                      {l.precio_ars_sugerido ? fmtAr(l.precio_ars_sugerido) : "—"}
+                    </div>
+                    <div className="text-[9px] text-text-muted">precio sug.</div>
+                  </td>
+
+                  {/* Margen sugerido (teorico, sobre precio sugerido) */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className={`text-xs font-bold tabular-nums ${
+                      l.margen_sugerido_pct === null || l.margen_sugerido_pct === undefined ? "text-text-muted" :
+                      l.margen_sugerido_pct > 50 ? "text-emerald-700" :
+                      l.margen_sugerido_pct > 25 ? "text-amber-700" : "text-rose-700"
+                    }`}>
+                      {l.margen_sugerido_pct !== null && l.margen_sugerido_pct !== undefined ? `${l.margen_sugerido_pct}%` : "—"}
+                    </div>
+                    <div className="text-[9px] text-text-muted">teórico</div>
+                  </td>
+
+                  {/* Vendidas + velocidad */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-extrabold tabular-nums text-text">{formatNumber(l.units_sold)}</div>
+                    <div className="text-[9px] text-text-muted">{l.velocidad_diaria.toFixed(2)} u/d · {l.orders} ord</div>
+                  </td>
+
+                  {/* Revenue real */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className="font-bold tabular-nums text-primary">{fmtAr(l.revenue)}</div>
+                  </td>
+
+                  {/* Ganancia real */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className={`font-bold tabular-nums ${l.ganancia >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                      {fmtAr(l.ganancia)}
+                    </div>
+                  </td>
+
+                  {/* Margen real (sobre revenue) */}
+                  <td className="px-2 py-2.5 text-right">
+                    <div className={`text-xs font-bold tabular-nums ${
+                      l.margen_pct === null ? "text-text-muted" :
+                      l.margen_pct > 30 ? "text-emerald-700" :
+                      l.margen_pct > 10 ? "text-amber-700" : "text-rose-700"
+                    }`}>
+                      {l.margen_pct !== null ? `${l.margen_pct}%` : "—"}
+                    </div>
+                    <div className="text-[9px] text-text-muted">real</div>
+                  </td>
+
+                  {/* Consumido del lote */}
+                  <td className="px-2 py-2.5 min-w-[130px]">
+                    {l.cantidad_lote > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-2 bg-soft rounded-full overflow-hidden relative">
+                          <div
+                            className={over ? "bg-rose-500" : cap > 80 ? "bg-amber-500" : "bg-emerald-500"}
+                            style={{ width: `${cap}%`, height: "100%" }}
+                          />
+                        </div>
+                        <span className={`text-[10px] tabular-nums font-bold w-10 text-right ${
+                          over ? "text-rose-700" : "text-text"
+                        }`}>
+                          {l.consumido_pct?.toFixed(0)}%
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-text-muted italic">—</span>
+                    )}
+                    {over && (
+                      <div className="text-[9px] text-rose-700 mt-0.5 inline-flex items-center gap-1">
+                        <AlertTriangle size={9} /> excede lote
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       {!singleLote && (
@@ -522,27 +593,32 @@ export function SkuLotesConsumption({ data, loading }: Props) {
   );
 }
 
-function SortHeader({
-  col, sortKey, current, dir, onClick, children,
+// Header de tabla con sort opcional. Si onClick es undefined la columna no
+// es ordenable (ej. Cantidad, Precio sug., Margen sug.).
+function TH({
+  children, align = "left", onClick, active, dir,
 }: {
-  col: string;
-  sortKey: SortKey;
-  current: SortKey;
-  dir: SortDir;
-  onClick: (k: SortKey) => void;
   children: React.ReactNode;
+  align?: "left" | "right";
+  onClick?: () => void;
+  active?: boolean;
+  dir?: SortDir;
 }) {
-  const active = current === sortKey;
   const Icon = !active ? ArrowUpDown : dir === "asc" ? ArrowUp : ArrowDown;
-  const isRight = col.includes("text-right");
+  const alignCls = align === "right" ? "text-right" : "text-left";
+  if (!onClick) {
+    return <th className={`px-2 py-2 ${alignCls} font-bold`}>{children}</th>;
+  }
   return (
-    <button
-      type="button"
-      onClick={() => onClick(sortKey)}
-      className={`${col} inline-flex items-center gap-1 ${isRight ? "justify-end" : ""} cursor-pointer hover:text-text transition ${active ? "text-primary" : ""}`}
-    >
-      {children}
-      <Icon size={9} className={active ? "" : "opacity-40"} />
-    </button>
+    <th className={`px-2 py-2 ${alignCls} font-bold cursor-pointer select-none hover:text-text transition ${active ? "text-primary" : ""}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}
+      >
+        {children}
+        <Icon size={9} className={active ? "" : "opacity-40"} />
+      </button>
+    </th>
   );
 }

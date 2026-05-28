@@ -10,7 +10,6 @@ import { ExportButtons } from "@/components/export-buttons";
 import { SkuOmnichannel, type UnidropPricingPayload } from "@/components/sku-omnichannel";
 import { SkuStackedEvolution, type SeriesRow, type Granularity } from "@/components/sku-stacked-evolution";
 import { SkuStockDetail } from "@/components/sku-stock-detail";
-import { SkuLotesTimeline } from "@/components/sku-lotes-timeline";
 import { SkuKpiStrip } from "@/components/sku-kpi-strip";
 import { SkuDigipArticulo, type DigipArticuloInfo } from "@/components/sku-digip-articulo";
 import { SkuStockVsDemand } from "@/components/sku-stock-vs-demand";
@@ -390,18 +389,10 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
           ) : null}
         </div>
 
-        {/* Consumo lote a lote: cruce de cada lote con ventas omnicanal del
-            periodo, ganancia, margen y evolucion del costo USD/ARS */}
+        {/* Tabla unificada de lotes: cataloga (cantidad, costo, precio sug.,
+            margen teorico) + cruza con ventas reales (vendidas, ganancia,
+            margen real, consumido del lote) — todo en una sola fila por lote */}
         <SkuLotesConsumption data={lotesConsumptionData} loading={lotesConsumptionLoading} />
-
-        {/* Historial de lotes con delta de costo vs lote previo (timeline simple) */}
-        <div className="mb-6">
-          {lotesLoading ? (
-            <div className="bg-surface border border-border rounded-xl p-5 h-[200px] animate-pulse" />
-          ) : lotesData?.lotes && lotesData.lotes.length > 0 ? (
-            <SkuLotesTimeline lotes={lotesData.lotes} loteVigente={data?.cost_info?.lote ?? null} />
-          ) : null}
-        </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-6">
           {isLoading || !data ? (
