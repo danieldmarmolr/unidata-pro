@@ -11,7 +11,7 @@ GET    /api/ml-return-actions/{ml_order_id}/invoice-url -> link factura
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -45,7 +45,10 @@ class RevertBody(BaseModel):
 @router.get("")
 def list_(
     user: Annotated[dict, Depends(current_user)],
-    tab: Annotated[Literal["en_camino", "recibida_pendiente", "transferida", "rechazada", "todas"], Query()] = "todas",
+    # tab tolerante: si llega un valor no soportado, el service cae a "todas" en
+    # vez de tirar 422 (asi el frontend evoluciona mas rapido que el backend
+    # sin romper la pantalla)
+    tab: Annotated[str, Query()] = "todas",
     search: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
