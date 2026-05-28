@@ -50,12 +50,16 @@ def list_(
     # sin romper la pantalla)
     tab: Annotated[str, Query()] = "todas",
     search: Annotated[str | None, Query()] = None,
+    from_date: Annotated[str | None, Query(description="YYYY-MM-DD")] = None,
+    to_date: Annotated[str | None, Query(description="YYYY-MM-DD")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> dict:
     require_area(user, _AREAS)
     return ml_returns_finance.list_ml_returns(
-        tab=tab, search=search, limit=limit, offset=offset,
+        tab=tab, search=search,
+        from_date=from_date, to_date=to_date,
+        limit=limit, offset=offset,
     )
 
 

@@ -45,12 +45,15 @@ def list_ml_returns(
     *,
     tab: str = "todas",
     search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
     """
     tab: NOTIFICADA | EN_CAMINO | TRANSFERENCIA_PENDIENTE | CERRADA | transferida_fz | rechazada_fz | todas
     search: prefix-match contra DNI, nombre, email, number, claim, tracking, sku, titulo item
+    from_date / to_date: 'YYYY-MM-DD'. Filtra r."createdAt" entre los rangos.
     """
     eng = get_engine("unidrop")
 
@@ -94,6 +97,12 @@ def list_ml_returns(
             "OR r.\"returnTrackingCode\" ILIKE :s "
             "OR mla.nickname ILIKE :s)"
         )
+    if from_date:
+        where.append('r."createdAt" >= :from_date::date')
+        params["from_date"] = from_date
+    if to_date:
+        where.append('r."createdAt" < (:to_date::date + INTERVAL \'1 day\')')
+        params["to_date"] = to_date
 
     where_sql = (" AND " + " AND ".join(where)) if where else ""
 
@@ -387,30 +396,72 @@ def list_ml_returns(
     if tab in FZ_STATUSES:
         items = [it for it in items if it["finance_overlay"] == tab]
 
-    # 11) Counts por tab
-    # Cuenta sobre el universo ya filtrado por search (status ML count incluye
-    # solo lo del tab si tab in ML_STATUSES). Para los tabs ML, el count global
-    # se recalcula con una query agregada barata.
+    # 11) Counts por tab — respetan search + fechas, pero NO el tab actual
+    # (asi el usuario ve cuanto hay en cada bucket de su busqueda actual).
     counts = _empty_counts()
-    if tab in ML_STATUSES or tab in FZ_STATUSES or tab == "todas":
-        # Counts globales por status ML (independiente del tab actual) — query barata
-        status_counts = q(eng, """
-            SELECT status::text, COUNT(*)::int
-            FROM mercado_libre_dev."MercadoLibreReturn"
-            GROUP BY 1
-        """) or []
-        for sc in status_counts:
-            if sc[0] in ML_STATUSES:
-                counts[sc[0]] = int(sc[1] or 0)
-        counts["todas"] = sum(counts[s] for s in ML_STATUSES)
-        # Overlay Finanzas counts (cruzando todas las actions con returns existentes)
-        all_actions = ml_return_actions_db.list_actions(None)
-        counts["transferida_fz"] = sum(
-            1 for v in all_actions.values() if v.get("status") == "transferred"
+    # WHERE solo con search + fechas (sin sql_status)
+    count_where: list[str] = []
+    count_params: dict[str, Any] = {}
+    if search:
+        count_params["s"] = f"%{search.strip()}%"
+        count_params["s_exact"] = search.strip()
+        count_where.append(
+            "(u.dni ILIKE :s "
+            "OR u.name ILIKE :s "
+            "OR u.email ILIKE :s "
+            "OR u.fantasy_name ILIKE :s "
+            "OR o.\"number\" ILIKE :s "
+            "OR r.\"orderId\"::text = :s_exact "
+            "OR r.\"claimId\"::text = :s_exact "
+            "OR r.\"returnTrackingCode\" ILIKE :s "
+            "OR mla.nickname ILIKE :s)"
         )
-        counts["rechazada_fz"] = sum(
-            1 for v in all_actions.values() if v.get("status") == "rejected"
-        )
+    if from_date:
+        count_where.append('r."createdAt" >= :from_date::date')
+        count_params["from_date"] = from_date
+    if to_date:
+        count_where.append('r."createdAt" < (:to_date::date + INTERVAL \'1 day\')')
+        count_params["to_date"] = to_date
+    count_where_sql = (" AND " + " AND ".join(count_where)) if count_where else ""
+
+    status_counts = q(eng, f"""
+        SELECT r.status::text AS s, COUNT(*)::int AS n
+        FROM mercado_libre_dev."MercadoLibreReturn" r
+        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
+        LEFT JOIN public."User" u ON u.id = o."userId"
+        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+            ON mla.id = u."mercadoLibreAccountId"
+        WHERE 1=1 {count_where_sql}
+        GROUP BY 1
+    """, count_params) or []
+    for sc in status_counts:
+        if sc[0] in ML_STATUSES:
+            counts[sc[0]] = int(sc[1] or 0)
+    counts["todas"] = sum(counts[s] for s in ML_STATUSES)
+    # Overlay Finanzas counts: contar SOLO actions cuyo return cae en el set
+    # del filtro actual (cruzar action.ml_order_id con los ml_order_ids
+    # visibles). Si no hay filtro extra (no search/fechas), contamos todo.
+    if search or from_date or to_date:
+        # Necesitamos saber que ml_order_ids matchean el filtro
+        oid_rows = q(eng, f"""
+            SELECT r."orderId"::bigint AS oid
+            FROM mercado_libre_dev."MercadoLibreReturn" r
+            LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
+            LEFT JOIN public."User" u ON u.id = o."userId"
+            LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                ON mla.id = u."mercadoLibreAccountId"
+            WHERE 1=1 {count_where_sql}
+        """, count_params) or []
+        filtered_oids = {int(r[0]) for r in oid_rows if r[0]}
+        scoped_actions = ml_return_actions_db.list_actions(list(filtered_oids))
+    else:
+        scoped_actions = ml_return_actions_db.list_actions(None)
+    counts["transferida_fz"] = sum(
+        1 for v in scoped_actions.values() if v.get("status") == "transferred"
+    )
+    counts["rechazada_fz"] = sum(
+        1 for v in scoped_actions.values() if v.get("status") == "rejected"
+    )
 
     return {
         "items": items[:limit],

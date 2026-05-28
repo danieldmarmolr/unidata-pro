@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, AlertCircle, Copy, ExternalLink, X, Receipt, Trash2,
+  Search, Filter,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { TodayPanel } from "@/components/today-panel";
@@ -46,7 +47,11 @@ type Request = {
   updated_at: string;
 };
 
-type Resp = { items: Request[]; count: number };
+type Resp = {
+  items: Request[];
+  count: number;
+  counts_by_status?: Record<Status | "all", number>;
+};
 
 type InvoiceUrlResp = { url: string | null; numero: string; total: number; fecha: string; tipo: string };
 
@@ -134,19 +139,39 @@ function displayCode(r: Request): string {
 
 export default function DevSuscripcionesPage() {
   const [filter, setFilter] = useState<"all" | Status>("pending");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ["refund-requests", filter],
+    queryKey: ["refund-requests", filter, debouncedSearch, fromDate, toDate],
     queryFn: () => {
       const p = new URLSearchParams();
       if (filter !== "all") p.set("status", filter);
+      if (debouncedSearch.trim()) p.set("search", debouncedSearch.trim());
+      if (fromDate) p.set("from_date", fromDate);
+      if (toDate) p.set("to_date", toDate);
+      p.set("limit", "200");
       return api(`/api/refund-requests?${p.toString()}`);
     },
     staleTime: 15_000,
   });
 
   const items = data?.items || [];
-  const totalPending = items.filter((r) => r.status === "pending").length;
+  const counts = data?.counts_by_status ?? { pending: 0, transferred: 0, integration_cancelled: 0, rejected: 0, all: 0 };
+
+  const clearFilters = () => {
+    setSearch("");
+    setFromDate("");
+    setToDate("");
+  };
+  const hasFilters = !!debouncedSearch || !!fromDate || !!toDate;
 
   return (
     <>
@@ -162,24 +187,67 @@ export default function DevSuscripcionesPage() {
             <TabBtn
               active={filter === "pending"}
               onClick={() => setFilter("pending")}
-              label={`Pendientes${filter === "pending" && data ? ` (${totalPending})` : ""}`}
+              label="Pendientes"
+              count={counts.pending}
             />
             <TabBtn
               active={filter === "transferred"}
               onClick={() => setFilter("transferred")}
               label="Transferidas"
+              count={counts.transferred}
             />
             <TabBtn
               active={filter === "integration_cancelled"}
               onClick={() => setFilter("integration_cancelled")}
               label="Cerradas"
+              count={counts.integration_cancelled}
             />
             <TabBtn
               active={filter === "rejected"}
               onClick={() => setFilter("rejected")}
               label="Rechazadas"
+              count={counts.rejected}
             />
-            <TabBtn active={filter === "all"} onClick={() => setFilter("all")} label="Todas" />
+            <TabBtn active={filter === "all"} onClick={() => setFilter("all")} label="Todas" count={counts.all} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="DNI, nombre, email, fantasy…"
+                className="pl-8 pr-3 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary w-56"
+              />
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <Filter size={12} className="text-text-muted" />
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="px-2 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary"
+                title="Desde"
+              />
+              <span className="text-text-muted">→</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="px-2 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary"
+                title="Hasta"
+              />
+            </div>
+            {hasFilters && (
+              <button
+                onClick={clearFilters}
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border bg-surface text-xs text-text-muted hover:text-text hover:bg-bg transition"
+                title="Limpiar filtros"
+              >
+                <X size={11} /> Limpiar
+              </button>
+            )}
           </div>
         </div>
 
@@ -213,7 +281,7 @@ export default function DevSuscripcionesPage() {
   );
 }
 
-function TabBtn({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function TabBtn({ active, onClick, label, count }: { active: boolean; onClick: () => void; label: string; count?: number }) {
   return (
     <button
       onClick={onClick}
@@ -222,6 +290,9 @@ function TabBtn({ active, onClick, label }: { active: boolean; onClick: () => vo
       }`}
     >
       {label}
+      {typeof count === "number" && (
+        <span className={`ml-1 text-[10px] ${active ? "text-primary/70" : "text-text-muted/60"}`}>({count})</span>
+      )}
     </button>
   );
 }

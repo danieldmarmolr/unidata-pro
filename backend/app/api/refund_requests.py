@@ -41,16 +41,22 @@ def list_(
     user: Annotated[dict, Depends(current_user)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     search: Annotated[str | None, Query()] = None,
+    from_date: Annotated[str | None, Query(description="YYYY-MM-DD")] = None,
+    to_date: Annotated[str | None, Query(description="YYYY-MM-DD")] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict:
     require_area(user, _AREAS)
     try:
         items = refund_requests_db.list_requests(
-            status=status_filter, search=search, limit=limit,
+            status=status_filter, search=search,
+            from_date=from_date, to_date=to_date, limit=limit,
+        )
+        counts = refund_requests_db.counts_by_status(
+            search=search, from_date=from_date, to_date=to_date,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"items": items, "count": len(items)}
+    return {"items": items, "count": len(items), "counts_by_status": counts}
 
 
 @router.get("/{request_id}")

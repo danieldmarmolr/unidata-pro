@@ -150,6 +150,8 @@ def list_requests(
     *,
     status: str | None = None,
     search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
     init()
@@ -165,14 +167,63 @@ def list_requests(
         sql += (
             " AND (LOWER(dropshipper_email) LIKE %s "
             "OR LOWER(dropshipper_name) LIKE %s "
+            "OR LOWER(COALESCE(dropshipper_fantasy_name,'')) LIKE %s "
             "OR dropshipper_dni LIKE %s)"
         )
-        params.extend([s, s, f"%{search}%"])
+        params.extend([s, s, s, f"%{search}%"])
+    if from_date:
+        sql += " AND created_at >= %s::date"
+        params.append(from_date)
+    if to_date:
+        # Incluimos el dia completo (hasta 23:59:59) - sumando 1 dia y < strict
+        sql += " AND created_at < (%s::date + INTERVAL '1 day')"
+        params.append(to_date)
     sql += " ORDER BY created_at DESC LIMIT %s"
     params.append(limit)
     with get_conn() as c, c.cursor() as cur:
         cur.execute(sql, params)
         return [_to_dict(r) for r in cur.fetchall()]
+
+
+def counts_by_status(
+    *,
+    search: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> dict:
+    """Devuelve {status: count} de TODAS las status, aplicando los mismos
+    filtros search/fecha que list_requests. Asi la UI muestra el numero
+    real bajo cada tab sin importar cual este seleccionado."""
+    init()
+    sql = "SELECT status, COUNT(*)::int FROM subscription_refund_requests WHERE 1=1"
+    params: list = []
+    if search:
+        s = f"%{search.lower()}%"
+        sql += (
+            " AND (LOWER(dropshipper_email) LIKE %s "
+            "OR LOWER(dropshipper_name) LIKE %s "
+            "OR LOWER(COALESCE(dropshipper_fantasy_name,'')) LIKE %s "
+            "OR dropshipper_dni LIKE %s)"
+        )
+        params.extend([s, s, s, f"%{search}%"])
+    if from_date:
+        sql += " AND created_at >= %s::date"
+        params.append(from_date)
+    if to_date:
+        sql += " AND created_at < (%s::date + INTERVAL '1 day')"
+        params.append(to_date)
+    sql += " GROUP BY status"
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    # RealDictCursor → rows son RealDictRow ({status: ..., count: ...})
+    out = {s: 0 for s in STATUSES}
+    for r in rows:
+        st = r["status"]
+        if st in out:
+            out[st] = int(r["count"] or 0)
+    out["all"] = sum(out.values())
+    return out
 
 
 def get_request(request_id: int) -> dict | None:

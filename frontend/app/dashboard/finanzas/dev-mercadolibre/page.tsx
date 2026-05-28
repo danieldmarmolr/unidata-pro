@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, Copy,
   ExternalLink, X, Receipt, KeyRound, Truck, PackageCheck, Search,
-  Bell, Image as ImageIcon, MessageCircle, User as UserIcon,
+  Bell, Image as ImageIcon, MessageCircle, User as UserIcon, Filter,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
@@ -136,6 +136,8 @@ export default function DevMercadoLibrePage() {
   const [tab, setTab] = useState<Tab>("TRANSFERENCIA_PENDIENTE");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -143,11 +145,13 @@ export default function DevMercadoLibrePage() {
   }, [search]);
 
   const { data, isLoading } = useQuery<Resp>({
-    queryKey: ["ml-return-actions", tab, debouncedSearch],
+    queryKey: ["ml-return-actions", tab, debouncedSearch, fromDate, toDate],
     queryFn: () => {
       const p = new URLSearchParams();
       p.set("tab", tab);
       if (debouncedSearch.trim()) p.set("search", debouncedSearch.trim());
+      if (fromDate) p.set("from_date", fromDate);
+      if (toDate) p.set("to_date", toDate);
       p.set("limit", "100");
       return api(`/api/ml-return-actions?${p.toString()}`);
     },
@@ -178,15 +182,44 @@ export default function DevMercadoLibrePage() {
             <TabBtn active={tab === "rechazada_fz"}           onClick={() => setTab("rechazada_fz")}           label="Rechaz. Fz"   count={counts.rechazada_fz} />
             <TabBtn active={tab === "todas"}                  onClick={() => setTab("todas")}                  label="Todas"        count={counts.todas} />
           </div>
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="DNI, nombre, número DROP, claim, tracking…"
-              className="pl-8 pr-3 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary w-72"
-            />
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="DNI, nombre, DROP, claim, tracking…"
+                className="pl-8 pr-3 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary w-64"
+              />
+            </div>
+            <div className="flex items-center gap-1 text-xs">
+              <Filter size={12} className="text-text-muted" />
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="px-2 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary"
+                title="Desde (fecha del claim)"
+              />
+              <span className="text-text-muted">→</span>
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="px-2 py-1.5 rounded-lg border border-border bg-surface text-text text-xs outline-none focus:border-primary"
+                title="Hasta"
+              />
+            </div>
+            {(search || fromDate || toDate) && (
+              <button
+                onClick={() => { setSearch(""); setFromDate(""); setToDate(""); }}
+                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-lg border border-border bg-surface text-xs text-text-muted hover:text-text hover:bg-bg transition"
+                title="Limpiar filtros"
+              >
+                <X size={11} /> Limpiar
+              </button>
+            )}
           </div>
         </div>
 
@@ -234,7 +267,7 @@ function TabBtn({ active, onClick, label, count }: { active: boolean; onClick: (
         active ? "bg-white text-primary shadow-sm" : "text-text-muted hover:text-text"
       }`}
     >
-      {label} {count > 0 && <span className={`ml-1 text-[10px] ${active ? "text-primary/70" : "text-text-muted/60"}`}>({count})</span>}
+      {label} <span className={`ml-1 text-[10px] ${active ? "text-primary/70" : "text-text-muted/60"}`}>({count})</span>
     </button>
   );
 }
