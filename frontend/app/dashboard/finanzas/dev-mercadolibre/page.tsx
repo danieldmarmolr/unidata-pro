@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, Copy,
   ExternalLink, X, Receipt, KeyRound, Truck, PackageCheck, Search,
-  Bell, Image as ImageIcon,
+  Bell, Image as ImageIcon, MessageCircle, User as UserIcon,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
@@ -32,7 +32,16 @@ type FinanceAction = {
   updated_at: string;
 };
 
-type ReturnItem = { item_id: string; title: string; sku: string; qty: number; unit_price: number; reason: string };
+type ReturnItem = {
+  item_id: string;
+  title: string;
+  sku: string;
+  qty: number;
+  unit_price: number;
+  unit_cost: number;
+  thumbnail: string;
+  reason: string;
+};
 type Attachment = { url: string; type: string; created_at: string };
 type HistoryEntry = { from_status: string; to_status: string; actor_id: number | null; note: string; at: string };
 
@@ -60,6 +69,7 @@ type Item = {
   order_user_id: number | null;
   dropshipper: { user_id: number | null; dni: string; name: string; fantasy_name: string; email: string; phone: string; cuit: string };
   ml_account: { id: number | null; nickname: string; sin_token: boolean; expires_at: string | null };
+  buyer: { name?: string | null; first_name?: string | null; last_name?: string | null; nickname?: string | null; email?: string | null; phone?: string | null; dni?: string | null; id?: string | null } | null;
   return_items: ReturnItem[];
   attachments: Attachment[];
   history: HistoryEntry[];
@@ -334,6 +344,38 @@ function ReturnCard({ item: r }: { item: Item }) {
             {firstItemTitle && <> · {firstItemTitle.slice(0, 50)}{firstItemTitle.length > 50 ? "…" : ""}</>}
             {r.return_items.length > 1 && <> +{r.return_items.length - 1}</>}
           </div>
+          {/* CBU prominente + WhatsApp directo al dropper si sin token (lo mas
+              usado por Finanzas para agilizar la transferencia) */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            {r.bank?.cbu && (
+              <CopyChip
+                label="CBU"
+                value={r.bank.cbu}
+                mono
+                hint={r.bank.bank_name ?? undefined}
+              />
+            )}
+            {(r.bank?.cbu_alias || r.bank?.alias) && (
+              <CopyChip
+                label="Alias"
+                value={(r.bank.cbu_alias || r.bank.alias) as string}
+              />
+            )}
+            {r.ml_account.sin_token && r.dropshipper.phone && (
+              <a
+                href={`https://wa.me/${r.dropshipper.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(
+                  `Hola ${r.dropshipper.name || ""}, tu token de Mercado Libre venció y necesitamos que lo renueves para gestionar la devolución del claim ${r.claim_id ?? ""}.`,
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-200 transition"
+                onClick={(e) => e.stopPropagation()}
+                title={`WhatsApp al dropper (${r.dropshipper.phone})`}
+              >
+                <MessageCircle size={11} /> WhatsApp dropper
+              </a>
+            )}
+          </div>
         </div>
         <button
           onClick={() => setOpen(!open)}
@@ -346,31 +388,94 @@ function ReturnCard({ item: r }: { item: Item }) {
 
       {open && (
         <div className="border-t border-border bg-surface/50 p-4 space-y-4">
-          {/* Items devueltos */}
+          {/* Productos devueltos: precio venta vs costo dropper, qty, SKU */}
           {r.return_items.length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-                Productos devueltos ({r.return_items.length})
+                Productos devueltos ({r.return_items.length}) · datos de la orden original
               </div>
               <div className="space-y-1.5">
-                {r.return_items.map((it, idx) => (
-                  <div key={idx} className="flex items-center gap-3 bg-bg border border-border rounded p-2">
-                    {r.thumbnail && idx === 0 && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={r.thumbnail} alt="" className="w-12 h-12 object-cover rounded border border-border flex-shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-text">{it.title || "—"}</div>
-                      <div className="text-[11px] text-text-muted">
-                        SKU <span className="font-mono">{it.sku || "—"}</span>
-                        {" · "}qty {it.qty}
-                        {" · "}{fmtMoney(it.unit_price)}
-                        {it.reason && <> · motivo: {it.reason}</>}
+                {r.return_items.map((it, idx) => {
+                  const thumb = it.thumbnail || (idx === 0 ? r.thumbnail : "");
+                  const totalPrice = it.unit_price * it.qty;
+                  const totalCost = it.unit_cost * it.qty;
+                  return (
+                    <div key={idx} className="flex items-center gap-3 bg-bg border border-border rounded p-2">
+                      {thumb && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={thumb} alt="" className="w-14 h-14 object-cover rounded border border-border flex-shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-semibold text-text">
+                          {it.title || "—"}
+                          {it.qty > 1 && <span className="text-text-muted font-normal"> × {it.qty}</span>}
+                        </div>
+                        <div className="text-[11px] text-text-muted">
+                          SKU <span className="font-mono">{it.sku || "—"}</span>
+                          {it.reason && <> · {it.reason}</>}
+                        </div>
+                      </div>
+                      <div className="text-right text-[11px]">
+                        <div className="text-text">
+                          <span className="text-text-muted">Precio venta</span>{" "}
+                          <span className="font-semibold">{fmtMoney(it.unit_price)}</span>
+                          {it.qty > 1 && <span className="text-text-muted"> c/u</span>}
+                        </div>
+                        {it.unit_cost > 0 && (
+                          <div className="text-text">
+                            <span className="text-text-muted">Costo drop</span>{" "}
+                            <span className="font-semibold">{fmtMoney(it.unit_cost)}</span>
+                            {it.qty > 1 && <span className="text-text-muted"> c/u</span>}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-xs text-text border-l border-border pl-3 ml-1">
+                        <div className="font-bold">{fmtMoney(totalPrice)}</div>
+                        {totalCost > 0 && (
+                          <div className="text-text-muted">{fmtMoney(totalCost)}</div>
+                        )}
                       </div>
                     </div>
-                    <div className="text-xs font-semibold text-text">{fmtMoney(it.unit_price * it.qty)}</div>
+                  );
+                })}
+                {/* Totales */}
+                <div className="flex justify-end gap-6 text-[11px] pt-1.5 border-t border-border">
+                  <div>
+                    <span className="text-text-muted">Total precio venta:</span>{" "}
+                    <span className="font-semibold text-text">
+                      {fmtMoney(r.return_items.reduce((s, it) => s + it.unit_price * it.qty, 0))}
+                    </span>
                   </div>
-                ))}
+                  <div>
+                    <span className="text-text-muted">Total costo drop:</span>{" "}
+                    <span className="font-semibold text-text">
+                      {fmtMoney(r.return_items.reduce((s, it) => s + it.unit_cost * it.qty, 0))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Comprador final ML */}
+          {r.buyer && (r.buyer.name || r.buyer.nickname || r.buyer.email) && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
+                Comprador final (ML)
+              </div>
+              <div className="flex items-center gap-3 bg-bg border border-border rounded p-2 text-xs">
+                <div className="w-8 h-8 rounded-full bg-soft border border-border flex items-center justify-center text-text-muted">
+                  <UserIcon size={14} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-text">{r.buyer.name || r.buyer.nickname || "—"}</div>
+                  <div className="text-[11px] text-text-muted">
+                    {r.buyer.nickname && <>ML {r.buyer.nickname}</>}
+                    {r.buyer.email && <> · {r.buyer.email}</>}
+                    {r.buyer.phone && <> · {r.buyer.phone}</>}
+                    {r.buyer.dni && <> · DNI {r.buyer.dni}</>}
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -625,6 +730,33 @@ function InvoiceButton({ invoice }: { invoice: NonNullable<Item["invoice"]> }) {
         </div>
       )}
     </div>
+  );
+}
+
+function CopyChip({ label, value, mono, hint }: { label: string; value: string; mono?: boolean; hint?: string }) {
+  const [copied, setCopied] = useState(false);
+  async function doCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {}
+  }
+  return (
+    <button
+      onClick={doCopy}
+      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg border border-border hover:border-primary text-[11px] transition group"
+      title={hint ? `${hint} — click para copiar` : "Click para copiar"}
+    >
+      <span className="text-text-muted font-semibold uppercase tracking-wider text-[9px]">{label}</span>
+      <span className={`text-text ${mono ? "font-mono" : ""}`}>{value}</span>
+      {copied ? (
+        <Check size={11} className="text-emerald-600" />
+      ) : (
+        <Copy size={11} className="text-text-muted group-hover:text-primary" />
+      )}
+    </button>
   );
 }
 

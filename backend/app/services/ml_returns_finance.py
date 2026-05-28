@@ -54,6 +54,25 @@ def list_ml_returns(
     """
     eng = get_engine("unidrop")
 
+    # Schema discovery para buyer_* (varia entre instalaciones)
+    oml_cols = list_columns(eng, "mercado_libre_dev", "OrderMercadoLibre")
+    buyer_selects: list[str] = []
+    buyer_keys: list[str] = []  # nombres en el dict de output
+    for src, dst in [
+        ("buyer_name", "name"),
+        ("buyer_first_name", "first_name"),
+        ("buyer_last_name", "last_name"),
+        ("buyer_nickname", "nickname"),
+        ("buyer_email", "email"),
+        ("buyer_phone", "phone"),
+        ("buyer_dni", "dni"),
+        ("buyer_id", "id"),
+    ]:
+        if src in oml_cols:
+            buyer_selects.append(f'COALESCE(o."{src}"::text, \'\') AS buyer_{dst}')
+            buyer_keys.append(dst)
+    buyer_select_sql = (", " + ", ".join(buyer_selects)) if buyer_selects else ""
+
     where: list[str] = []
     params: dict[str, Any] = {}
     # Si el tab es un status del enum ML, filtramos en SQL (mas barato).
@@ -115,6 +134,7 @@ def list_ml_returns(
             COALESCE(mla.nickname, '')                      AS mla_nickname,
             COALESCE(mla."requiresReauth", false)           AS sin_token,
             mla."expiresAt"::text                           AS token_expira
+            {buyer_select_sql}
         FROM mercado_libre_dev."MercadoLibreReturn" r
         LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
         LEFT JOIN public."User" u ON u.id = o."userId"
@@ -133,25 +153,44 @@ def list_ml_returns(
     user_ids = list({int(r[23]) for r in rows if r[23]})
 
     # 2) Items devueltos por return (MercadoLibreReturnItem.returnId = MercadoLibreReturn.id)
+    # + LEFT JOIN con OrderItemMercadoLibre para sacar el unitCost (costo dropper).
+    # OrderItemMercadoLibre matchea por (orderId, itemId) → cruzamos via Return.orderId.
     items_by_return: dict[int, list[dict]] = {}
     if return_pks:
-        item_rows = q(eng, """
-            SELECT "returnId"::int       AS rid,
-                   "itemId"              AS item_id,
-                   title,
-                   COALESCE(sku, '')     AS sku,
-                   quantity::int         AS qty,
-                   COALESCE("unitPrice", 0)::float AS unit_price,
-                   COALESCE(reason, '')  AS reason
-            FROM mercado_libre_dev."MercadoLibreReturnItem"
-            WHERE "returnId" = ANY(:ids)
-            ORDER BY id ASC
+        # Detect unit cost column - varia en algunas instalaciones
+        oi_cols = list_columns(eng, "mercado_libre_dev", "OrderItemMercadoLibre")
+        cost_col = next(
+            (c for c in ["unitCost", "cost", "merchandiseCost", "merchandise_cost"] if c in oi_cols),
+            None,
+        )
+        cost_select = f'COALESCE(oi."{cost_col}", 0)::float AS unit_cost' if cost_col else "0::float AS unit_cost"
+        thumb_select = 'COALESCE(oi.thumbnail, \'\') AS thumb' if "thumbnail" in oi_cols else "''::text AS thumb"
+
+        item_rows = q(eng, f"""
+            SELECT mri."returnId"::int       AS rid,
+                   mri."itemId"              AS item_id,
+                   mri.title,
+                   COALESCE(mri.sku, '')     AS sku,
+                   mri.quantity::int         AS qty,
+                   COALESCE(mri."unitPrice", 0)::float AS unit_price,
+                   {cost_select},
+                   {thumb_select},
+                   COALESCE(mri.reason, '')  AS reason
+            FROM mercado_libre_dev."MercadoLibreReturnItem" mri
+            LEFT JOIN mercado_libre_dev."MercadoLibreReturn" r ON r.id = mri."returnId"
+            LEFT JOIN mercado_libre_dev."OrderItemMercadoLibre" oi
+                ON oi."orderId" = r."orderId" AND oi."itemId"::text = mri."itemId"::text
+            WHERE mri."returnId" = ANY(:ids)
+            ORDER BY mri.id ASC
         """, {"ids": return_pks}) or []
         for ir in item_rows:
             items_by_return.setdefault(int(ir[0]), []).append({
                 "item_id": ir[1], "title": ir[2] or "", "sku": ir[3] or "",
-                "qty": int(ir[4] or 1), "unit_price": round(float(ir[5] or 0), 2),
-                "reason": ir[6] or "",
+                "qty": int(ir[4] or 1),
+                "unit_price": round(float(ir[5] or 0), 2),
+                "unit_cost": round(float(ir[6] or 0), 2),
+                "thumbnail": ir[7] or "",
+                "reason": ir[8] or "",
             })
 
     # 3) Attachments (fotos del comprador) por return
@@ -259,7 +298,9 @@ def list_ml_returns(
         if oid not in actions_by_oid:
             actions_by_oid[oid] = act
 
-    # 9) Compose
+    # 9) Compose — buyer info viene al final del row (despues de token_expira)
+    # El offset para buyer fields empieza en 34 (los selects fijos son 0..33).
+    BUYER_BASE_IDX = 34
     items: list[dict] = []
     for r in rows:
         return_pk = int(r[0])
@@ -267,6 +308,14 @@ def list_ml_returns(
         user_id = int(r[23]) if r[23] else None
         ml_status = r[6] or ""
         action = actions_by_oid.get(ml_order_id)
+
+        buyer: dict = {}
+        for i, key in enumerate(buyer_keys):
+            v = r[BUYER_BASE_IDX + i] if len(r) > BUYER_BASE_IDX + i else None
+            buyer[key] = v if v else None
+        # display name: combinacion comun cuando hay first_name + last_name
+        if not buyer.get("name") and (buyer.get("first_name") or buyer.get("last_name")):
+            buyer["name"] = " ".join(x for x in [buyer.get("first_name"), buyer.get("last_name")] if x)
 
         finance_overlay = None
         if action and action.get("status") == "transferred":
@@ -312,6 +361,7 @@ def list_ml_returns(
                 "sin_token": bool(r[32]),
                 "expires_at": r[33],
             },
+            "buyer": buyer if buyer else None,
             "return_items": items_by_return.get(return_pk, []),
             "attachments": attachments_by_return.get(return_pk, []),
             "history": history_by_return.get(return_pk, []),
