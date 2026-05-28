@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+*.local.md
 backend/audit.db*
 backend/users.db*
 backend/costs.db*
