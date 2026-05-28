@@ -149,8 +149,9 @@ const ITEMS: NavItem[] = [
     children: [
       { label: "Vista general",          href: "/dashboard/finanzas",                             icon: Wallet,       subGroup: "Resumen"       },
       { label: "Facturas Suscripciones", href: "/dashboard/finanzas/facturas-suscripciones-meli", icon: FileText,     subGroup: "Suscripciones" },
-      { label: "Dev. Suscripciones",     href: "/dashboard/finanzas/dev-suscripciones",           icon: RotateCcw,    subGroup: "Suscripciones" },
       { label: "Churn Suscripciones",    href: "/dashboard/gerencia/churn-suscripciones",         icon: TrendingDown, subGroup: "Suscripciones" },
+      { label: "Dev. Suscripciones",     href: "/dashboard/finanzas/dev-suscripciones",           icon: RotateCcw,    subGroup: "Devoluciones"  },
+      { label: "Dev. Mercado Libre",     href: "/dashboard/finanzas/dev-mercadolibre",            icon: RotateCcw,    subGroup: "Devoluciones"  },
       { label: "Flujo de Fondos",        href: "/dashboard/finanzas/flujo-fondos",                icon: PiggyBank,    subGroup: "Tesorería"     },
     ],
   },

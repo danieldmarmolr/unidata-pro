@@ -238,6 +238,9 @@ app.include_router(refund_requests_api.router)
 from app.api import public_refund_requests as public_refund_requests_api
 app.include_router(public_refund_requests_api.router)
 
+from app.api import ml_return_actions as ml_return_actions_api
+app.include_router(ml_return_actions_api.router)
+
 from app.api import flujo_fondos as flujo_fondos_api
 app.include_router(flujo_fondos_api.router)
 
