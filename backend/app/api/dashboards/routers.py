@@ -1430,6 +1430,24 @@ def get_sku_forecast(
     return _b()
 
 
+@router.get("/products/sku/{sku}/forecast-advanced")
+def get_sku_forecast_advanced(
+    sku: str,
+    user: Annotated[dict, Depends(current_user)],
+    history_days: Annotated[int, Query(ge=30, le=540)] = 180,
+    horizon: Annotated[int, Query(ge=7, le=90)] = 28,
+) -> dict:
+    """Forecast multi-modelo (8 metodos) sobre la serie diaria de unidades
+    vendidas del SKU. Backtest MAPE para elegir winner. Horizon configurable
+    (7-90 dias) e historia (30-540 dias)."""
+    require_area(user, ["ventas", "compras"])
+    key = f"sku-forecast-adv:{sku}:{history_days}:{horizon}"
+    @cached(_sku360_cache, key=lambda: key)
+    def _b() -> dict:
+        return sku360_svc.sku_forecast_advanced(sku, history_days=history_days, horizon=horizon)
+    return _b()
+
+
 @router.get("/products/sku/{sku}/unidrop-pricing")
 def get_sku_unidrop_pricing(
     sku: str,

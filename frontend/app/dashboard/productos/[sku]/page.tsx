@@ -15,6 +15,7 @@ import { SkuStockVsDemand } from "@/components/sku-stock-vs-demand";
 import { SkuLotesConsumption, type LotesConsumptionPayload } from "@/components/sku-lotes-consumption";
 import { SkuIdentityCard } from "@/components/sku-identity-card";
 import { SkuBusinessMetrics, type BusinessMetrics } from "@/components/sku-business-metrics";
+import { SkuForecastAdvanced } from "@/components/sku-forecast-advanced";
 import { api } from "@/lib/api";
 import { useGlobalFilters, periodToQuery } from "@/lib/store";
 import { ArrowLeft } from "lucide-react";
@@ -338,6 +339,9 @@ export default function ProductDetailPage({ params }: { params: Promise<{ sku: s
             loading={seriesLoading}
           />
         </div>
+
+        {/* Pronostico avanzado: 8 modelos + MAPE backtest + horizonte configurable */}
+        <SkuForecastAdvanced sku={sku} />
 
         {/* Vista omnicanal del SKU: 4 fuentes (Unistore TN/MELI + Unidrop TN/MELI)
             + pricing mayorista enriquecido en las cards Unidrop */}

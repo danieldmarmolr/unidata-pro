@@ -1089,3 +1089,147 @@ def lotes_history(sku: str) -> list[dict]:
             "cbm_un": item.get("cbm_un"),
         })
     return out
+
+
+# ============================================================
+# 6. FORECAST ADVANCED: multi-modelo (compare_forecasts) sobre la serie
+#    diaria de unidades vendidas del SKU. Permite horizonte y profundidad
+#    de historia configurables. Mismo motor que daily-metric en gerencia.
+# ============================================================
+
+def sku_forecast_advanced(sku: str, history_days: int = 180, horizon: int = 28) -> dict:
+    """Forecast multi-modelo para unidades vendidas diarias del SKU.
+
+    Cruza TN (tienda_nube.OrderItem) + MELI (meli.meli_order_items) del lado
+    Unistore, agrega por dia y aplica los 8 metodos de forecast_methods con
+    backtest MAPE. Devuelve historia + forecasts + winner.
+
+    history_days: cuanto del pasado leer (60-365)
+    horizon: cuantos dias predecir forward (7-90)
+    """
+    from app.services.forecast_methods import compare_forecasts
+    from app.utils.tz import now_ar
+
+    horizon = max(7, min(90, int(horizon)))
+    history_days = max(30, min(540, int(history_days)))
+
+    try:
+        eng = get_engine("unistore")
+    except Exception as e:
+        log.warning("sku_forecast_advanced engine fail: %s", e)
+        return {
+            "sku": sku, "history_days": history_days, "horizon": horizon,
+            "points": [], "forecast_dates": [],
+            "forecasts": {"results": [], "winner": None, "horizon": horizon, "history_n": 0},
+            "error": str(e),
+            "generated_at": now_ar().isoformat(),
+        }
+
+    # TN diario
+    tn_rows = q(eng, """
+        SELECT DATE(o."createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
+               COALESCE(SUM(oi.quantity), 0)::int AS units,
+               COALESCE(SUM(oi.quantity * oi.price), 0)::float AS revenue
+        FROM tienda_nube."OrderItem" oi
+        JOIN tienda_nube."Order" o ON o.id = oi."orderId"
+        WHERE oi.sku = :sku
+          AND o."paymentStatus" = 'paid'
+          AND o."createdAt" >= NOW() - make_interval(days => :days)
+        GROUP BY 1
+        ORDER BY 1
+    """, {"sku": sku, "days": history_days}) or []
+
+    # MELI diario
+    ml_rows = q(eng, """
+        SELECT DATE(mo.date_created AT TIME ZONE 'America/Argentina/Buenos_Aires') AS dia,
+               COALESCE(SUM(mi.quantity), 0)::int AS units,
+               COALESCE(SUM(mi.quantity * mi.unit_price), 0)::float AS revenue
+        FROM meli.meli_order_items mi
+        JOIN meli.meli_orders mo ON mo.id = mi.order_id
+        WHERE mi.seller_sku = :sku
+          AND mo.status IN ('paid','confirmed','shipped','delivered')
+          AND mo.date_created >= NOW() - make_interval(days => :days)
+        GROUP BY 1
+        ORDER BY 1
+    """, {"sku": sku, "days": history_days}) or []
+
+    by_tn = {r[0].isoformat(): (int(r[1] or 0), float(r[2] or 0)) for r in tn_rows}
+    by_ml = {r[0].isoformat(): (int(r[1] or 0), float(r[2] or 0)) for r in ml_rows}
+
+    # Rellenar dias sin ventas con 0 — el forecast necesita serie continua
+    today = now_ar().date()
+    start = today - dt.timedelta(days=history_days)
+    points: list[dict] = []
+    cur = start
+    while cur <= today:
+        d = cur.isoformat()
+        tu, tr = by_tn.get(d, (0, 0.0))
+        mu, mr = by_ml.get(d, (0, 0.0))
+        points.append({
+            "date": d,
+            "units_tn": tu,
+            "units_ml": mu,
+            "units_total": tu + mu,
+            "revenue_total": round(tr + mr, 2),
+        })
+        cur += dt.timedelta(days=1)
+
+    # Forecast sobre la serie de unidades totales
+    units_series = [p["units_total"] for p in points]
+    backtest_size = min(14, max(7, history_days // 6))
+    try:
+        forecasts = compare_forecasts(units_series, horizon=horizon, backtest_size=backtest_size)
+    except Exception as exc:
+        log.warning("sku_forecast_advanced compare_forecasts: %s", exc)
+        forecasts = {"results": [], "winner": None, "horizon": horizon,
+                     "backtest_size": backtest_size, "history_n": len(units_series)}
+
+    # Forecast tambien en revenue (mismo metodo ganador, escalado por precio promedio)
+    revenue_series = [p["revenue_total"] for p in points]
+    try:
+        rev_forecasts = compare_forecasts(revenue_series, horizon=horizon, backtest_size=backtest_size)
+    except Exception:
+        rev_forecasts = {"results": [], "winner": None}
+
+    # Fechas forward
+    if points:
+        last_date = dt.date.fromisoformat(points[-1]["date"])
+        forecast_dates = [(last_date + dt.timedelta(days=i + 1)).isoformat() for i in range(horizon)]
+    else:
+        forecast_dates = []
+
+    # Stats utiles
+    total_units = sum(units_series)
+    total_revenue = sum(revenue_series)
+    days_with_sales = sum(1 for v in units_series if v > 0)
+    daily_avg_units = (total_units / len(units_series)) if units_series else 0
+    daily_avg_revenue = (total_revenue / len(units_series)) if units_series else 0
+
+    # Suma proyectada del horizonte (usar winner si existe, sino media)
+    winner = forecasts.get("winner")
+    winner_result = next((r for r in forecasts.get("results", []) if r.get("name") == winner), None)
+    projected_units = sum(winner_result["forecast"]) if winner_result else 0.0
+
+    rev_winner = rev_forecasts.get("winner")
+    rev_winner_result = next((r for r in rev_forecasts.get("results", []) if r.get("name") == rev_winner), None)
+    projected_revenue = sum(rev_winner_result["forecast"]) if rev_winner_result else 0.0
+
+    return {
+        "sku": sku,
+        "history_days": history_days,
+        "horizon": horizon,
+        "points": points,
+        "forecast_dates": forecast_dates,
+        "forecasts": forecasts,
+        "revenue_forecasts": rev_forecasts,
+        "summary": {
+            "total_units_history": int(total_units),
+            "total_revenue_history": round(total_revenue, 2),
+            "days_with_sales": days_with_sales,
+            "daily_avg_units": round(daily_avg_units, 2),
+            "daily_avg_revenue": round(daily_avg_revenue, 2),
+            "projected_units_horizon": round(projected_units, 0),
+            "projected_revenue_horizon": round(projected_revenue, 0),
+        },
+        "generated_at": now_ar().isoformat(),
+    }
