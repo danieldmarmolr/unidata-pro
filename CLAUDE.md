@@ -20,31 +20,27 @@ App productiva en `https://app.unidatacenter.com.ar`
 | Auth | JWT HS256 · bcrypt · 2FA TOTP (pyotp) · token MCP 90d (scope=mcp) |
 | Frontend | Next.js 16 · React 19 · Tailwind 4 · Recharts · TanStack Query 5 |
 | Estado global | Zustand (period filters, custom range) con localStorage |
-| Deploy | Railway (`backend`, `frontend`, `mcp` services) · Cloudflare DNS |
-| MCP | FastMCP (Python) · stdio + HTTP/SSE · `mcp-production-b8c5.up.railway.app` |
+| Deploy | AWS (ECS Fargate `backend`+`mcp` · CloudFront `frontend`) · Cloudflare DNS · CI GitHub Actions |
+| MCP | FastMCP (Python) · stdio + HTTP/SSE · `mcp.unidatacenter.com.ar` |
 | DBs locales | SQLite: `users.db` (usuarios) · `audit.db` (queries) · `costs.db` (costos importación) |
 
 ---
 
-## Servicios desplegados (Railway · prod)
+## Servicios desplegados (AWS · prod)
 
-| Service | URL | Path en repo | Auto-deploy |
-|---|---|---|---|
-| `frontend` | `app.unidatacenter.com.ar` | `frontend/` | Sí (push a main) |
-| `backend` | `api.unidatacenter.com.ar` | `backend/` | Sí (push a main) |
-| `mcp` | `mcp-production-b8c5.up.railway.app` | `mcp/` | Sí (push a main) |
+Todo el stack productivo vive en **AWS** (cuenta `043187662940` · región `us-east-2`, infra gestionada por **AWS CDK**). Railway fue solo el MVP y ya no se usa.
 
-Deploy manual cuando hace falta:
-```bash
-# DESDE DENTRO del directorio del servicio (sin --path-as-root):
-cd backend && railway up --detach && cd ..
-cd frontend && railway up --detach && cd ..
-cd mcp && railway up --detach && cd ..
-```
-> ⚠️ NUNCA usar `railway up ./backend --path-as-root --service backend`. El flag `--path-as-root`
-> sube solo el contenido del subdirectorio y corrompe el snapshot de Railway (312 KB vs 13 MB).
-> Todos los deploys subsiguientes (incluso git auto-deploy) fallarán con
-> `snapshot-target-unpack/backend: no such file or directory` hasta que se haga un deploy correcto.
+| Service | URL | Hosting AWS | Path en repo | Deploy |
+|---|---|---|---|---|
+| `frontend` | `app.unidatacenter.com.ar` | CloudFront (`d2ax1owqknwl0f.cloudfront.net`) | `frontend/` | CDK (fuera de este repo) |
+| `backend` | `api.unidatacenter.com.ar` | ECS Fargate `unidata-prod-backend` (cluster `unidata-prod`) tras ALB `unidata-prod-alb`, Cloudflare delante | `backend/` | GitHub Actions → ECR → ECS (push a main) |
+| `mcp` | `mcp.unidatacenter.com.ar` | ECS Fargate `unidata-prod-mcp` (mismo cluster + ALB) | `mcp/` | GitHub Actions → ECR → ECS (push a main) |
+
+**CI/CD (`backend` + `mcp`):** `.github/workflows/deploy-{backend,mcp}.yml`. En cada push a `main` que toque `backend/**` o `mcp/**`: build de la imagen → push a ECR (`unidata-prod-{backend,mcp}`, tags `:<sha>` + `:latest`) → `aws ecs update-service --force-new-deployment`. También se pueden disparar a mano desde la pestaña Actions (`workflow_dispatch`).
+
+> Las credenciales AWS del CI viven en los **GitHub Secrets** del repo (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`), atadas al IAM user `unistore-devops`. Si el deploy falla con `The security token included in the request is invalid`, la access key se rotó/borró → crear una nueva para `unistore-devops` y actualizar esos 3 secrets.
+
+> **Conexión RDS:** las credenciales (`PROD_DB_PASSWORD_*`, etc.) están **inline en el `environment` del task def del backend** (NO Secrets Manager). Para rotar un password: nueva revisión de la task def con el env actualizado + `update-service`.
 
 ---
 
@@ -318,7 +314,7 @@ Cualquier user genera su token en `/dashboard/account` → "Generar token" → p
   "mcpServers": {
     "unidata": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp-production-b8c5.up.railway.app/sse",
+      "args": ["-y", "mcp-remote", "https://mcp.unidatacenter.com.ar/sse",
                "--header", "Authorization:Bearer TOKEN"]
     }
   }
@@ -409,24 +405,27 @@ Los SSH tunnels al RDS se abren automáticamente al iniciar el backend si las va
 ## Comandos frecuentes
 
 ```bash
-# Ver logs por service
-railway logs --service backend
-railway logs --service frontend
-railway logs --service mcp
+# Logs de un service ECS (perfil AWS local: unistore-admin)
+aws logs tail /ecs/unidata-prod-backend --follow --region us-east-2 --profile unistore-admin
+aws logs tail /ecs/unidata-prod-mcp --follow --region us-east-2 --profile unistore-admin
 
-# Deploy de un cambio puntual
-railway up ./backend --path-as-root --service backend --detach
-railway up ./frontend --path-as-root --service frontend --detach
+# Deploy: lo normal es push a main (CI buildea + deploya). A mano:
+gh workflow run deploy-backend.yml      # o deploy-mcp.yml — dispara el build+deploy
+aws ecs update-service --cluster unidata-prod --service unidata-prod-backend \
+    --force-new-deployment --region us-east-2 --profile unistore-admin   # redeploy misma imagen
 
 # Salud
 curl https://api.unidatacenter.com.ar/api/health
-curl https://mcp-production-b8c5.up.railway.app/health
+curl https://mcp.unidatacenter.com.ar/health
 
 # Rollback
 git revert HEAD && git push origin main
 
-# Listar deployments recientes
-railway deployment list --service backend
+# Estado del servicio / deployments
+aws ecs describe-services --cluster unidata-prod --services unidata-prod-backend \
+    --region us-east-2 --profile unistore-admin \
+    --query "services[0].deployments"
+gh run list --workflow=deploy-backend.yml --limit 5
 ```
 
 ---
@@ -462,7 +461,7 @@ Ver detalle en [docs/FLUJO_FONDOS_INTEGRATION.md](docs/FLUJO_FONDOS_INTEGRATION.
 100% del scope original cerrado. Sprint adicional (2026-05-13 → 2026-05-16) agregó:
 
 ✅ **Dropshipper 360 V2** — pipeline 5-icon con tooltips · combo handling · costos Contabilium · facturas · etiquetas · returns ML · timestamps · gateway · notas equipo · analítica combos · top clientes TN+ML · omnicanal
-✅ **MCP server** — local stdio + remoto HTTP/SSE en Railway · 24 tools · token JWT 90d · walkthrough en /account
+✅ **MCP server** — local stdio + remoto HTTP/SSE en AWS (ECS Fargate, `mcp.unidatacenter.com.ar`) · 24 tools · token JWT 90d · walkthrough en /account
 ✅ **Schema fixes** — 5 columnas inexistentes que causaban GMV=$0 silencioso
 ✅ **SKU Omnichannel** — fixed queries Unidrop TN + MELI (mostraban "Sin ventas registradas")
 ✅ **Admin RBAC** — sidebar respeta `is_admin` además de `role='admin'`
