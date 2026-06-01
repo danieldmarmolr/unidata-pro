@@ -44,7 +44,7 @@ import logging
 import threading
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import OperationalError, DBAPIError
 from sshtunnel import SSHTunnelForwarder
 
@@ -109,9 +109,13 @@ def _build_engine(cfg: UnitConfig) -> Engine:
         host, port = "127.0.0.1", cfg.local_port
     else:
         host, port = cfg.db_host, cfg.db_port
-    url = (
-        f"postgresql+psycopg2://{cfg.db_user}:{cfg.db_password}"
-        f"@{host}:{port}/{cfg.db_name}"
+    url = URL.create(
+        "postgresql+psycopg2",
+        username=cfg.db_user,
+        password=cfg.db_password,
+        host=host,
+        port=port,
+        database=cfg.db_name,
     )
     engine = create_engine(
         url,
