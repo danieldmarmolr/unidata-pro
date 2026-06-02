@@ -75,13 +75,14 @@ type Item = {
   history: HistoryEntry[];
   thumbnail: string;
   bank: {
+    cbu?: string | null;
     cvu?: string | null;
     alias?: string | null;
-    name?: string | null;
-    email?: string | null;
-    customer_id?: string | null;
-    is_active?: boolean;
-    needs_cvu?: boolean;
+    bank_name?: string | null;
+    holder_name?: string | null;
+    holder_tax_id?: string | null;
+    is_default?: boolean;
+    needs_bank?: boolean;
   } | null;
   invoice: { id: string; tipo: string; numero: string; link: string; fecha: string | null; total: number } | null;
   finance_action: FinanceAction | null;
@@ -389,43 +390,47 @@ function ReturnCard({ item: r }: { item: Item }) {
             {firstItemTitle && <> · {firstItemTitle.slice(0, 50)}{firstItemTitle.length > 50 ? "…" : ""}</>}
             {r.return_items.length > 1 && <> +{r.return_items.length - 1}</>}
           </div>
-          {/* CVU/Alias copy + flags WhatsApp accionables.
-              Lo mas pedido por Finanzas: copiar CVU sin abrir el detalle. */}
+          {/* CBU/CVU/Alias copy + flags WhatsApp accionables.
+              Banco REAL del dropshipper (cresium.UserBankAccount), NO la CVU de
+              cobro TaloPay. Lo mas pedido por Finanzas: copiar sin abrir detalle. */}
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
+            {r.bank?.cbu && (
+              <CopyChip label="CBU" value={r.bank.cbu} mono hint="Cuenta del dropper · click para copiar" />
+            )}
             {r.bank?.cvu && (
-              <CopyChip label="CVU" value={r.bank.cvu} mono hint="Talo · click para copiar" />
+              <CopyChip label="CVU" value={r.bank.cvu} mono hint="Cuenta del dropper · click para copiar" />
             )}
             {r.bank?.alias && (
-              <CopyChip label="Alias" value={r.bank.alias} hint="Talo · click para copiar" />
+              <CopyChip label="Alias" value={r.bank.alias} hint="Cuenta del dropper · click para copiar" />
             )}
-            {r.bank?.needs_cvu && (
+            {r.bank?.needs_bank && (
               <span
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-semibold"
-                title="El dropper tiene cuenta Talo pero no cargo CVU todavia"
+                title="El dropper tiene cuenta en Unidrop pero no cargo CBU/CVU todavia"
               >
-                ⚠️ Falta CVU
+                ⚠️ Falta CBU/CVU
               </span>
             )}
             {!r.bank && (
               <span
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-100 border border-red-300 text-red-700 text-[11px] font-semibold"
-                title="No hay cuenta Talo registrada — el dropper tiene que crearla en Unidrop"
+                title="No hay cuenta bancaria registrada — el dropper tiene que cargarla en Unidrop"
               >
-                ⛔ Sin cuenta Talo
+                ⛔ Sin cuenta bancaria
               </span>
             )}
-            {r.bank?.needs_cvu && r.dropshipper.phone && (
+            {(r.bank?.needs_bank || !r.bank) && r.dropshipper.phone && (
               <a
                 href={`https://wa.me/${r.dropshipper.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(
-                  `Hola ${r.dropshipper.name || ""}, necesitamos tu CVU de Talo para devolverte la plata del claim ${r.claim_id ?? ""} (monto ${r.amount_to_refund}). Por favor cargalo desde unidrop.com.ar.`,
+                  `Hola ${r.dropshipper.name || ""}, necesitamos los datos de tu cuenta bancaria (CBU o CVU + alias + titular) para devolverte la plata del claim ${r.claim_id ?? ""} (monto ${r.amount_to_refund}). Por favor cargalos desde unidrop.com.ar.`,
                 )}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-emerald-700 text-[11px] font-semibold hover:bg-emerald-200 transition"
                 onClick={(e) => e.stopPropagation()}
-                title="WhatsApp: pedir al dropper que cargue el CVU"
+                title="WhatsApp: pedir al dropper los datos bancarios"
               >
-                <MessageCircle size={11} /> Pedir CVU
+                <MessageCircle size={11} /> Pedir datos bancarios
               </a>
             )}
             {r.ml_account.sin_token && r.dropshipper.phone && (
@@ -547,31 +552,33 @@ function ReturnCard({ item: r }: { item: Item }) {
             </div>
           )}
 
-          {/* Cuenta Talo (CVU + alias) — info para transferir */}
+          {/* Cuenta bancaria REAL del dropshipper (cresium.UserBankAccount) —
+              destino del reembolso. NO la CVU de cobro TaloPay. */}
           <div>
             <div className="text-[10px] uppercase tracking-wider font-bold text-text-muted mb-2">
-              Cuenta Talo del dropshipper
+              Cuenta bancaria del dropshipper
             </div>
             {!r.bank ? (
               <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2">
-                ⛔ Sin cuenta Talo registrada. El dropper tiene que crearla en{" "}
+                ⛔ Sin cuenta bancaria registrada. El dropper tiene que cargarla en{" "}
                 <a href="https://unidrop.com.ar" target="_blank" rel="noopener noreferrer" className="underline">unidrop.com.ar</a>{" "}
-                antes de que podamos transferirle.
+                antes de que podamos transferirle. Usá "Pedir datos bancarios" del header.
               </div>
             ) : (
               <>
-                {r.bank.needs_cvu && (
+                {r.bank.needs_bank && (
                   <div className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-2 mb-2">
-                    ⚠️ Tiene cuenta Talo (alias <span className="font-mono">{r.bank.alias}</span>) pero <strong>no cargó el CVU</strong>.
-                    Sin CVU no se puede transferir. Usá el botón "Pedir CVU" del header para mandarle WhatsApp.
+                    ⚠️ Tiene cuenta en Unidrop pero <strong>no cargó CBU ni CVU</strong>.
+                    Sin eso no se puede transferir. Usá "Pedir datos bancarios" del header para mandarle WhatsApp.
                   </div>
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  <Field label="Titular"        value={r.bank.name || "—"} />
-                  <Field label="CUIT"           value={r.dropshipper.cuit || "—"} copyable={!!r.dropshipper.cuit} />
+                  <Field label="Titular"        value={r.bank.holder_name || "—"} />
+                  <Field label="CUIT/CUIL"      value={r.bank.holder_tax_id || r.dropshipper.cuit || "—"} copyable={!!(r.bank.holder_tax_id || r.dropshipper.cuit)} />
+                  <Field label="Banco"          value={r.bank.bank_name || "—"} />
+                  <Field label="CBU"            value={r.bank.cbu ?? "—"} copyable={!!r.bank.cbu} mono />
                   <Field label="CVU"            value={r.bank.cvu ?? "—"} copyable={!!r.bank.cvu} mono />
                   <Field label="Alias"          value={r.bank.alias ?? "—"} copyable={!!r.bank.alias} />
-                  <Field label="Email Talo"     value={r.bank.email ?? "—"} />
                   <Field label="Monto a devolver" value={fmtMoney(r.amount_to_refund)} />
                 </div>
               </>

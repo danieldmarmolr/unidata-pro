@@ -5,8 +5,8 @@ Usado por el endpoint publico /api/public/refund-requests/validate para
 confirmar que el solicitante existe antes de aceptar el formulario.
 
 Tambien devuelve:
-- bank_hints: ultima cuenta Talo registrada (CustomerPaymentAccount) para
-  pre-llenar el form de datos bancarios.
+- bank_hints: cuenta bancaria REAL del dropshipper (cresium.UserBankAccount)
+  para pre-llenar el form de datos bancarios. NO la CVU de cobro TaloPay.
 - paid_subscription: snapshot del total pagado historicamente en suscripcion
   MELI (PaymentIntentSubscription PROCESSED), para que Finanzas vea el
   contexto de cuanto pago el dropshipper antes de definir el monto a
@@ -60,7 +60,7 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
 
     user_id = int(row["id"])
     sub_id = row["subscription_id"]
-    bank_hints = _latest_talo_account(eng, user_id)
+    bank_hints = _latest_bank_account(eng, user_id)
     paid_subscription = _paid_subscription_snapshot(eng, user_id)
     last_payment = _last_subscription_payment(eng, user_id)
 
@@ -87,54 +87,53 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
     }
 
 
-def _latest_talo_account(eng, user_id: int) -> dict | None:
-    """CustomerPaymentAccount mas reciente del dropshipper. Defensivo: usa
-    list_columns para no romper si Talo agrega/quita columnas."""
-    cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
-    if not cpa_cols:
-        return None
+def _latest_bank_account(eng, user_id: int) -> dict | None:
+    """Cuenta bancaria REAL del dropshipper desde cresium."UserBankAccount" —
+    el CBU/CVU/alias PERSONAL que cargo para cobrar (modulo de payouts Unidrop).
 
-    selects = []
-    keys = []
-    for col in ("cbu", "cbu_alias", "alias", "bank_name", "account_owner"):
-        if col in cpa_cols:
-            selects.append(f'COALESCE("{col}", \'\') AS {col}')
-            keys.append(col)
-    if not selects:
-        return None
-
-    sql = text(f"""
-        SELECT {", ".join(selects)}
-        FROM public."CustomerPaymentAccount"
+    NO usamos public."CustomerPaymentAccount": esa es la CVU de COBRO de TaloPay
+    (alias autogenerado `unidrop.*`, titularizada bajo el PSP), y pre-llenar el
+    form con eso hace que el dropper devuelva la plata a "Fox Talo Pay" en vez
+    de a su propia cuenta. Prioridad: cuenta con CBU/CVU > default > reciente.
+    """
+    sql = text("""
+        SELECT COALESCE(cbu, '')           AS cbu,
+               COALESCE(cvu, '')           AS cvu,
+               COALESCE(alias, '')         AS alias,
+               COALESCE("bankName", '')    AS bank_name,
+               COALESCE("holderName", '')  AS holder_name,
+               COALESCE("holderTaxId", '') AS holder_tax_id
+        FROM cresium."UserBankAccount"
         WHERE "userId" = :uid
-        ORDER BY id DESC
+        ORDER BY (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> ''
+                       THEN 0 ELSE 1 END),
+                 "isDefault" DESC NULLS LAST,
+                 "updatedAt" DESC NULLS LAST,
+                 id DESC
         LIMIT 1
     """)
     try:
         with eng.connect() as cx:
             row = cx.execute(sql, {"uid": user_id}).mappings().first()
     except Exception as e:
-        log.warning("talo account lookup fallo para user %s: %s", user_id, e)
+        log.warning("bank account lookup fallo para user %s: %s", user_id, e)
         return None
     if not row:
         return None
 
-    cbu = (row.get("cbu") or "").strip() if "cbu" in keys else ""
-    if not cbu:
+    cbu = (row["cbu"] or "").strip()
+    cvu = (row["cvu"] or "").strip()
+    primary = cbu or cvu  # ambos son 22 digitos; el form valida CBU/CVU indistinto
+    if not primary:
         return None
 
-    alias = ""
-    if "alias" in keys and row.get("alias"):
-        alias = row["alias"].strip()
-    elif "cbu_alias" in keys and row.get("cbu_alias"):
-        alias = row["cbu_alias"].strip()
-
     return {
-        "source": "talo",
-        "cbu": cbu,
-        "alias": alias or None,
-        "bank_name": (row.get("bank_name") or "").strip() or None if "bank_name" in keys else None,
-        "holder_name": (row.get("account_owner") or "").strip() or None if "account_owner" in keys else None,
+        "source": "cresium",
+        "cbu": primary,
+        "alias": (row["alias"] or "").strip() or None,
+        "bank_name": (row["bank_name"] or "").strip() or None,
+        "holder_name": (row["holder_name"] or "").strip() or None,
+        "holder_tax_id": (row["holder_tax_id"] or "").strip() or None,
     }
 
 

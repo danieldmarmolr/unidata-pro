@@ -91,6 +91,7 @@ type BankHints = {
   alias: string | null;
   bank_name: string | null;
   holder_name: string | null;
+  holder_tax_id: string | null;
 };
 
 type PaidSubscription = {
@@ -331,13 +332,13 @@ export default function DevSuscripcionPage() {
       setLastPayment(data.last_payment);
       if (!hintsApplied) {
         const h = data.bank_hints;
-        // 1. Titular: Talo.account_owner -> fallback a User.name
+        // 1. Titular: holderName de la cuenta bancaria -> fallback a User.name
         const holder = h?.holder_name?.trim() || data.dropshipper.name?.trim() || "";
         if (holder) setBankHolderName(holder);
-        // 2. CUIT: directo desde User.cuit (Talo no lo tiene)
-        const cuit = (data.dropshipper.cuit || "").replace(/\D/g, "");
+        // 2. CUIT: preferimos el titular de la cuenta bancaria; fallback User.cuit
+        const cuit = (h?.holder_tax_id || data.dropshipper.cuit || "").replace(/\D/g, "");
         if (cuit.length === 11) setBankHolderCuit(cuit);
-        // 3. CBU + Alias + Banco: solo desde Talo
+        // 3. CBU/CVU + Alias + Banco: de la cuenta bancaria real (cresium.UserBankAccount)
         if (h?.cbu) setBankCbu(h.cbu.replace(/\D/g, "").slice(0, 22));
         if (h?.alias) setBankAlias(h.alias);
         if (h?.bank_name) {
@@ -555,7 +556,7 @@ export default function DevSuscripcionPage() {
 
                 {(bankHints || dropshipper.cuit) && (
                   <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 text-xs text-text">
-                    Pre-cargamos los datos que tenemos de tu cuenta{bankHints ? " Talo" : ""}{dropshipper.cuit ? " + perfil Unidrop" : ""}.
+                    Pre-cargamos los datos que tenemos de tu cuenta{bankHints ? " bancaria de Unidrop" : ""}{dropshipper.cuit ? " + perfil" : ""}.
                     Verificalos antes de enviar — podés editarlos si querés cobrar en otra cuenta.
                   </div>
                 )}

@@ -7,7 +7,7 @@ Junta (todo en unidrop_api):
 - mercado_libre_dev."MercadoLibreReturnHistory"   — timeline real de transiciones
 - mercado_libre_dev."OrderMercadoLibre"           — number DROP-{dni}-N, foto, monto
 - public."User"                                   — dropshipper (nombre, email, DNI)
-- public."CustomerPaymentAccount"                 — CBU, alias, titular (para transferir)
+- cresium."UserBankAccount"                       — CBU/CVU/alias/titular REAL del dropshipper (destino del reembolso; NO la CVU de cobro TaloPay)
 - mercado_libre_dev."MercadoLibreUserAccount"     — nickname + flag "sin token"
 - contabillium_dev."ContabilliumInvoice"          — link factura, numero
 - ml_return_actions (Supabase)                    — estado interno Finanzas + audit
@@ -254,41 +254,50 @@ def list_ml_returns(
         """, {"ids": ml_order_ids}) or []
         thumb_by_oid = {int(r[0]): r[1] for r in thumb_rows if r[1]}
 
-    # 6) Cuentas Talo del dropshipper. Schema real (verificado):
-    #    id, user_id (uuid), customer_id (int), cvu, alias, name, email,
-    #    webhook_url, isActive, userId (int), createdAt, updatedAt.
-    # NO existe `cbu`/`bank_name`/`account_owner` que yo habia asumido — esta
-    # tabla guarda cuentas Talo (CVU + alias), no cuentas bancarias clasicas.
-    # Si el dropper no cargo CVU todavia, la cuenta tiene alias pero cvu='' →
-    # Finanzas no puede transferir y hay que pedirle que complete el setup.
+    # 6) Cuenta bancaria REAL del dropshipper para el reembolso.
+    # Fuente: cresium."UserBankAccount" (modulo de payouts de Unidrop) — cbu /
+    # cvu / alias / bankName / holderName PERSONALES que el dropper cargo para
+    # cobrar. NO usamos public."CustomerPaymentAccount": esa es la CVU de COBRO
+    # de TaloPay (alias autogenerado `unidrop.*`, titularizada bajo el PSP), y
+    # copiarla manda la transferencia a "Fox Talo Pay" en vez del dropshipper.
+    # Si no hay banco real cargado (la mayoria), needs_bank=True y Finanzas le
+    # pide los datos por WhatsApp en vez de transferir a la cuenta equivocada.
+    # Prioridad: cuenta con CBU/CVU > default > mas reciente.
     bank_by_uid: dict[int, dict] = {}
     if user_ids:
-        cpa_cols = list_columns(eng, "public", "CustomerPaymentAccount")
-        bank_select = ['"userId"::bigint AS uid']
-        bank_extra: list[str] = []
-        for col in ("cvu", "alias", "name", "email", "customer_id"):
-            if col in cpa_cols:
-                if col == "customer_id":
-                    bank_select.append('"customer_id"::text AS customer_id')
-                else:
-                    bank_select.append(f'COALESCE("{col}", \'\') AS {col}')
-                bank_extra.append(col)
-        if "isActive" in cpa_cols:
-            bank_select.append('COALESCE("isActive", true) AS is_active')
-            bank_extra.append("is_active")
-        bank_rows = q(eng, f"""
-            SELECT DISTINCT ON ("userId") {', '.join(bank_select)}
-            FROM public."CustomerPaymentAccount"
+        bank_rows = q(eng, """
+            SELECT DISTINCT ON ("userId")
+                   "userId"::bigint            AS uid,
+                   COALESCE(cbu, '')           AS cbu,
+                   COALESCE(cvu, '')           AS cvu,
+                   COALESCE(alias, '')         AS alias,
+                   COALESCE("bankName", '')    AS bank_name,
+                   COALESCE("holderName", '')  AS holder_name,
+                   COALESCE("holderTaxId", '') AS holder_tax_id,
+                   COALESCE("isDefault", false) AS is_default
+            FROM cresium."UserBankAccount"
             WHERE "userId" = ANY(:ids)
-            ORDER BY "userId", id ASC
+            ORDER BY "userId",
+                     (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> ''
+                           THEN 0 ELSE 1 END),
+                     "isDefault" DESC NULLS LAST,
+                     "updatedAt" DESC NULLS LAST,
+                     id DESC
         """, {"ids": user_ids}) or []
         for br in bank_rows:
-            d: dict = {}
-            for i, col in enumerate(bank_extra, 1):
-                d[col] = br[i] if br[i] not in ("", None) else None
-            # Flag derivado: Finanzas necesita CVU para poder transferir.
-            d["needs_cvu"] = not bool(d.get("cvu"))
-            bank_by_uid[int(br[0])] = d
+            cbu = (br[1] or "").strip()
+            cvu = (br[2] or "").strip()
+            bank_by_uid[int(br[0])] = {
+                "cbu": cbu or None,
+                "cvu": cvu or None,
+                "alias": (br[3] or "").strip() or None,
+                "bank_name": (br[4] or "").strip() or None,
+                "holder_name": (br[5] or "").strip() or None,
+                "holder_tax_id": (br[6] or "").strip() or None,
+                "is_default": bool(br[7]),
+                # Sin CBU ni CVU no se puede transferir → hay que pedirle los datos.
+                "needs_bank": not (cbu or cvu),
+            }
 
     # 7) Facturas Contabilium por order ID
     invoice_by_oid: dict[int, dict] = {}
