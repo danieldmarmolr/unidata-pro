@@ -278,8 +278,9 @@ def list_ml_returns(
             FROM cresium."UserBankAccount"
             WHERE "userId" = ANY(:ids)
             ORDER BY "userId",
-                     (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> ''
-                           THEN 0 ELSE 1 END),
+                     (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> '' THEN 0
+                           WHEN COALESCE(TRIM(alias), '') <> '' THEN 1
+                           ELSE 2 END),
                      "isDefault" DESC NULLS LAST,
                      "updatedAt" DESC NULLS LAST,
                      id DESC
@@ -287,16 +288,17 @@ def list_ml_returns(
         for br in bank_rows:
             cbu = (br[1] or "").strip()
             cvu = (br[2] or "").strip()
+            alias = (br[3] or "").strip()
             bank_by_uid[int(br[0])] = {
                 "cbu": cbu or None,
                 "cvu": cvu or None,
-                "alias": (br[3] or "").strip() or None,
+                "alias": alias or None,
                 "bank_name": (br[4] or "").strip() or None,
                 "holder_name": (br[5] or "").strip() or None,
                 "holder_tax_id": (br[6] or "").strip() or None,
                 "is_default": bool(br[7]),
-                # Sin CBU ni CVU no se puede transferir → hay que pedirle los datos.
-                "needs_bank": not (cbu or cvu),
+                # Con alias alcanza para transferir → solo pedimos datos si esta TODO vacio.
+                "needs_bank": not (cbu or cvu or alias),
             }
 
     # 7) Facturas Contabilium por order ID

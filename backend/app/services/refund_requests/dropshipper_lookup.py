@@ -105,8 +105,9 @@ def _latest_bank_account(eng, user_id: int) -> dict | None:
                COALESCE("holderTaxId", '') AS holder_tax_id
         FROM cresium."UserBankAccount"
         WHERE "userId" = :uid
-        ORDER BY (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> ''
-                       THEN 0 ELSE 1 END),
+        ORDER BY (CASE WHEN COALESCE(TRIM(cbu), '') <> '' OR COALESCE(TRIM(cvu), '') <> '' THEN 0
+                       WHEN COALESCE(TRIM(alias), '') <> '' THEN 1
+                       ELSE 2 END),
                  "isDefault" DESC NULLS LAST,
                  "updatedAt" DESC NULLS LAST,
                  id DESC
@@ -123,14 +124,16 @@ def _latest_bank_account(eng, user_id: int) -> dict | None:
 
     cbu = (row["cbu"] or "").strip()
     cvu = (row["cvu"] or "").strip()
+    alias = (row["alias"] or "").strip()
     primary = cbu or cvu  # ambos son 22 digitos; el form valida CBU/CVU indistinto
-    if not primary:
+    # Con alias solo tambien sirve (se transfiere por alias) → pre-llenamos igual.
+    if not (primary or alias):
         return None
 
     return {
         "source": "cresium",
         "cbu": primary,
-        "alias": (row["alias"] or "").strip() or None,
+        "alias": alias or None,
         "bank_name": (row["bank_name"] or "").strip() or None,
         "holder_name": (row["holder_name"] or "").strip() or None,
         "holder_tax_id": (row["holder_tax_id"] or "").strip() or None,

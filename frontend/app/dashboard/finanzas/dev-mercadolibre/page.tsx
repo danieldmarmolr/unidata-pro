@@ -406,9 +406,9 @@ function ReturnCard({ item: r }: { item: Item }) {
             {r.bank?.needs_bank && (
               <span
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-100 border border-amber-300 text-amber-800 text-[11px] font-semibold"
-                title="El dropper tiene cuenta en Unidrop pero no cargo CBU/CVU todavia"
+                title="El dropper tiene cuenta en Unidrop pero no cargo CBU, CVU ni alias"
               >
-                ⚠️ Falta CBU/CVU
+                ⚠️ Sin datos bancarios
               </span>
             )}
             {!r.bank && (
@@ -568,7 +568,7 @@ function ReturnCard({ item: r }: { item: Item }) {
               <>
                 {r.bank.needs_bank && (
                   <div className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded p-2 mb-2">
-                    ⚠️ Tiene cuenta en Unidrop pero <strong>no cargó CBU ni CVU</strong>.
+                    ⚠️ Tiene cuenta en Unidrop pero <strong>no cargó CBU, CVU ni alias</strong>.
                     Sin eso no se puede transferir. Usá "Pedir datos bancarios" del header para mandarle WhatsApp.
                   </div>
                 )}
