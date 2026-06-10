@@ -16,7 +16,7 @@ App productiva en `https://app.unidatacenter.com.ar`
 |------|-----------|
 | Backend | FastAPI 0.115 · SQLAlchemy 2 · Python 3.12 |
 | Base de datos | PostgreSQL en AWS RDS (acceso vía SSH tunnel a bastión EC2) |
-| Supabase | Tablas locales: `users`, `it_alerts`, `cs_actions`, `dropshipper_notes`, `reminders` |
+| App DB | PostgreSQL en RDS `unidata-prod-db` (us-east-2, misma VPC que el backend): `users`, `it_alerts`, `cs_actions`, `dropshipper_notes`, `reminders`, flujo de fondos, `meta_*`, `people_*`, etc. Migrada desde Supabase el 2026-06-10 |
 | Auth | JWT HS256 · bcrypt · 2FA TOTP (pyotp) · token MCP 90d (scope=mcp) |
 | Frontend | Next.js 16 · React 19 · Tailwind 4 · Recharts · TanStack Query 5 |
 | Estado global | Zustand (period filters, custom range) con localStorage |
@@ -41,6 +41,8 @@ Todo el stack productivo vive en **AWS** (cuenta `043187662940` · región `us-e
 > Las credenciales AWS del CI viven en los **GitHub Secrets** del repo (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION`), atadas al IAM user `unistore-devops`. Si el deploy falla con `The security token included in the request is invalid`, la access key se rotó/borró → crear una nueva para `unistore-devops` y actualizar esos 3 secrets.
 
 > **Conexión RDS:** las credenciales (`PROD_DB_PASSWORD_*`, etc.) están **inline en el `environment` del task def del backend** (NO Secrets Manager). Para rotar un password: nueva revisión de la task def con el env actualizado + `update-service`.
+>
+> **App DB (`DATABASE_URL`):** apunta a RDS `unidata-prod-db` (cutover desde Supabase: 2026-06-10, task def rev 6). La URL con el password vigente vive también en el secret `unidata/prod/backend` de Secrets Manager — mantenerlo sincronizado al rotar. El proyecto Supabase queda vivo solo como rollback temporal; no escribirle.
 
 ---
 
@@ -196,7 +198,7 @@ unidata-pro/
 │   │   │   ├── cs_actions_db.py       # cs_actions CRUD
 │   │   │   ├── dropshipper_notes_db.py # NUEVO · CRUD + soft-archive
 │   │   │   ├── reminders_db.py        # NUEVO · CRUD + due tracking
-│   │   │   └── local_persistence.py   # pool psycopg2 a Supabase
+│   │   │   └── local_persistence.py   # pool psycopg2 a la app DB (RDS unidata-prod-db)
 │   │   ├── services/                  # lógica de negocio (1 archivo por dominio)
 │   │   │   ├── rfm_analytics.py
 │   │   │   ├── rfm_flows.py
@@ -345,21 +347,21 @@ Requiere Node.js. La extensión Claude Code VSCode también lo soporta.
 
 Tres sistemas distintos, NO mezclarlos:
 
-1. **`it_alerts`** (tabla Supabase) — alertas de salud de integraciones
+1. **`it_alerts`** (tabla app DB) — alertas de salud de integraciones
    - Endpoints: `GET/POST /api/notifications` + `/resolve` + `/unresolve`
    - MCP: `list_alerts`, `resolve_alert`, `unresolve_alert`
 
-2. **`cs_actions`** (tabla Supabase) — cola de tareas para Customer Success
+2. **`cs_actions`** (tabla app DB) — cola de tareas para Customer Success
    - Endpoints: `GET/POST /api/cs-actions/...` + `/take` + `/complete` + `/cancel` + `/note`
    - MCP: 6 tools wraping todo el flow
 
-3. **`dropshipper_notes`** (tabla Supabase, NUEVO) — notas del equipo por dropshipper
+3. **`dropshipper_notes`** (tabla app DB, NUEVO) — notas del equipo por dropshipper
    - Endpoints: `GET/POST /api/dropshipper-notes` + `PATCH/{id}` + `/archive`
    - MCP: `add_dropshipper_note`, `list_dropshipper_notes`, `archive_dropshipper_note`
    - 7 categorías: `general/cs/billing/support/retention/flag/ops`
    - Visible en el dropshipper 360 inline
 
-4. **`reminders`** (tabla Supabase, NUEVO) — recordatorios personales
+4. **`reminders`** (tabla app DB, NUEVO) — recordatorios personales
    - Endpoints: `GET/POST /api/reminders` + `POST/{id}/complete` + `DELETE/{id}`
    - MCP: 3 tools
    - target_type: dropshipper/order/customer/cs_action/alert/general
@@ -396,7 +398,7 @@ uv pip install -e .
 UNIDATA_API_URL=https://api.unidatacenter.com.ar unidata-mcp-http
 ```
 
-**Advertencia:** el backend local usa el mismo Supabase (users/audit) que producción. Si se crean usuarios de test, eliminarlos después.
+**Advertencia:** la app DB de prod es la RDS `unidata-prod-db`, que es **privada** — para dev local hace falta túnel SSH al bastión unidata (`ssh -i unidata-bastion-key.pem -L 5433:unidata-prod-db.c1u2aymu0gg8.us-east-2.rds.amazonaws.com:5432 ec2-user@18.226.5.216`) y `DATABASE_URL` apuntando a `localhost:5433`. Es la misma DB que producción: si se crean usuarios de test, eliminarlos después.
 
 Los SSH tunnels al RDS se abren automáticamente al iniciar el backend si las variables de entorno están seteadas.
 
@@ -438,7 +440,7 @@ ERP de tesorería del grupo desarrollado por **Pedro Abbiati** (`pedro.abbiati@u
 
 | Componente | Estado |
 |------------|--------|
-| DB migrada al Supabase UNIDATA (11 tablas + 538 filas + 9 enums + user) | ✅ Hecho |
+| DB migrada a la app DB de UNIDATA (11 tablas + 538 filas + 9 enums + user; hoy en RDS `unidata-prod-db`) | ✅ Hecho |
 | Subtree `services/flujo-fondos/` como **referencia de código** (NO se deploya) | ✅ Mantenido |
 | Backend FastAPI `/api/flujo-fondos/*` (modelos SQLAlchemy + endpoints) | 🟡 En progreso |
 | Frontend Next.js `dashboard/finanzas/flujo-fondos/*` | 🟡 En progreso |
@@ -447,7 +449,7 @@ ERP de tesorería del grupo desarrollado por **Pedro Abbiati** (`pedro.abbiati@u
 ### Reglas
 
 1. **El subtree `services/flujo-fondos/` es solo referencia.** No deployar. No editar. Las features se portan a `backend/app/services/flujo_fondos/` y `frontend/app/dashboard/finanzas/flujo-fondos/`.
-2. **DB compartida con UNIDATA**: las 11 tablas viven en `public` del Supabase UNIDATA. SQLAlchemy del backend las mapea directamente.
+2. **DB compartida con UNIDATA**: las 11 tablas viven en `public` de la app DB de UNIDATA (RDS `unidata-prod-db`). SQLAlchemy del backend las mapea directamente.
 3. **Auth**: usar el JWT propio de UNIDATA, no Supabase Auth. La tabla `perfiles` queda obsoleta para el port nativo (Pedro será un user normal de UNIDATA con area_slug=finanzas).
 4. **RBAC**: cada endpoint con `require_area(["finanzas", "administracion"])` (admin/gerencia bypass automático).
 5. **Lógica compleja a portar**: `proyeccion.ts` (motor central), `pagos-atrasados.ts` (sugerencias), `detectar-patrones.ts`, `DIFERIMIENTO_POR_UNIDAD` (Unistore Mayorista cobra día X+1).

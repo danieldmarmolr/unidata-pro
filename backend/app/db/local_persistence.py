@@ -1,6 +1,6 @@
 """
 Helpers para la BBDD propia de UNIDATA (users, costs, audit log).
-Backend: PostgreSQL (Supabase en prod, cualquier Postgres en local via DATABASE_URL).
+Backend: PostgreSQL (RDS unidata-prod-db en prod, cualquier Postgres en local via DATABASE_URL).
 
 Uso:
     with get_conn() as c, c.cursor() as cur:
