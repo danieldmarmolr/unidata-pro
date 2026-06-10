@@ -470,6 +470,13 @@ def list_ml_returns(
     if status_counts is None:
         log.error("ml_returns_finance: count_sql fallo. params=%r", count_params)
         status_counts = []
+    else:
+        log.info(
+            "ml_returns_finance: count_sql OK status_counts=%r params=%r has_search=%s",
+            [(r[0], int(r[1] or 0)) for r in status_counts],
+            count_params,
+            bool(search),
+        )
     for sc in status_counts:
         if sc[0] in ML_STATUSES:
             counts[sc[0]] = int(sc[1] or 0)
