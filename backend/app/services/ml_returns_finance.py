@@ -107,7 +107,7 @@ def list_ml_returns(
     where_sql = (" AND " + " AND ".join(where)) if where else ""
 
     # 1) Query principal: MercadoLibreReturn + OML + User + MLA
-    rows = q(eng, f"""
+    main_sql = f"""
         SELECT
             r.id::int                                       AS return_pk,
             r."claimId"::bigint                             AS claim_id,
@@ -152,10 +152,21 @@ def list_ml_returns(
         WHERE 1=1 {where_sql}
         ORDER BY r."createdAt" DESC NULLS LAST
         LIMIT :limit OFFSET :offset
-    """, {**params, "limit": int(limit) + 200, "offset": int(offset)}) or []
-
-    if not rows:
-        return {"items": [], "count": 0, "total": 0, "counts_by_bucket": _empty_counts()}
+    """
+    main_params = {**params, "limit": int(limit) + 200, "offset": int(offset)}
+    rows = q(eng, main_sql, main_params)
+    if rows is None:
+        log.error(
+            "ml_returns_finance: query principal devolvio None (fallo). "
+            "tab=%s search=%r from=%s to=%s. SQL preview: %s",
+            tab, search, from_date, to_date, main_sql.strip().splitlines()[0][:200],
+        )
+        rows = []
+    else:
+        log.info(
+            "ml_returns_finance: query principal OK rows=%d tab=%s search=%r",
+            len(rows), tab, search,
+        )
 
     return_pks = list({int(r[0]) for r in rows if r[0] is not None})
     ml_order_ids = list({int(r[4]) for r in rows if r[4]})
@@ -435,16 +446,30 @@ def list_ml_returns(
         count_params["to_date"] = to_date
     count_where_sql = (" AND " + " AND ".join(count_where)) if count_where else ""
 
-    status_counts = q(eng, f"""
-        SELECT r.status::text AS s, COUNT(*)::int AS n
-        FROM mercado_libre_dev."MercadoLibreReturn" r
-        LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
-        LEFT JOIN public."User" u ON u.id = o."userId"
-        LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
-            ON mla.id = u."mercadoLibreAccountId"
-        WHERE 1=1 {count_where_sql}
-        GROUP BY 1
-    """, count_params) or []
+    # Counts SIN JOIN cuando no hay search (mas rapido). Con search/fechas SI
+    # necesitamos los JOINs porque el filtro toca User/OML/MLA.
+    if search:
+        count_sql = f"""
+            SELECT r.status::text AS s, COUNT(*)::int AS n
+            FROM mercado_libre_dev."MercadoLibreReturn" r
+            LEFT JOIN mercado_libre_dev."OrderMercadoLibre" o ON o.id = r."orderId"
+            LEFT JOIN public."User" u ON u.id = o."userId"
+            LEFT JOIN mercado_libre_dev."MercadoLibreUserAccount" mla
+                ON mla.id = u."mercadoLibreAccountId"
+            WHERE 1=1 {count_where_sql}
+            GROUP BY 1
+        """
+    else:
+        count_sql = f"""
+            SELECT r.status::text AS s, COUNT(*)::int AS n
+            FROM mercado_libre_dev."MercadoLibreReturn" r
+            WHERE 1=1 {count_where_sql}
+            GROUP BY 1
+        """
+    status_counts = q(eng, count_sql, count_params)
+    if status_counts is None:
+        log.error("ml_returns_finance: count_sql fallo. params=%r", count_params)
+        status_counts = []
     for sc in status_counts:
         if sc[0] in ML_STATUSES:
             counts[sc[0]] = int(sc[1] or 0)
