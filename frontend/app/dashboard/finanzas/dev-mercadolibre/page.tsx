@@ -7,11 +7,19 @@ import {
   RotateCcw, ChevronDown, ChevronRight, Inbox, Check, Copy,
   ExternalLink, X, Receipt, KeyRound, Truck, PackageCheck, Search,
   Bell, Image as ImageIcon, MessageCircle, User as UserIcon, Filter,
+  PackageOpen, Banknote, ArchiveRestore,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { api } from "@/lib/api";
 
-type MLStatus = "NOTIFICADA" | "EN_CAMINO" | "TRANSFERENCIA_PENDIENTE" | "CERRADA";
+type MLStatus =
+  | "NOTIFICADA"
+  | "EN_CAMINO"
+  | "RECIBIDA_SIN_CONFIRMAR"
+  | "RECIBIDA"
+  | "TRANSFERENCIA_PENDIENTE"
+  | "TRANSFERIDA"
+  | "CERRADA";
 type FZTab = "transferida_fz" | "rechazada_fz";
 type Tab = MLStatus | FZTab | "todas";
 type ActionStatus = "pending" | "transferred" | "rejected";
@@ -97,20 +105,26 @@ type Resp = {
 };
 
 const TAB_META: Record<Tab, { label: string; color: string; bg: string; border: string; icon: typeof Truck }> = {
-  NOTIFICADA:              { label: "Notificadas",   color: "#f59e0b", bg: "bg-amber-50",   border: "border-amber-300",   icon: Bell        },
-  EN_CAMINO:               { label: "En camino",     color: "#0ea5e9", bg: "bg-sky-50",     border: "border-sky-300",     icon: Truck       },
-  TRANSFERENCIA_PENDIENTE: { label: "A transferir",  color: "#8b5cf6", bg: "bg-violet-50",  border: "border-violet-300",  icon: PackageCheck },
-  CERRADA:                 { label: "Cerradas",      color: "#10b981", bg: "bg-emerald-50", border: "border-emerald-300", icon: Check       },
-  transferida_fz:          { label: "Transferidas Fz", color: "#3b82f6", bg: "bg-blue-50",  border: "border-blue-300",    icon: Check       },
-  rechazada_fz:            { label: "Rechazadas Fz",   color: "#94a3b8", bg: "bg-zinc-50",  border: "border-zinc-300",    icon: X           },
-  todas:                   { label: "Todas",         color: "#6366f1", bg: "bg-indigo-50",  border: "border-indigo-300",  icon: RotateCcw   },
+  NOTIFICADA:              { label: "Notificadas",        color: "#f59e0b", bg: "bg-amber-50",   border: "border-amber-300",   icon: Bell           },
+  EN_CAMINO:               { label: "En camino",          color: "#0ea5e9", bg: "bg-sky-50",     border: "border-sky-300",     icon: Truck          },
+  RECIBIDA_SIN_CONFIRMAR:  { label: "Por confirmar",      color: "#a855f7", bg: "bg-purple-50",  border: "border-purple-300",  icon: PackageOpen    },
+  RECIBIDA:                { label: "Recibidas",          color: "#8b5cf6", bg: "bg-violet-50",  border: "border-violet-300",  icon: PackageCheck   },
+  TRANSFERENCIA_PENDIENTE: { label: "A transferir",       color: "#ec4899", bg: "bg-pink-50",    border: "border-pink-300",    icon: Banknote       },
+  TRANSFERIDA:             { label: "Transferidas (ML)",  color: "#3b82f6", bg: "bg-blue-50",    border: "border-blue-300",    icon: Check          },
+  CERRADA:                 { label: "Cerradas",           color: "#10b981", bg: "bg-emerald-50", border: "border-emerald-300", icon: ArchiveRestore },
+  transferida_fz:          { label: "Transf. Fz",         color: "#3b82f6", bg: "bg-blue-50",    border: "border-blue-300",    icon: Check          },
+  rechazada_fz:            { label: "Rechaz. Fz",         color: "#94a3b8", bg: "bg-zinc-50",    border: "border-zinc-300",    icon: X              },
+  todas:                   { label: "Todas",              color: "#6366f1", bg: "bg-indigo-50",  border: "border-indigo-300",  icon: RotateCcw      },
 };
 
 const ML_STATUS_LABEL: Record<string, string> = {
-  NOTIFICADA: "Notificada",
-  EN_CAMINO: "En camino",
+  NOTIFICADA:              "Notificada",
+  EN_CAMINO:               "En camino",
+  RECIBIDA_SIN_CONFIRMAR:  "Recibida (sin confirmar)",
+  RECIBIDA:                "Recibida",
   TRANSFERENCIA_PENDIENTE: "Pend. transferencia",
-  CERRADA: "Cerrada",
+  TRANSFERIDA:             "Transferida (ML)",
+  CERRADA:                 "Cerrada",
 };
 
 function fmtDate(iso: string | null | undefined): string {
@@ -160,9 +174,17 @@ export default function DevMercadoLibrePage() {
   });
 
   const items = data?.items ?? [];
-  const counts = data?.counts_by_bucket ?? {
-    NOTIFICADA: 0, EN_CAMINO: 0, TRANSFERENCIA_PENDIENTE: 0, CERRADA: 0,
-    transferida_fz: 0, rechazada_fz: 0, todas: 0,
+  const counts: Record<Tab, number> = data?.counts_by_bucket ?? {
+    NOTIFICADA: 0,
+    EN_CAMINO: 0,
+    RECIBIDA_SIN_CONFIRMAR: 0,
+    RECIBIDA: 0,
+    TRANSFERENCIA_PENDIENTE: 0,
+    TRANSFERIDA: 0,
+    CERRADA: 0,
+    transferida_fz: 0,
+    rechazada_fz: 0,
+    todas: 0,
   };
 
   return (
@@ -175,13 +197,17 @@ export default function DevMercadoLibrePage() {
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
-            <TabBtn active={tab === "TRANSFERENCIA_PENDIENTE"} onClick={() => setTab("TRANSFERENCIA_PENDIENTE")} label="A transferir" count={counts.TRANSFERENCIA_PENDIENTE} />
-            <TabBtn active={tab === "NOTIFICADA"}             onClick={() => setTab("NOTIFICADA")}             label="Notificadas"  count={counts.NOTIFICADA} />
-            <TabBtn active={tab === "EN_CAMINO"}              onClick={() => setTab("EN_CAMINO")}              label="En camino"    count={counts.EN_CAMINO} />
-            <TabBtn active={tab === "CERRADA"}                onClick={() => setTab("CERRADA")}                label="Cerradas"     count={counts.CERRADA} />
-            <TabBtn active={tab === "transferida_fz"}         onClick={() => setTab("transferida_fz")}         label="Transf. Fz"   count={counts.transferida_fz} />
-            <TabBtn active={tab === "rechazada_fz"}           onClick={() => setTab("rechazada_fz")}           label="Rechaz. Fz"   count={counts.rechazada_fz} />
-            <TabBtn active={tab === "todas"}                  onClick={() => setTab("todas")}                  label="Todas"        count={counts.todas} />
+            {/* Cola accionable Finanzas primero, despues flow cronologico ML */}
+            <TabBtn active={tab === "TRANSFERENCIA_PENDIENTE"} onClick={() => setTab("TRANSFERENCIA_PENDIENTE")} label="A transferir"   count={counts.TRANSFERENCIA_PENDIENTE} />
+            <TabBtn active={tab === "RECIBIDA"}                onClick={() => setTab("RECIBIDA")}                label="Recibidas"      count={counts.RECIBIDA} />
+            <TabBtn active={tab === "RECIBIDA_SIN_CONFIRMAR"}  onClick={() => setTab("RECIBIDA_SIN_CONFIRMAR")}  label="Por confirmar"  count={counts.RECIBIDA_SIN_CONFIRMAR} />
+            <TabBtn active={tab === "NOTIFICADA"}              onClick={() => setTab("NOTIFICADA")}              label="Notificadas"    count={counts.NOTIFICADA} />
+            <TabBtn active={tab === "EN_CAMINO"}               onClick={() => setTab("EN_CAMINO")}               label="En camino"      count={counts.EN_CAMINO} />
+            <TabBtn active={tab === "TRANSFERIDA"}             onClick={() => setTab("TRANSFERIDA")}             label="Transf. ML"     count={counts.TRANSFERIDA} />
+            <TabBtn active={tab === "CERRADA"}                 onClick={() => setTab("CERRADA")}                 label="Cerradas"       count={counts.CERRADA} />
+            <TabBtn active={tab === "transferida_fz"}          onClick={() => setTab("transferida_fz")}          label="Transf. Fz"     count={counts.transferida_fz} />
+            <TabBtn active={tab === "rechazada_fz"}            onClick={() => setTab("rechazada_fz")}            label="Rechaz. Fz"     count={counts.rechazada_fz} />
+            <TabBtn active={tab === "todas"}                   onClick={() => setTab("todas")}                   label="Todas"          count={counts.todas} />
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="relative">

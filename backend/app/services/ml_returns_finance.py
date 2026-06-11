@@ -12,15 +12,19 @@ Junta (todo en unidrop_api):
 - contabillium_dev."ContabilliumInvoice"          — link factura, numero
 - ml_return_actions (Supabase)                    — estado interno Finanzas + audit
 
-Tabs por `MercadoLibreReturn.status` (enum real del schema):
-- NOTIFICADA             (128) — claim recien notificado por ML
-- EN_CAMINO              (113) — mercaderia volviendo al deposito
-- TRANSFERENCIA_PENDIENTE (60) — llego, falta plata al dropshipper (cola accionable)
-- CERRADA                 (27) — caso terminado en ML
+Tabs por `MercadoLibreReturn.status` (enum real del schema, 7 estados):
+- NOTIFICADA             — claim recien notificado por ML
+- EN_CAMINO              — mercaderia volviendo al deposito
+- RECIBIDA_SIN_CONFIRMAR — llego al deposito pero falta confirmar fisicamente
+- RECIBIDA               — confirmada fisicamente (siguiente paso: transferir)
+- TRANSFERENCIA_PENDIENTE — confirmada + esperando transferencia (cola Finanzas)
+- TRANSFERIDA            — el sistema marca que ya se transferio
+- CERRADA                — caso terminado en ML
 
-Mas pseudo-tabs derivados de finance_action (NO del schema ML):
-- TRANSFERIDA_FZ — Finanzas marco como transferido
-- RECHAZADA_FZ  — Finanzas rechazo
+Mas pseudo-tabs derivados de finance_action (tracking interno UNIDATA, NO del
+schema ML):
+- TRANSFERIDA_FZ — Finanzas marco como transferido desde UNIDATA
+- RECHAZADA_FZ  — Finanzas rechazo desde UNIDATA
 """
 from __future__ import annotations
 
@@ -34,9 +38,18 @@ from app.services._utils import list_columns, q
 log = logging.getLogger("unidata.ml_returns_finance")
 
 
-# Buckets validos para el filtro de tab. Los 4 primeros vienen del enum status
-# de MercadoLibreReturn; los 2 ultimos los gestionamos nosotros en Supabase.
-ML_STATUSES = ("NOTIFICADA", "EN_CAMINO", "TRANSFERENCIA_PENDIENTE", "CERRADA")
+# Buckets validos para el filtro de tab. Los 7 primeros vienen del enum status
+# de MercadoLibreReturn (orden cronologico del flow: claim entra → llega →
+# se confirma → transfiere → cierra); los 2 ultimos los gestionamos en Supabase.
+ML_STATUSES = (
+    "NOTIFICADA",
+    "EN_CAMINO",
+    "RECIBIDA_SIN_CONFIRMAR",
+    "RECIBIDA",
+    "TRANSFERENCIA_PENDIENTE",
+    "TRANSFERIDA",
+    "CERRADA",
+)
 FZ_STATUSES = ("transferida_fz", "rechazada_fz")
 TABS = ("todas", *ML_STATUSES, *FZ_STATUSES)
 
@@ -515,15 +528,13 @@ def list_ml_returns(
 
 
 def _empty_counts() -> dict:
-    return {
-        "NOTIFICADA": 0,
-        "EN_CAMINO": 0,
-        "TRANSFERENCIA_PENDIENTE": 0,
-        "CERRADA": 0,
-        "transferida_fz": 0,
-        "rechazada_fz": 0,
-        "todas": 0,
-    }
+    # Derivado de ML_STATUSES + FZ_STATUSES asi nunca falta un bucket cuando
+    # el enum crece. Mantenemos el orden del enum (flow cronologico).
+    out = {s: 0 for s in ML_STATUSES}
+    for s in FZ_STATUSES:
+        out[s] = 0
+    out["todas"] = 0
+    return out
 
 
 def get_ml_return(ml_order_id: int) -> dict | None:
