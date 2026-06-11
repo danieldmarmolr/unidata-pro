@@ -1434,6 +1434,7 @@ def start_sync_async(
         raise RuntimeError(f"kind invalido: {kind}")
     from app.db import meta_sync_runs_db as runs_db
     runs_db.init()
+    runs_db.expire_stale(kind)
     active = runs_db.find_active(kind)
     if active:
         return {"run_id": int(active["id"]), "reused": True}

@@ -121,6 +121,28 @@ def list_runs(kind: str | None = None, limit: int = 10) -> list[dict]:
         return [_serialize(dict(r)) for r in cur.fetchall()]
 
 
+def expire_stale(kind: str, max_age_hours: int = 2) -> int:
+    """Marca como error los runs activos cuyo thread ya no puede existir.
+
+    El sync corre en un thread daemon del proceso; un redeploy/crash de ECS
+    lo mata sin actualizar el row, y ese zombie bloquea find_active para
+    siempre. Ningun sync legitimo (incluso backfill 12m) tarda mas de 2h.
+    """
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute("""
+            UPDATE meta_sync_runs
+            SET status = 'error', finished_at = NOW(),
+                error = 'stale: run activo por mas de ' || %s || 'h, thread presumiblemente muerto por redeploy'
+            WHERE kind = %s AND status IN ('pending', 'running')
+              AND started_at < NOW() - make_interval(hours => %s)
+        """, (max_age_hours, kind, max_age_hours))
+        expired = cur.rowcount
+    if expired:
+        log.warning("expire_stale: %d run(s) zombie de %s marcados como error", expired, kind)
+    return expired
+
+
 def find_active(kind: str) -> dict | None:
     init()
     with get_conn() as c, c.cursor() as cur:
