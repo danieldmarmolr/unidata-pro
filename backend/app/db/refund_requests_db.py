@@ -266,6 +266,38 @@ def mark_transferred(
     return _to_dict(row) if row else None
 
 
+def mark_transferred_system(
+    request_id: int,
+    *,
+    user_id: int,
+    user_email: str,
+    note: str | None,
+    refund_amount_arg: float | None,
+) -> dict | None:
+    """Variante para el motor Cresium: marca transferred desde un estado no
+    terminal (pending o rejected). No-op si ya esta en transferred o
+    integration_cancelled. Devuelve la fila si flipeo, None si no."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE subscription_refund_requests
+            SET status = 'transferred',
+                transferred_at = NOW(),
+                transferred_by_user_id = %s,
+                transferred_by_email = %s,
+                transferred_note = %s,
+                refund_amount_arg = COALESCE(%s, refund_amount_arg),
+                updated_at = NOW()
+            WHERE id = %s AND status NOT IN ('transferred','integration_cancelled')
+            RETURNING *
+            """,
+            (user_id, user_email, note, refund_amount_arg, request_id),
+        )
+        row = cur.fetchone()
+    return _to_dict(row) if row else None
+
+
 def mark_integration_cancelled(
     request_id: int,
     *,

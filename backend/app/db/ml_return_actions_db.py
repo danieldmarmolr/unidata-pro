@@ -184,6 +184,42 @@ def mark_rejected(
     return _to_dict(row) if row else None
 
 
+def mark_transferred_system(
+    ml_order_id: int,
+    *,
+    return_idx: int = 1,
+    user_id: int,
+    user_email: str,
+    note: str | None,
+    amount_arg: float | None,
+    dropshipper_user_id: int | None = None,
+    dropshipper_dni: str | None = None,
+) -> dict | None:
+    """Variante para el motor Cresium: marca transferred desde CUALQUIER estado
+    que no sea ya 'transferred' (pending o rejected). Idempotente: no-op si la
+    fila ya esta en transferred. Devuelve la fila si flipeo, None si no."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        _upsert_pending(cur, ml_order_id, return_idx, dropshipper_user_id, dropshipper_dni)
+        cur.execute(
+            """
+            UPDATE ml_return_actions
+            SET status = 'transferred',
+                transferred_at = NOW(),
+                transferred_by_user_id = %s,
+                transferred_by_email = %s,
+                transferred_note = %s,
+                transferred_amount_arg = %s,
+                updated_at = NOW()
+            WHERE ml_order_id = %s AND return_idx = %s AND status <> 'transferred'
+            RETURNING *
+            """,
+            (user_id, user_email, note, amount_arg, ml_order_id, return_idx),
+        )
+        row = cur.fetchone()
+    return _to_dict(row) if row else None
+
+
 def revert_to_pending(
     ml_order_id: int,
     *,
