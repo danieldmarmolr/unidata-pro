@@ -19,6 +19,7 @@ from typing import Literal
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services.profit_engine import cost_index_unistore, calc_profit
+from app.services import subscription_mp
 
 log = logging.getLogger("unidata.commercial")
 
@@ -110,7 +111,8 @@ def _series_unidrop_ml(gran: str, since_iso: str) -> list[tuple]:
 
 
 def _series_subs_unidrop(gran: str, since_iso: str) -> list[tuple]:
-    """Suscripciones MELI cobradas (PaymentIntentSubscription PROCESSED)."""
+    """Suscripciones MELI cobradas: Talo (PaymentIntentSubscription PROCESSED) +
+    MercadoPago (MpSubscriptionCharge approved, modelo vigente desde 2026-06)."""
     eng = get_engine("unidrop")
     sql = f"""
         SELECT date_trunc('{gran}', "createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires')::date AS bucket,
@@ -120,7 +122,9 @@ def _series_subs_unidrop(gran: str, since_iso: str) -> list[tuple]:
           AND "createdAt" >= :since
         GROUP BY 1 ORDER BY 1
     """
-    return q(eng, sql, {"since": since_iso}) or []
+    talo = q(eng, sql, {"since": since_iso}) or []
+    mp = subscription_mp.revenue_rows_by_bucket(eng, gran=gran, since_iso=since_iso)
+    return list(talo) + mp
 
 
 def time_series(gran: str, since: date) -> dict:

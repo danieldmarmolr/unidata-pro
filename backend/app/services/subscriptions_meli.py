@@ -11,6 +11,7 @@ import datetime as dt
 from app.db.engines import get_engine
 from app.services._utils import q, scalar
 from app.services._utils import resolve_window
+from app.services import subscription_mp
 
 PERIOD_DAYS = {"today": 1, "7d": 7, "30d": 30, "90d": 90, "12m": 365}
 
@@ -29,7 +30,7 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
 
     cards: list[dict] = []
 
-    # MRR proxy: monto procesado en periodo
+    # MRR proxy: monto procesado en periodo (Talo PROCESSED + MercadoPago approved)
     revenue = float(scalar(eng, f"""
         SELECT COALESCE(SUM("paidAmount"),0)::float
         FROM public."PaymentIntentSubscription"
@@ -37,6 +38,7 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
           AND status::text = 'PROCESSED'
           {plan_filter}
     """, p) or 0)
+    revenue += subscription_mp.revenue_window(eng, days=days, plan=plan)
     revenue_prev = float(scalar(eng, f"""
         SELECT COALESCE(SUM("paidAmount"),0)::float
         FROM public."PaymentIntentSubscription"
@@ -45,6 +47,7 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
           AND status::text = 'PROCESSED'
           {plan_filter}
     """, p) or 0)
+    revenue_prev += subscription_mp.revenue_window(eng, days=days * 2, days_to=days, plan=plan)
     delta_rev = ((revenue - revenue_prev) / revenue_prev * 100) if revenue_prev > 0 else None
     cards.append({
         "label": f"Cobrado MELI ({period})",
@@ -124,10 +127,15 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
           {plan_filter}
         GROUP BY 1 ORDER BY 1
     """) or []
+    mp_month: dict[str, float] = {}
+    for mdate, amt in subscription_mp.revenue_rows_by_bucket(eng, gran="month", days=365, plan=plan):
+        if mdate:
+            k = mdate.strftime("%Y-%m")
+            mp_month[k] = mp_month.get(k, 0.0) + amt
     series = [
         {
             "label": "Cobrado",
-            "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[2] or 0)} for r in rows],
+            "points": [{"date": r[0].strftime("%Y-%m") if r[0] else "", "value": float(r[2] or 0) + mp_month.get(r[0].strftime("%Y-%m") if r[0] else "", 0.0)} for r in rows],
         },
         {
             "label": "Intents creados",
@@ -154,9 +162,10 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
         WHERE pis."createdAt" >= NOW() - make_interval(days => :days)
         GROUP BY 1, 2, 3, 4 ORDER BY paid DESC
     """, p) or []
+    mp_by_plan = subscription_mp.revenue_by_plan(eng, days=days, plan="all")
     by_plan = [{
         "category": f"{r[0]} - {r[1] or 'desconocido'}",
-        "value": float(r[7] or 0),
+        "value": float(r[7] or 0) + mp_by_plan.get(int(r[0] or 0), 0.0),
         "extra": {
             "plan_id": int(r[0] or 0),
             "precio": float(r[2] or 0),
@@ -197,11 +206,15 @@ def subscriptions_meli(period: str = "30d", plan: str = "all", from_iso: str | N
         GROUP BY u.id, u.fantasy_name, u.name, u.email
         ORDER BY total DESC LIMIT 15
     """) or []
-    top_subscribers = [{
+    mp_by_user = subscription_mp.revenue_by_user(eng, plan=plan)
+    top_subscribers = sorted(({
         "category": r[1] or f"User {r[0]}",
-        "value": float(r[3] or 0),
-        "extra": {"subs": int(r[2] or 0), "user_id": int(r[0] or 0)},
-    } for r in rows]
+        "value": float(r[3] or 0) + mp_by_user.get(int(r[0] or 0), (0.0, 0))[0],
+        "extra": {
+            "subs": int(r[2] or 0) + mp_by_user.get(int(r[0] or 0), (0.0, 0))[1],
+            "user_id": int(r[0] or 0),
+        },
+    } for r in rows), key=lambda x: x["value"], reverse=True)
 
     return {
         "period": period,

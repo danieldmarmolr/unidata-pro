@@ -19,6 +19,7 @@ from typing import Any
 from app.db.engines import get_engine
 from app.services._utils import q, scalar, resolve_window
 from app.services.profit_engine import cost_index_unistore, calc_profit
+from app.services import subscription_mp
 
 log = logging.getLogger("unidata.executive_profit")
 
@@ -364,6 +365,8 @@ def ganancia_unidrop(period: str, from_iso: str | None, to_iso: str | None,
         WHERE status::text = 'PROCESSED'
           AND "createdAt" >= NOW() - make_interval(days => :days)
     """, p) or 0)
+    # + cobros MercadoPago (modelo nuevo desde 2026-06; el de arriba es solo Talo)
+    suscripciones_cobradas += subscription_mp.revenue_window(eng, days=days)
 
     # Ganancia mayorista por mercaderia vendida a dropshippers.
     # cost_idx puede venir precomputado del overview (evita doble carga).
@@ -589,7 +592,7 @@ def profit_daily_consolidated(days: int = 90, forecast_horizon: int = 28) -> dic
             WHERE "createdAt" >= NOW() - make_interval(days => :days)
             GROUP BY 1
         """, p) or []
-        # Suscripciones cobradas diarias
+        # Suscripciones cobradas diarias (Talo + MercadoPago)
         subs_rows = q(eng, """
             SELECT DATE("createdAt" AT TIME ZONE 'America/Argentina/Buenos_Aires') AS d,
                    COALESCE(SUM("paidAmount"), 0)::float AS amt
@@ -598,8 +601,9 @@ def profit_daily_consolidated(days: int = 90, forecast_horizon: int = 28) -> dic
               AND "createdAt" >= NOW() - make_interval(days => :days)
             GROUP BY 1
         """, p) or []
+        mp_subs_rows = subscription_mp.revenue_rows_by_bucket(eng, gran="day", days=days)
 
-        for d, val in (comm_rows + comm_subs_rows + subs_rows):
+        for d, val in (comm_rows + comm_subs_rows + subs_rows + mp_subs_rows):
             if d is None:
                 continue
             key = d.isoformat()

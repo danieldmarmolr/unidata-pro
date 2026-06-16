@@ -17,6 +17,7 @@ from sqlalchemy import text
 
 from app.db.engines import get_engine
 from app.db.local_persistence import get_conn
+from app.services import subscription_mp
 
 log = logging.getLogger("unidata.subscription_churn")
 
@@ -307,8 +308,9 @@ def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
 
 
 def _real_revenue_from_talo(dropshipper_ids: list[int]) -> tuple[dict[int, float], float]:
-    """Cruza los dropshippers que pidieron baja contra PaymentIntentSubscription
-    en unidrop_api para obtener el revenue REAL pagado (status PROCESSED).
+    """Revenue REAL pagado por los dropshippers que pidieron baja, sumando los
+    dos rieles de cobro: TaloPay (PaymentIntentSubscription PROCESSED) +
+    MercadoPago (MpSubscriptionCharge approved, modelo vigente desde 2026-06).
     Devuelve (mapa user_id -> total, sumatoria total).
     """
     if not dropshipper_ids:
@@ -332,6 +334,10 @@ def _real_revenue_from_talo(dropshipper_ids: list[int]) -> tuple[dict[int, float
         return {}, 0.0
 
     by_user = {int(r["user_id"]): float(r["total"] or 0) for r in rows}
+    for uid, (mp_total, _cnt) in subscription_mp.revenue_by_user(
+        eng, user_ids=dropshipper_ids
+    ).items():
+        by_user[uid] = by_user.get(uid, 0.0) + mp_total
     total = sum(by_user.values())
     return by_user, total
 
