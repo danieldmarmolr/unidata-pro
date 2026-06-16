@@ -300,6 +300,14 @@ async def cresium_webhook(request: Request) -> dict:
             path=WEBHOOK_SIGNED_PATH,
         )
     except webhooks.WebhookError as e:
+        # DIAG TEMPORAL (remover post-diagnostico): capturar el request exacto de
+        # Cresium para reverse-engineer secret/esquema de firma del webhook.
+        if e.status == 403:
+            try:
+                log.warning("[webhook][DIAG] headers=%s", dict(request.headers))
+                log.warning("[webhook][DIAG] rawbody=%s", raw[:4000])
+            except Exception:  # noqa: BLE001
+                pass
         raise HTTPException(e.status, str(e))
 
     try:
