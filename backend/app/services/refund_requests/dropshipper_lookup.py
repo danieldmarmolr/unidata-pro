@@ -19,7 +19,7 @@ import logging
 from sqlalchemy import text
 
 from app.db.engines import get_engine
-from app.services._utils import list_columns
+from app.services._utils import list_columns, table_exists
 
 log = logging.getLogger("unidata.refund_requests.lookup")
 
@@ -140,30 +140,60 @@ def _latest_bank_account(eng, user_id: int) -> dict | None:
     }
 
 
-def _last_subscription_payment(eng, user_id: int) -> dict | None:
-    """Ultimo PaymentIntentSubscription PROCESSED del user — el cobro mas reciente.
-
-    Usamos expectedAmount (monto bruto del cobro = lo que el dropshipper
-    efectivamente debio pagar) y NO paidAmount (que ya tiene descontados los
-    intereses/fees de TaloPay). Para devoluciones se reembolsa el bruto.
-    """
-    pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
-    if not pis_cols or "userId" not in pis_cols:
+def _pis_amount_col(eng) -> str | None:
+    """Columna de monto bruto a usar en PaymentIntentSubscription, o None si la
+    tabla no tiene userId. expectedAmount = bruto (lo que debio pagar) por sobre
+    paidAmount (neto post-fees TaloPay): el reembolso se calcula sobre el bruto."""
+    cols = list_columns(eng, "public", "PaymentIntentSubscription")
+    if not cols or "userId" not in cols:
         return None
-    amount_col = '"expectedAmount"' if "expectedAmount" in pis_cols else (
-        '"paidAmount"' if "paidAmount" in pis_cols else (
-            '"amount"' if "amount" in pis_cols else "0"
-        )
+    if "expectedAmount" in cols:
+        return '"expectedAmount"'
+    if "paidAmount" in cols:
+        return '"paidAmount"'
+    if "amount" in cols:
+        return '"amount"'
+    return "0"
+
+
+def _last_subscription_payment(eng, user_id: int) -> dict | None:
+    """Ultimo cobro de suscripcion del dropshipper, mirando los DOS modelos de
+    cobro y quedandose con el mas reciente:
+
+    - public."PaymentIntentSubscription" PROCESSED (modelo viejo, TaloPay).
+    - public."MpSubscriptionCharge" approved (modelo MercadoPago, vigente desde
+      2026-06 — es como se cobra la suscripcion hoy). amount = bruto cobrado.
+
+    Cada cobro mensual cae en un solo riel segun la fecha (cutover ~2026-06),
+    nunca en ambos, asi que la union no duplica.
+    """
+    selects: list[str] = []
+
+    amount_col = _pis_amount_col(eng)
+    if amount_col is not None:
+        selects.append(f"""
+            SELECT COALESCE({amount_col}, 0)::float AS amount, "createdAt" AS paid_ts
+            FROM public."PaymentIntentSubscription"
+            WHERE "userId" = :uid AND status::text = 'PROCESSED'
+        """)
+
+    if table_exists(eng, "public", "MpSubscriptionCharge"):
+        selects.append("""
+            SELECT c.amount::float AS amount,
+                   COALESCE(c."chargedAt", c."createdAt") AS paid_ts
+            FROM public."MpSubscriptionCharge" c
+            JOIN public."MpSubscription" s ON s.id = c."mpSubscriptionId"
+            WHERE s."userId" = :uid AND c.status::text = 'approved'
+        """)
+
+    if not selects:
+        return None
+
+    sql = text(
+        "SELECT amount, paid_ts::text AS paid_at FROM ("
+        + " UNION ALL ".join(selects)
+        + ") x ORDER BY paid_ts DESC NULLS LAST LIMIT 1"
     )
-    sql = text(f"""
-        SELECT COALESCE({amount_col}, 0)::float AS paid_amount,
-               "createdAt"::text                AS paid_at
-        FROM public."PaymentIntentSubscription"
-        WHERE "userId" = :uid
-          AND status::text = 'PROCESSED'
-        ORDER BY "createdAt" DESC NULLS LAST
-        LIMIT 1
-    """)
     try:
         with eng.connect() as cx:
             row = cx.execute(sql, {"uid": user_id}).mappings().first()
@@ -173,42 +203,53 @@ def _last_subscription_payment(eng, user_id: int) -> dict | None:
     if not row:
         return None
     return {
-        "paid_amount_arg": round(float(row["paid_amount"] or 0), 2),
+        "paid_amount_arg": round(float(row["amount"] or 0), 2),
         "paid_at": row["paid_at"],
     }
 
 
 def _paid_subscription_snapshot(eng, user_id: int) -> dict:
-    """Suma de expectedAmount de PaymentIntentSubscription PROCESSED para el user.
+    """Total pagado historicamente en suscripcion, sumando los DOS modelos:
 
-    Usamos expectedAmount (bruto, lo que el dropshipper debio pagar) en vez de
-    paidAmount (neto despues de intereses/fees de TaloPay). El reembolso se
-    calcula sobre el bruto.
+    - PaymentIntentSubscription PROCESSED (TaloPay, modelo viejo)
+    - MpSubscriptionCharge approved (MercadoPago, modelo vigente desde 2026-06)
+
+    Son rieles distintos: cada cobro mensual cae en uno u otro segun el cutover,
+    asi que la suma refleja el total real cobrado sin doble-contar. Bruto.
     """
-    pis_cols = list_columns(eng, "public", "PaymentIntentSubscription")
-    if not pis_cols or "userId" not in pis_cols:
-        return {"total_arg": 0.0, "count": 0}
-    amount_col = '"expectedAmount"' if "expectedAmount" in pis_cols else (
-        '"paidAmount"' if "paidAmount" in pis_cols else (
-            '"amount"' if "amount" in pis_cols else "0"
-        )
-    )
+    total = 0.0
+    count = 0
 
-    sql = text(f"""
-        SELECT COALESCE(SUM({amount_col}), 0)::float AS total_arg,
-               COUNT(*)::int                          AS cnt
-        FROM public."PaymentIntentSubscription"
-        WHERE "userId" = :uid
-          AND status::text = 'PROCESSED'
-    """)
-    try:
-        with eng.connect() as cx:
-            row = cx.execute(sql, {"uid": user_id}).mappings().first()
-    except Exception as e:
-        log.warning("paid_subscription snapshot fallo para user %s: %s", user_id, e)
-        return {"total_arg": 0.0, "count": 0}
+    amount_col = _pis_amount_col(eng)
+    if amount_col is not None:
+        sql = text(f"""
+            SELECT COALESCE(SUM({amount_col}), 0)::float AS total_arg,
+                   COUNT(*)::int                          AS cnt
+            FROM public."PaymentIntentSubscription"
+            WHERE "userId" = :uid AND status::text = 'PROCESSED'
+        """)
+        try:
+            with eng.connect() as cx:
+                row = cx.execute(sql, {"uid": user_id}).mappings().first()
+            total += float(row["total_arg"] or 0)
+            count += int(row["cnt"] or 0)
+        except Exception as e:
+            log.warning("paid_subscription PIS snapshot fallo para user %s: %s", user_id, e)
 
-    return {
-        "total_arg": round(float(row["total_arg"] or 0), 2),
-        "count": int(row["cnt"] or 0),
-    }
+    if table_exists(eng, "public", "MpSubscriptionCharge"):
+        sql = text("""
+            SELECT COALESCE(SUM(c.amount), 0)::float AS total_arg,
+                   COUNT(*)::int                       AS cnt
+            FROM public."MpSubscriptionCharge" c
+            JOIN public."MpSubscription" s ON s.id = c."mpSubscriptionId"
+            WHERE s."userId" = :uid AND c.status::text = 'approved'
+        """)
+        try:
+            with eng.connect() as cx:
+                row = cx.execute(sql, {"uid": user_id}).mappings().first()
+            total += float(row["total_arg"] or 0)
+            count += int(row["cnt"] or 0)
+        except Exception as e:
+            log.warning("paid_subscription MP snapshot fallo para user %s: %s", user_id, e)
+
+    return {"total_arg": round(total, 2), "count": count}

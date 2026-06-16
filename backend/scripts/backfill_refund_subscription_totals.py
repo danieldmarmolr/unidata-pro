@@ -1,7 +1,11 @@
 """
 One-off backfill: recalcula paid_subscription_total_arg + paid_subscription_count
-de las solicitudes ya creadas en subscription_refund_requests, usando
-expectedAmount (bruto) en lugar de paidAmount (neto post-fees de TaloPay).
+de las solicitudes ya creadas en subscription_refund_requests.
+
+Usa la MISMA logica que el form publico (_paid_subscription_snapshot), que ahora
+suma los dos rieles de cobro: PaymentIntentSubscription PROCESSED (TaloPay viejo)
++ MpSubscriptionCharge approved (MercadoPago, modelo vigente desde 2026-06). Las
+solicitudes creadas antes del fix mostraban $0 porque solo miraban TaloPay.
 
 Idempotente: si el valor calculado coincide con el guardado (delta < 0.01),
 no actualiza. Reporta un resumen al final.
@@ -14,28 +18,12 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import text
-
 from app.db.engines import get_engine
 from app.db.local_persistence import get_conn
+from app.services.refund_requests.dropshipper_lookup import _paid_subscription_snapshot
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 log = logging.getLogger("backfill_refund_totals")
-
-
-def _expected_amount_snapshot(eng, user_id: int) -> tuple[float, int]:
-    sql = text("""
-        SELECT COALESCE(SUM("expectedAmount"), 0)::float AS total_arg,
-               COUNT(*)::int                              AS cnt
-        FROM public."PaymentIntentSubscription"
-        WHERE "userId" = :uid
-          AND status::text = 'PROCESSED'
-    """)
-    with eng.connect() as cx:
-        row = cx.execute(sql, {"uid": user_id}).mappings().first()
-    if not row:
-        return 0.0, 0
-    return round(float(row["total_arg"] or 0), 2), int(row["cnt"] or 0)
 
 
 def main() -> None:
@@ -64,7 +52,8 @@ def main() -> None:
         old_total = float(r["paid_subscription_total_arg"] or 0)
         old_count = int(r["paid_subscription_count"] or 0)
 
-        new_total, new_count = _expected_amount_snapshot(eng, uid)
+        snap = _paid_subscription_snapshot(eng, uid)
+        new_total, new_count = snap["total_arg"], snap["count"]
 
         if abs(new_total - old_total) < 0.01 and new_count == old_count:
             log.info("  req#%s (%s) [user %s]: sin cambios -> %s / %s",
