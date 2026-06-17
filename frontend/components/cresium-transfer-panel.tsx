@@ -138,6 +138,9 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["cresium-transferencias", source] });
 
+  const isRetry = tab === "error_cliente" || tab === "error_cresium";
+  const bulkable = tab === "pendiente" || isRetry;
+
   const sendMut = useMutation({
     mutationFn: (items: object[]) => api("/api/cresium-payouts/send", { method: "POST", body: JSON.stringify({ items }) }),
     onSuccess: () => { setSelected(new Set()); setConfirmOpen(false); invalidate(); },
@@ -146,8 +149,17 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
     mutationFn: (orderId: number) => api(`/api/cresium-payouts/orders/${orderId}/reintentar`, { method: "POST" }),
     onSuccess: invalidate,
   });
+  const retryBulkMut = useMutation({
+    mutationFn: (ids: number[]) => api("/api/cresium-payouts/reintentar", { method: "POST", body: JSON.stringify({ order_ids: ids }) }),
+    onSuccess: () => { setSelected(new Set()); setConfirmOpen(false); invalidate(); },
+  });
+  const bulkPending = sendMut.isPending || retryBulkMut.isPending;
+  const bulkData = isRetry ? retryBulkMut.data : sendMut.data;
 
-  const selectableKeys = useMemo(() => rows.filter((r) => !r.needs_bank).map((r) => r.key), [rows]);
+  const selectableKeys = useMemo(
+    () => rows.filter((r) => (isRetry ? !!r.order_id : !r.needs_bank)).map((r) => r.key),
+    [rows, isRetry],
+  );
   const allSelected = selectableKeys.length > 0 && selectableKeys.every((k) => selected.has(k));
   const selectedRows = rows.filter((r) => selected.has(r.key));
   const selectedTotal = selectedRows.reduce((s, r) => s + (r.monto || 0), 0);
@@ -158,9 +170,14 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
   function toggleAll() {
     setSelected(allSelected ? new Set<string>() : new Set(selectableKeys));
   }
-  function doSend() {
-    const items = selectedRows.map(itemFromRow);
-    if (items.length) sendMut.mutate(items);
+  function doBulk() {
+    if (isRetry) {
+      const ids = selectedRows.map((r) => r.order_id).filter((x): x is number => typeof x === "number");
+      if (ids.length) retryBulkMut.mutate(ids);
+    } else {
+      const items = selectedRows.map(itemFromRow);
+      if (items.length) sendMut.mutate(items);
+    }
   }
 
   return (
@@ -195,7 +212,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <div className="flex items-center gap-2">
-          {tab === "pendiente" && (
+          {bulkable && (
             <button onClick={toggleAll} disabled={!selectableKeys.length} className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm font-medium text-text disabled:opacity-40">
               {allSelected ? "Deseleccionar" : `Seleccionar todas (${selectableKeys.length})`}
             </button>
@@ -207,7 +224,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
             className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text"
           />
         </div>
-        {tab === "pendiente" && (
+        {bulkable && (
           <div className="flex items-center gap-3">
             {selected.size > 0 && (
               <span className="text-sm text-text-muted">
@@ -219,9 +236,10 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
               onClick={() => setConfirmOpen(true)}
               disabled={!enabled || selected.size === 0}
               className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-              title={!enabled ? "Cresium deshabilitado" : "Enviar las seleccionadas a Cresium"}
+              title={!enabled ? "Cresium deshabilitado" : isRetry ? "Reintentar las seleccionadas" : "Enviar las seleccionadas a Cresium"}
             >
-              <Send className="h-4 w-4" /> Enviar a Cresium ({selected.size})
+              {isRetry ? <RefreshCw className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+              {isRetry ? "Reintentar" : "Enviar a Cresium"} ({selected.size})
             </button>
           </div>
         )}
@@ -232,7 +250,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
         <table className="w-full text-sm">
           <thead className="bg-bg text-left text-xs uppercase text-text-muted">
             <tr>
-              {tab === "pendiente" && <th className="w-10 px-3 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>}
+              {bulkable && <th className="w-10 px-3 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>}
               <th className="px-3 py-2">Titular</th>
               <th className="px-3 py-2">Banco</th>
               <th className="px-3 py-2">CBU/Alias</th>
@@ -250,9 +268,9 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
               const s = sla(r.created_at);
               return (
                 <tr key={r.key} className="border-t border-border">
-                  {tab === "pendiente" && (
+                  {bulkable && (
                     <td className="px-3 py-2">
-                      <input type="checkbox" checked={selected.has(r.key)} disabled={r.needs_bank} onChange={() => toggle(r.key)} title={r.needs_bank ? "Sin datos bancarios" : ""} />
+                      <input type="checkbox" checked={selected.has(r.key)} disabled={isRetry ? !r.order_id : r.needs_bank} onChange={() => toggle(r.key)} title={!isRetry && r.needs_bank ? "Sin datos bancarios" : ""} />
                     </td>
                   )}
                   <td className="px-3 py-2">
@@ -301,22 +319,22 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="flex items-center gap-2 text-lg font-semibold text-text"><ShieldCheck className="h-5 w-5 text-violet-600" /> Enviar a Cresium</h3>
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-text"><ShieldCheck className="h-5 w-5 text-violet-600" /> {isRetry ? "Reintentar transferencias" : "Enviar a Cresium"}</h3>
               <button onClick={() => setConfirmOpen(false)} className="text-text-muted hover:text-text"><X className="h-5 w-5" /></button>
             </div>
             <p className="mb-3 text-sm text-text-muted">
-              Vas a enviar <b className="text-text">{selected.size}</b> transferencia(s) por <b className="text-text">{fmtMoney(selectedTotal)}</b> a Cresium.
+              Vas a {isRetry ? "reintentar" : "enviar"} <b className="text-text">{selected.size}</b> transferencia(s) por <b className="text-text">{fmtMoneyFull(selectedTotal)}</b> a Cresium.
               Cada cuenta se verifica; las que no validen quedan en <b>Errores cliente</b>. <b className="text-red-600">Esta acción mueve dinero real</b> (un firmante de Cresium aprueba cada una con token).
             </p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirmOpen(false)} className="rounded-lg border border-border px-4 py-2 text-sm text-text">Cancelar</button>
-              <button onClick={doSend} disabled={sendMut.isPending} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
-                {sendMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                Confirmar y enviar
+              <button onClick={doBulk} disabled={bulkPending} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+                {bulkPending ? <Loader2 className="h-4 w-4 animate-spin" /> : isRetry ? <RefreshCw className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+                {isRetry ? "Confirmar y reintentar" : "Confirmar y enviar"}
               </button>
             </div>
-            {sendMut.data ? (
-              <p className="mt-3 text-sm text-emerald-700">{(sendMut.data as { enviados: number; total: number }).enviados}/{(sendMut.data as { total: number }).total} enviadas.</p>
+            {bulkData ? (
+              <p className="mt-3 text-sm text-emerald-700">{((bulkData as { enviados?: number; reintentadas?: number }).enviados ?? (bulkData as { reintentadas?: number }).reintentadas ?? 0)}/{(bulkData as { total: number }).total} procesadas.</p>
             ) : null}
           </div>
         </div>

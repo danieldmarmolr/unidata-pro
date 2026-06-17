@@ -330,6 +330,31 @@ def reintentar(order_id: int, user: Annotated[dict, Depends(current_user)]) -> d
         raise HTTPException(404, str(e))
 
 
+class ReintentarBody(BaseModel):
+    order_ids: list[int] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/reintentar")
+def reintentar_bulk(body: ReintentarBody, user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Reintento masivo de orders en error (Errores cliente / Errores Cresium)."""
+    require_area(user, _AREAS)
+    if not config.ready():
+        raise HTTPException(409, _DISABLED_MSG)
+    resultados: list[dict] = []
+    reintentadas = 0
+    for oid in body.order_ids:
+        try:
+            res = engine.reintentar(oid)
+        except CresiumDisabledError:
+            raise HTTPException(409, _DISABLED_MSG)
+        except ValueError as e:
+            res = {"ok": False, "code": "NOT_FOUND", "error": str(e), "order_id": oid}
+        if res.get("ok"):
+            reintentadas += 1
+        resultados.append(res)
+    return {"ok": True, "total": len(body.order_ids), "reintentadas": reintentadas, "resultados": resultados}
+
+
 # ─── Orders ──────────────────────────────────────────────────────────────────
 
 @router.get("")
