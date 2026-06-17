@@ -461,6 +461,26 @@ def mark_signature_request_created(order_id: int, signature_request_id: str) -> 
     return _order_dict(row) if row else None
 
 
+def mark_inflight(order_id: int) -> dict | None:
+    """CAS: SUBMITTING -> SIGNATURE_REQUEST_CREATED para una tx que sigue viva
+    fuera de preview o que no se pudo reconciliar (GET fallido). NO falsea
+    cresium_signature_request_id; marca cresium_status='INFLIGHT_UNRECONCILED'
+    para que el poller la cierre. Requiere cresium_transaction_id ya seteado."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cresium_payout_orders
+            SET status = 'SIGNATURE_REQUEST_CREATED', cresium_status = 'INFLIGHT_UNRECONCILED', updated_at = NOW()
+            WHERE id = %s AND status = 'SUBMITTING'
+            RETURNING *
+            """,
+            (order_id,),
+        )
+        row = cur.fetchone()
+    return _order_dict(row) if row else None
+
+
 def mark_failed(order_id: int, reason: str, *, transaction_id: str | None = None,
                 category: str | None = None) -> dict | None:
     """Marca FAILED desde cualquier estado NO terminal. No pisa estados
@@ -676,6 +696,27 @@ def pollable_orders(max_age_days: int = 7, limit: int = 50) -> list[dict]:
             LIMIT %s
             """,
             (str(max_age_days), limit),
+        )
+        return [_order_dict(r) for r in cur.fetchall()]
+
+
+def stuck_submitting_orders(stale_minutes: int = 10, limit: int = 50) -> list[dict]:
+    """Orders atascadas en SUBMITTING (claim que nunca llego a un estado
+    terminal: muerte de proceso / deploy / timeout mid-submit). El reaper las
+    reconcilia contra Cresium y les da una salida. El umbral en minutos es muy
+    mayor a la duracion normal de un submit (~3 calls de red), asi que no pisa
+    submits en curso legitimos."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM cresium_payout_orders
+            WHERE status = 'SUBMITTING'
+              AND updated_at < NOW() - (%s || ' minutes')::interval
+            ORDER BY updated_at ASC
+            LIMIT %s
+            """,
+            (str(stale_minutes), limit),
         )
         return [_order_dict(r) for r in cur.fetchall()]
 

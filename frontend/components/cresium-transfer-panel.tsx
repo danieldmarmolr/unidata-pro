@@ -319,7 +319,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
                   </td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex items-center justify-end gap-1.5">
-                      {tab === "error_cliente" && r.source_type === "subscription" && r.order_id && (
+                      {(tab === "error_cliente" || tab === "error_cresium") && r.source_type === "subscription" && r.order_id && (
                         <button
                           onClick={() => pedirMut.mutate(r.order_id!)}
                           disabled={pedirMut.isPending}

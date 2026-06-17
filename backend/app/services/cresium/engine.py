@@ -7,9 +7,9 @@ aplicacion idempotente de eventos terminales (webhook/polling). En SUCCESS,
 auto-marca la devolucion como transferida en la tabla de tracking existente
 (ml_return_actions / subscription_refund_requests).
 
-Mapeo de la clasificacion de status (identico a Unidrop):
+Mapeo de la clasificacion de status (identico a Unidrop + EXPIRED):
   SUCCESS  : SUCCESS, COMPLETED, WITHDRAWAL_SUCCESS
-  FAILED   : FAILED, REJECTED, WITHDRAWAL_FAILED, ERROR
+  FAILED   : FAILED, REJECTED, WITHDRAWAL_FAILED, ERROR, EXPIRED
   CANCELED : CANCELED, CANCELLED
   resto    : intermedio (PENDING/PROCESSING) -> solo se registra, sin transicion
 """
@@ -31,7 +31,9 @@ SYSTEM_USER_ID = 0
 SYSTEM_EMAIL = "cresium-engine@unidata"
 
 SUCCESS_STATUSES = {"SUCCESS", "COMPLETED", "WITHDRAWAL_SUCCESS"}
-FAILED_STATUSES = {"FAILED", "REJECTED", "WITHDRAWAL_FAILED", "ERROR"}
+# EXPIRED = preview que caduco sin firmar (no movio plata) -> tratable como FAILED:
+# aterriza en el tab de error, es reintentable y el reintento re-crea la tx.
+FAILED_STATUSES = {"FAILED", "REJECTED", "WITHDRAWAL_FAILED", "ERROR", "EXPIRED"}
 CANCELED_STATUSES = {"CANCELED", "CANCELLED"}
 
 # Mensaje generico (no filtra el nombre del env var faltante).
@@ -305,14 +307,52 @@ def reintentar(order_id: int) -> dict:
 
 # ─── Submit saliente (2 calls a Cresium) ─────────────────────────────────────
 
+# Estados de una tx en Cresium que todavia se pueden re-firmar (siguen en preview).
+_PREVIEW_STATUSES = {"PREVIEW", "DRAFT", "PENDING_PREVIEW"}
+# Estados confirmados-muertos: seguro re-crear (la plata no se movio).
+_DEAD_STATUSES = FAILED_STATUSES | CANCELED_STATUSES
+
+
+def _reconcile_stale_tx(order_id: int, tx_id: str) -> str:
+    """Consulta el estado REAL en Cresium de una tx previa antes de reintentar.
+    Conservador frente al doble pago: solo habilita re-crear si la tx esta
+    confirmada muerta; ante cualquier duda la trata como en vuelo (no re-crea).
+      'success'  : ya se acredito -> se marca SUCCESS (no re-pagar)
+      'recreate' : muerta (FAILED/CANCELED/EXPIRED) -> crear una nueva
+      'reuse'    : sigue en preview -> se puede re-firmar la misma
+      'inflight' : viva fuera de preview / estado desconocido -> no tocar
+    """
+    try:
+        live = transfer.get_transaction(tx_id)
+    except Exception as e:  # noqa: BLE001 - sin estado confirmado NO re-creamos (riesgo de doble pago)
+        log.warning("[submit] order %s: no se pudo reconciliar tx %s (%s) — se trata como en vuelo", order_id, tx_id, e)
+        return "inflight"
+    status = str(live.get("status") or "").upper()
+    if status in SUCCESS_STATUSES:
+        db.set_cresium_status(order_id, status)
+        _mark_success(order_id, tx_id)
+        return "success"
+    if status in _DEAD_STATUSES:
+        # La tx se descarta: NO pisamos cresium_status con su estado muerto, o la
+        # UI mostraria 'FAILED' mientras la order ya espera firma de la tx nueva.
+        return "recreate"
+    if status in _PREVIEW_STATUSES:
+        db.set_cresium_status(order_id, status)
+        return "reuse"
+    db.set_cresium_status(order_id, status)
+    log.info("[submit] order %s: tx %s en estado no terminal '%s' — en vuelo, no re-crear", order_id, tx_id, status)
+    return "inflight"
+
+
 def submit_to_cresium(order_id: int) -> dict:
     """Ejecuta los 2 calls salientes para una order en READY_TO_TRANSFER:
       1) make-a-transfer  (POST /v3/transaction/preview)
       2) signature-request (POST /v3/signature-request/TRANSACTION_REQUEST)
     Persiste ids intermedios para no perder estado si el step 2 falla.
-    Idempotente: no-op si la order no esta en READY_TO_TRANSFER. Skipea el step
-    1 si ya hay cresium_transaction_id (evita duplicar la transaccion en un
-    retry)."""
+    Idempotente: no-op si la order no esta en READY_TO_TRANSFER. Si ya hay una
+    cresium_transaction_id (reintento), reconcilia su estado real en Cresium:
+    reusa la tx solo si sigue en preview, la re-crea si esta muerta, marca
+    SUCCESS si ya se acredito y la deja en vuelo si sigue viva (anti doble-pago)."""
     order = db.get_order(order_id)
     if not order:
         raise ValueError(f"Payout order {order_id} no encontrada")
@@ -342,10 +382,29 @@ def submit_to_cresium(order_id: int) -> dict:
     amount_str = f"{float(order['amount']):.2f}"
 
     # ── Step 1: make-a-transfer ──────────────────────────────────────────────
+    # Si la order trae una tx previa (reintento de una order reabierta),
+    # reconciliar su estado REAL en Cresium antes de tocar nada: re-firmar una tx
+    # que ya salio de 'preview' devuelve 400 ('not in preview') y deja la
+    # devolucion trabada en bucle; re-crear una tx que sigue viva podria pagar
+    # dos veces. Solo se re-crea cuando la tx esta confirmada muerta.
     tx_id = order.get("cresium_transaction_id")
     if tx_id:
-        log.info("[submit] order %s ya tenia cresium_transaction_id=%s — skip make-a-transfer", order_id, tx_id)
-    else:
+        decision = _reconcile_stale_tx(order_id, tx_id)
+        if decision == "success":
+            return db.get_order(order_id) or order            # ya acreditada -> SUCCESS
+        if decision == "inflight":
+            moved = db.mark_inflight(order_id)
+            return moved or db.get_order(order_id) or order   # sigue viva -> la cierra el poller
+        if decision == "recreate":
+            log.info("[submit] order %s: tx previa %s muerta — se crea una transferencia nueva", order_id, tx_id)
+            tx_id = None
+        # decision == "reuse": tx aun en preview -> re-firmable, se mantiene tx_id
+
+    if not tx_id:
+        # externalId = idempotency_key SIEMPRE (sin salar): en Cresium el
+        # externalId es solo correlacion de webhooks, no deduplica, y mantenerlo
+        # estable deja matchear la tx vigente por idempotency_key si un webhook
+        # llega sin tx id.
         try:
             transfer_res = transfer.create_transfer(
                 to_id=int(order["cresium_to_id"]),
@@ -356,10 +415,29 @@ def submit_to_cresium(order_id: int) -> dict:
             )
             tx_id = transfer_res.transaction_id
             db.set_transaction_ids(order_id, preview_id=tx_id, transaction_id=tx_id)
+            db.set_cresium_status(order_id, transfer_res.status or "PREVIEW")
             log.info("[submit] make-a-transfer OK order %s txId=%s", order_id, tx_id)
         except Exception as err:  # noqa: BLE001 - cualquier error -> FAILED recuperable, nunca dejar SUBMITTING colgado
             db.mark_failed(order_id, f"make-a-transfer: {err}", category="cresium")
             raise
+    else:
+        log.info("[submit] order %s reusa tx en preview %s — skip make-a-transfer", order_id, tx_id)
+
+    # ── Gate anti-huerfano (antes de firmar) ─────────────────────────────────
+    # CAS que confirma que la order SIGUE en SUBMITTING y deja persistido el
+    # tx_id vigente. signature-request es el paso que habilita el movimiento de
+    # plata: si un evento terminal concurrente saco la order de SUBMITTING, NO
+    # firmamos — una preview sin firmar no mueve plata y expira sola, mientras
+    # que firmarla dejaria una tx viva huerfana (riesgo de doble pago al reintentar).
+    confirmed = db.set_transaction_ids(order_id, preview_id=tx_id, transaction_id=tx_id)
+    if not confirmed:
+        cur = db.get_order(order_id) or order
+        log.error(
+            "[submit] order %s salio de SUBMITTING antes de firmar (status=%s, txId=%s preview sin firmar) "
+            "— NO se firma; reconciliar manualmente",
+            order_id, cur.get("status"), tx_id,
+        )
+        return cur
 
     # ── Step 2: signature-request ────────────────────────────────────────────
     try:
@@ -414,6 +492,20 @@ def apply_event(
         "source": source,
     })
     is_duplicate = inserted is None
+
+    # Guard anti tx-superada: cuando una order se reintenta y migra a una tx nueva
+    # (recreate), la tx VIEJA queda asociada solo por idempotency_key. Un evento
+    # tardio de esa tx muerta matchea por el fallback de idempotency_key, pero NO
+    # debe mover la state machine (pisaria a FAILED una order que ya espera firma
+    # de la tx viva, orfanandola). Se audita pero no transiciona.
+    order_now = db.get_order(payout_order_id)
+    current_tx = (order_now or {}).get("cresium_transaction_id")
+    if current_tx and cresium_tx_id and str(current_tx) != str(cresium_tx_id):
+        log.info(
+            "[applyEvent] evento de tx superada (%s) para order %s (vigente=%s) — solo auditado",
+            cresium_tx_id, payout_order_id, current_tx,
+        )
+        return {"kind": "superseded_tx", "event_tx": cresium_tx_id, "current_tx": current_tx, "duplicate_event": is_duplicate}
 
     # Guardar el status crudo de Cresium para la UI (esperando firma vs procesando).
     db.set_cresium_status(payout_order_id, status)
@@ -559,3 +651,46 @@ def poll_pending(max_age_days: int = 7, limit: int = 50) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("[poll] order %s fallo: %s", o["id"], e)
     return {"polled": polled, "candidates": len(orders)}
+
+
+def reap_stuck_submitting(stale_minutes: int = 10, limit: int = 50) -> dict:
+    """Red de seguridad para orders atascadas en SUBMITTING (claim que nunca
+    llego a un estado terminal: muerte de proceso / deploy / timeout mid-submit).
+    Sin esto no hay ninguna via de salida — el poller solo mira
+    SIGNATURE_REQUEST_CREATED/PROCESSING y reintentar exige FAILED/CANCELED.
+    Reconcilia contra Cresium y da salida segura:
+      tx terminal (success/dead)  -> apply_event la resuelve
+      tx en preview sin firmar    -> revert a READY (se re-firma en el proximo envio)
+      tx viva fuera de preview    -> SIGNATURE_REQUEST_CREATED (la cierra el poller)
+      sin tx / GET fallido        -> revert a READY (no se creo tx) / proximo tick
+    """
+    if not config.ready():
+        return {"reaped": 0, "skipped": "not_ready"}
+    stuck = db.stuck_submitting_orders(stale_minutes=stale_minutes, limit=limit)
+    reaped = 0
+    for i, o in enumerate(stuck):
+        if i:
+            time.sleep(0.6)
+        try:
+            tx = o.get("cresium_transaction_id")
+            if not tx:
+                db.revert_submitting_to_ready(o["id"])   # nunca se creo la tx
+                reaped += 1
+                continue
+            data = transfer.get_transaction(tx)
+            st = str(data.get("status") or "").upper()
+            if st in SUCCESS_STATUSES or st in _DEAD_STATUSES:
+                apply_event(
+                    payout_order_id=o["id"], cresium_tx_id=tx, status=st,
+                    type_=data.get("type"), total_amount=data.get("totalAmount"),
+                    net_amount=data.get("netAmount"), fees=data.get("amounts"),
+                    raw_payload=data, source="polling",
+                )
+            elif st in _PREVIEW_STATUSES:
+                db.revert_submitting_to_ready(o["id"])    # preview sin firmar -> re-firmable
+            else:
+                db.mark_inflight(o["id"])                  # viva -> que la cierre el poller
+            reaped += 1
+        except Exception as e:  # noqa: BLE001 - GET fallido: dejar para el proximo tick
+            log.warning("[reap] order %s fallo: %s", o["id"], e)
+    return {"reaped": reaped, "candidates": len(stuck)}

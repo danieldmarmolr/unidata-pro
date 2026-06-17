@@ -147,6 +147,9 @@ def _job_cresium_reconcile() -> None:
         result = engine.poll_pending()
         if result.get("polled"):
             log.info("cresium reconcile: %s", result)
+        reaped = engine.reap_stuck_submitting()
+        if reaped.get("reaped"):
+            log.info("cresium reap stuck SUBMITTING: %s", reaped)
     except Exception as e:
         log.exception("cresium reconcile failed: %s", e)
 
