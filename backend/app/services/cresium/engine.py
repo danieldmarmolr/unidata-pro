@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from typing import Any
 
 from app.db import cresium_payouts_db as db
@@ -515,7 +516,9 @@ def poll_pending(max_age_days: int = 7, limit: int = 50) -> dict:
         return {"polled": 0, "skipped": "not_ready"}
     orders = db.pollable_orders(max_age_days=max_age_days, limit=limit)
     polled = 0
-    for o in orders:
+    for i, o in enumerate(orders):
+        if i:
+            time.sleep(0.6)  # Cresium rate-limitea (~429) si le pegamos en rafaga
         try:
             poll_single(o["id"])
             polled += 1
