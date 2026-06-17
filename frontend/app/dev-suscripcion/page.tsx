@@ -350,11 +350,10 @@ export default function DevSuscripcionPage() {
             setBankNameOther(h.bank_name);
           }
         }
-        // 4. Monto solicitado: precio mensual del plan (no el acumulado)
-        const planPrice = data.dropshipper.subscription_plan_price_arg;
-        if (planPrice && planPrice > 0) {
-          setRefundAmount(String(planPrice));
-        }
+        // 4. Monto a devolver = total pagado registrado (lo RECONOCE el sistema,
+        //    el dropper no lo escribe). Si no hay pago reconocido, queda vacio.
+        const paidTotal = data.paid_subscription?.total_arg;
+        setRefundAmount(paidTotal && paidTotal > 0 ? String(paidTotal) : "");
         setHintsApplied(true);
       }
       setStep("bank_data");
@@ -647,17 +646,20 @@ export default function DevSuscripcionPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">
-                      Monto solicitado en ARS (opcional)
+                      Monto a reembolsar
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={refundAmount}
-                      onChange={(e) => setRefundAmount(e.target.value)}
-                      className="w-full px-4 py-2.5 rounded-lg border border-border bg-bg text-text outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition"
-                      placeholder="Si lo dejás vacío, lo define Finanzas"
-                    />
+                    {paidSub && paidSub.total_arg > 0 ? (
+                      <div className="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3">
+                        <div className="text-2xl font-bold text-primary">{fmtMoney(paidSub.total_arg)}</div>
+                        <div className="mt-0.5 text-xs text-text-muted">
+                          Es el total que pagaste en tu suscripción ({paidSub.count} cobro{paidSub.count > 1 ? "s" : ""}). Te reembolsamos exactamente eso.
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        No pudimos reconocer automáticamente cuánto pagaste en tu suscripción. <b>Esto no debería pasar.</b> Podés enviar la solicitud igual: el equipo de Finanzas va a verificar tu pago antes de transferirte.
+                      </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-text-muted uppercase tracking-wider mb-1.5">
