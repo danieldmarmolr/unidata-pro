@@ -62,16 +62,27 @@ def verify_signature(*, raw_body: str, signature_header: str | None, timestamp_h
 
 
 def parse_payload(payload: dict) -> dict | None:
-    """Extrae los campos relevantes del Transaction plano de Cresium.
-    Devuelve None si no hay id."""
-    if not payload or payload.get("id") in (None, ""):
+    """Extrae los campos del Transaction del webhook. Tolera las formas que usa
+    Cresium: flat {id,...} | {transaction:{...}} | {data:{transaction:{...}}} |
+    {data:{...}}. Devuelve None si no encuentra un id de transaccion."""
+    if not isinstance(payload, dict):
+        return None
+    tx: dict | None = None
+    if payload.get("id") is not None:
+        tx = payload
+    elif isinstance(payload.get("transaction"), dict):
+        tx = payload["transaction"]
+    elif isinstance(payload.get("data"), dict):
+        inner = payload["data"]
+        tx = inner.get("transaction") if isinstance(inner.get("transaction"), dict) else inner
+    if not isinstance(tx, dict) or tx.get("id") in (None, ""):
         return None
     return {
-        "cresium_transaction_id": str(payload["id"]),
-        "status": str(payload.get("status") or "").upper(),
-        "external_reference": str(payload["externalId"]) if payload.get("externalId") else None,
-        "type": payload.get("type"),
-        "total_amount": payload.get("totalAmount"),
-        "net_amount": payload.get("netAmount"),
-        "fees": payload.get("amounts"),
+        "cresium_transaction_id": str(tx["id"]),
+        "status": str(tx.get("status") or "").upper(),
+        "external_reference": str(tx["externalId"]) if tx.get("externalId") else None,
+        "type": tx.get("type"),
+        "total_amount": tx.get("totalAmount"),
+        "net_amount": tx.get("netAmount"),
+        "fees": tx.get("amounts"),
     }

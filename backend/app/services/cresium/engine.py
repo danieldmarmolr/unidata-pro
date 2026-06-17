@@ -509,8 +509,10 @@ def poll_single(order_id: int) -> dict:
 
 
 def poll_pending(max_age_days: int = 7, limit: int = 50) -> dict:
-    if not (config.ready() and config.polling_enabled()):
-        return {"polled": 0, "skipped": "disabled"}
+    # Reconciliacion (red de seguridad del webhook): corre siempre que Cresium
+    # este listo. Se usa desde el scheduler para mover En Cresium -> Realizadas.
+    if not config.ready():
+        return {"polled": 0, "skipped": "not_ready"}
     orders = db.pollable_orders(max_age_days=max_age_days, limit=limit)
     polled = 0
     for o in orders:

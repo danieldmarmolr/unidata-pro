@@ -78,6 +78,17 @@ def start_scheduler() -> None:
         )
         jobs_added += ["meta_ads_core @ */1h:05", "meta_ads_breakdowns @ */6h:15"]
 
+    # Cresium: reconciliar orders "En Cresium" contra el gateway cada 3 min
+    # (red de seguridad ademas del webhook). No-op si Cresium no esta listo.
+    if os.environ.get("CRESIUM_RECONCILE_DISABLED") != "1":
+        _scheduler.add_job(
+            _job_cresium_reconcile,
+            CronTrigger(minute="*/3"),
+            id="cresium_reconcile",
+            replace_existing=True,
+        )
+        jobs_added += ["cresium_reconcile @ */3min"]
+
     _scheduler.start()
     log.info("scheduler started: %s", " | ".join(jobs_added))
 
@@ -124,6 +135,20 @@ def _job_meta_ads_breakdowns_sync() -> None:
         log.info("meta_ads breakdowns sync dispatched: %s", result)
     except Exception as e:
         log.exception("meta_ads breakdowns sync dispatch failed: %s", e)
+
+
+def _job_cresium_reconcile() -> None:
+    """Polla las transferencias en curso contra Cresium y mueve las acreditadas
+    a Realizadas (red de seguridad por si un webhook se pierde / no parsea)."""
+    try:
+        from app.services.cresium import config, engine
+        if not config.ready():
+            return
+        result = engine.poll_pending()
+        if result.get("polled"):
+            log.info("cresium reconcile: %s", result)
+    except Exception as e:
+        log.exception("cresium reconcile failed: %s", e)
 
 
 def stop_scheduler() -> None:
