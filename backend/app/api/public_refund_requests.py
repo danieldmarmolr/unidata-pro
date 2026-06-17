@@ -286,3 +286,98 @@ def _format_display_code(*, dni: str, plan: str | None, created_at_iso: str) -> 
     except Exception:
         dd = mm = aa = "00"
     return f"UDEV-{dni}-{plan_clean}-{dd}{mm}{aa}"
+
+
+# ─── Correccion self-service de datos bancarios (link tokenizado) ─────────────
+
+class CorrectionBody(BaseModel):
+    bank_holder_name: str = Field(..., min_length=2, max_length=200)
+    bank_holder_cuit: str = Field(..., min_length=11, max_length=11)
+    bank_name: str = Field(..., min_length=2, max_length=100)
+    bank_cbu: str = Field(..., min_length=22, max_length=22)
+    bank_alias: str | None = Field(default=None)
+
+    @field_validator("bank_cbu")
+    @classmethod
+    def _cbu(cls, v: str) -> str:
+        v = re.sub(r"\D", "", v or "")
+        if not _CBU_RE.match(v):
+            raise ValueError("CBU/CVU invalido (debe tener 22 digitos)")
+        return v
+
+    @field_validator("bank_holder_cuit")
+    @classmethod
+    def _cuit(cls, v: str) -> str:
+        v = re.sub(r"\D", "", v or "")
+        if not _CUIT_RE.match(v):
+            raise ValueError("CUIT invalido (debe tener 11 digitos)")
+        return v
+
+    @field_validator("bank_alias")
+    @classmethod
+    def _alias(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        if not v:
+            return None
+        if len(v) < 6 or len(v) > 20:
+            raise ValueError("Alias invalido (debe tener entre 6 y 20 caracteres)")
+        return v
+
+
+@router.get("/correction/{token}")
+@limiter.limit("20/minute")
+def correction_get(request: Request, token: str) -> dict:
+    """Datos de la devolucion para pre-rellenar el formulario de correccion."""
+    from app.services.cresium.correction_token import parse_token
+    rid = parse_token(token)
+    if rid is None:
+        raise HTTPException(404, "Link invalido o vencido")
+    req = refund_requests_db.get_request(rid)
+    if not req:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if req.get("status") in ("transferred", "integration_cancelled"):
+        return {"found": True, "editable": False, "status": req["status"]}
+    return {
+        "found": True, "editable": True, "status": req["status"],
+        "dropshipper_name": req.get("dropshipper_name"),
+        "dni": req.get("dropshipper_dni"),
+        "plan": req.get("subscription_plan_name"),
+        "monto": float(req["refund_amount_arg"]) if req.get("refund_amount_arg") else None,
+        "bank": {
+            "holder_name": req.get("bank_holder_name"),
+            "holder_cuit": req.get("bank_holder_cuit"),
+            "bank_name": req.get("bank_name"),
+            "cbu": req.get("bank_cbu"),
+            "alias": req.get("bank_alias"),
+        },
+    }
+
+
+@router.post("/correction/{token}")
+@limiter.limit("5/minute")
+def correction_post(request: Request, token: str, body: CorrectionBody) -> dict:
+    """El dropper corrige sus datos bancarios -> re-verifica y reentra al flujo."""
+    from app.services.cresium import engine
+    from app.services.cresium.correction_token import parse_token
+    rid = parse_token(token)
+    if rid is None:
+        raise HTTPException(404, "Link invalido o vencido")
+    req = refund_requests_db.get_request(rid)
+    if not req:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if req.get("status") in ("transferred", "integration_cancelled"):
+        raise HTTPException(409, "Esta devolucion ya fue procesada")
+    try:
+        result = engine.apply_correction(
+            rid,
+            holder_name=body.bank_holder_name.strip(),
+            holder_cuit=body.bank_holder_cuit,
+            bank_name=body.bank_name.strip(),
+            cbu=body.bank_cbu,
+            alias=body.bank_alias,
+        )
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "verified": bool(result.get("verified"))}

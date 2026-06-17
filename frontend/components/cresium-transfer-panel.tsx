@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Send, RefreshCw, AlertCircle, ShieldCheck, Loader2, X, Clock,
+  Send, RefreshCw, AlertCircle, ShieldCheck, Loader2, X, Clock, Copy, MessageCircle, UserCog,
 } from "lucide-react";
 import { api } from "@/lib/api";
 
@@ -38,6 +38,7 @@ type Row = {
 type TabTotal = { count: number; monto: number };
 type Resp = { rows: Row[]; counts: Record<string, number>; totals: Record<string, TabTotal> };
 type Health = { enabled: boolean };
+type PedirResult = { link: string; message: string; email?: string | null; dropshipper_name?: string | null };
 
 const TABS: { v: string; l: string }[] = [
   { v: "pendiente", l: "Pendiente" },
@@ -136,6 +137,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pedir, setPedir] = useState<PedirResult | null>(null);
 
   const { data: health } = useQuery<Health>({
     queryKey: ["cresium-health"],
@@ -169,6 +171,10 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
   const retryMut = useMutation({
     mutationFn: (orderId: number) => api(`/api/cresium-payouts/orders/${orderId}/reintentar`, { method: "POST" }),
     onSuccess: invalidate,
+  });
+  const pedirMut = useMutation({
+    mutationFn: (orderId: number) => api<PedirResult>(`/api/cresium-payouts/orders/${orderId}/pedir-datos`, { method: "POST" }),
+    onSuccess: (d) => { setPedir(d); invalidate(); },
   });
   const retryBulkMut = useMutation({
     mutationFn: (ids: number[]) => api("/api/cresium-payouts/reintentar", { method: "POST", body: JSON.stringify({ order_ids: ids }) }),
@@ -312,17 +318,30 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
                     {s ? <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs ${s.cls}`}><Clock className="h-3 w-3" />{s.label}</span> : "—"}
                   </td>
                   <td className="px-3 py-2 text-right">
-                    {(tab === "error_cliente" || tab === "error_cresium") && r.order_id && enabled && (
-                      <button
-                        onClick={() => retryMut.mutate(r.order_id!)}
-                        disabled={retryMut.isPending}
-                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text disabled:opacity-40"
-                      >
-                        {retryMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                        {tab === "error_cliente" ? "Re-verificar" : "Reintentar"}
-                      </button>
-                    )}
-                    {tab === "realizada" && r.cresium_transaction_id && <span className="text-xs text-text-muted">tx {r.cresium_transaction_id}</span>}
+                    <div className="flex items-center justify-end gap-1.5">
+                      {tab === "error_cliente" && r.source_type === "subscription" && r.order_id && (
+                        <button
+                          onClick={() => pedirMut.mutate(r.order_id!)}
+                          disabled={pedirMut.isPending}
+                          className="inline-flex items-center gap-1 rounded border border-violet-300 bg-violet-50 px-2 py-1 text-xs font-medium text-violet-700 disabled:opacity-40"
+                          title="Generar link para que el dropshipper corrija sus datos bancarios"
+                        >
+                          {pedirMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserCog className="h-3 w-3" />}
+                          Pedir datos
+                        </button>
+                      )}
+                      {(tab === "error_cliente" || tab === "error_cresium") && r.order_id && enabled && (
+                        <button
+                          onClick={() => retryMut.mutate(r.order_id!)}
+                          disabled={retryMut.isPending}
+                          className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text disabled:opacity-40"
+                        >
+                          {retryMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                          {tab === "error_cliente" ? "Re-verificar" : "Reintentar"}
+                        </button>
+                      )}
+                      {tab === "realizada" && r.cresium_transaction_id && <span className="text-xs text-text-muted">tx {r.cresium_transaction_id}</span>}
+                    </div>
                   </td>
                 </tr>
               );
@@ -360,6 +379,52 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
           </div>
         </div>
       )}
+
+      {/* Pedir datos al cliente: link + WhatsApp + copiar */}
+      {pedir && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-text"><UserCog className="h-5 w-5 text-violet-600" /> Pedir datos al dropshipper</h3>
+              <button onClick={() => setPedir(null)} className="text-text-muted hover:text-text"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-3 text-sm text-text-muted">
+              Generamos un link seguro para que <b className="text-text">{pedir.dropshipper_name || "el dropshipper"}</b> corrija sus datos bancarios. Cuando los actualice, la devolución vuelve a la cola automáticamente.
+            </p>
+
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-bg px-3 py-2">
+              <span className="flex-1 truncate font-mono text-xs text-text-muted">{pedir.link}</span>
+              <CopyBtn text={pedir.link} label="Copiar link" />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <a
+                href={`https://wa.me/?text=${encodeURIComponent(pedir.message)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+              >
+                <MessageCircle className="h-4 w-4" /> Enviar por WhatsApp
+              </a>
+              <CopyBtn text={pedir.message} label="Copiar mensaje" full />
+            </div>
+
+            <p className="mt-3 text-xs text-text-muted">El link expira cuando la devolución se procesa. Si el dropshipper carga datos válidos, se transfiere sin intervención.</p>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function CopyBtn({ text, label, full }: { text: string; label: string; full?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-text ${full ? "w-full" : ""}`}
+    >
+      <Copy className="h-3.5 w-3.5" /> {copied ? "Copiado ✓" : label}
+    </button>
   );
 }

@@ -420,6 +420,36 @@ def poll(order_id: int, user: Annotated[dict, Depends(current_user)]) -> dict:
         raise HTTPException(409, _DISABLED_MSG)
 
 
+@router.post("/orders/{order_id}/pedir-datos")
+def pedir_datos(order_id: int, user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Genera el link de correccion self-service + mensaje de WhatsApp para
+    pedirle al dropper que corrija sus datos bancarios. Marca la solicitud como
+    'datos solicitados'. Aplica a devoluciones de suscripcion."""
+    require_area(user, _AREAS)
+    order = db.get_order(order_id)
+    if not order:
+        raise HTTPException(404, "Orden no encontrada")
+    if order["source_type"] != "subscription":
+        raise HTTPException(400, "El pedido self-service aplica a devoluciones de suscripción (ML: pedir actualizar la cuenta en Unidrop)")
+    rid = order.get("subscription_refund_request_id")
+    if not rid:
+        raise HTTPException(400, "Sin solicitud asociada")
+    req = refund_requests_db.get_request(int(rid))
+    if not req:
+        raise HTTPException(404, "Solicitud no encontrada")
+
+    refund_requests_db.set_correction_requested(int(rid))
+    from app.services.cresium.correction_token import make_token
+    token = make_token(int(rid))
+    link = f"https://app.unidatacenter.com.ar/devolucion/corregir/{token}"
+    nombre = (req.get("dropshipper_name") or "").split(" ")[0]
+    msg = (
+        f"Hola {nombre}! Tu reembolso de Unidev no se pudo procesar porque los datos bancarios "
+        f"no validaron. Corregilos acá para que podamos transferirte: {link}"
+    )
+    return {"ok": True, "link": link, "message": msg, "email": req.get("dropshipper_email"), "dropshipper_name": req.get("dropshipper_name")}
+
+
 @router.post("/verify-account")
 def verify_account(body: VerifyAccountBody, user: Annotated[dict, Depends(current_user)]) -> dict:
     require_area(user, _AREAS)

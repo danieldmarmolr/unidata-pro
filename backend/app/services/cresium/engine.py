@@ -205,6 +205,37 @@ def verify_batch(batch_id: int) -> dict:
     return {"verified": verified, "pending_before": len(pending)}
 
 
+def apply_correction(
+    request_id: int, *, holder_name: str, holder_cuit: str, bank_name: str, cbu: str, alias: str | None
+) -> dict:
+    """Aplica la correccion self-service del dropper: actualiza los datos
+    bancarios de la solicitud, reabre la order asociada (si existe) con el
+    snapshot nuevo y la re-verifica contra Cresium. Asi la devolucion reentra al
+    flujo sin que Finanzas tenga que rearmar nada."""
+    req = refund_requests_db.update_bank_data(
+        request_id, holder_name=holder_name, holder_cuit=holder_cuit,
+        bank_name=bank_name, cbu=cbu, alias=alias,
+    )
+    if not req:
+        raise ValueError("Solicitud no encontrada")
+
+    recipient = {
+        "recipient_cbu": cbu, "recipient_cvu": None, "recipient_alias": alias,
+        "recipient_holder_name": holder_name, "recipient_tax_id": holder_cuit,
+    }
+    order = db.get_order_by_subscription(request_id)
+    verified = False
+    if order:
+        reopened = db.update_recipient_and_reopen(order["id"], recipient)
+        if reopened and config.ready():
+            try:
+                res = verify_order(order["id"])
+                verified = res.get("status") == "READY_TO_TRANSFER"
+            except Exception as e:  # noqa: BLE001
+                log.warning("[apply_correction] re-verify order %s fallo: %s", order["id"], e)
+    return {"ok": True, "verified": verified, "order_exists": bool(order)}
+
+
 # ─── Enviar a Cresium (verify + submit por item, estilo Unidev) ──────────────
 
 def verify_and_submit(order_id: int) -> dict:

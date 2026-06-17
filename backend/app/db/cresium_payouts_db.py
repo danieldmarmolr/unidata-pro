@@ -559,6 +559,43 @@ def set_cresium_status(order_id: int, status: str | None) -> None:
         )
 
 
+def get_order_by_subscription(request_id: int) -> dict | None:
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM cresium_payout_orders WHERE source_type = 'subscription' "
+            "AND subscription_refund_request_id = %s ORDER BY id DESC LIMIT 1",
+            (request_id,),
+        )
+        row = cur.fetchone()
+    return _order_dict(row) if row else None
+
+
+def update_recipient_and_reopen(order_id: int, recipient: dict) -> dict | None:
+    """Tras una correccion de datos del dropper: actualiza el snapshot bancario y
+    reabre la order a PENDING_VERIFICATION para re-verificar. No toca orders en
+    vuelo (SUBMITTING/SIGNATURE_REQUEST_CREATED/PROCESSING) ni exitosas."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cresium_payout_orders
+            SET recipient_cbu = %s, recipient_cvu = %s, recipient_alias = %s,
+                recipient_holder_name = %s, recipient_tax_id = %s, cresium_to_id = NULL,
+                status = 'PENDING_VERIFICATION', failure_reason = NULL, error_category = NULL,
+                cresium_status = NULL, updated_at = NOW()
+            WHERE id = %s AND status NOT IN ('SUCCESS','SUBMITTING','SIGNATURE_REQUEST_CREATED','PROCESSING')
+            RETURNING *
+            """,
+            (
+                recipient.get("recipient_cbu"), recipient.get("recipient_cvu"), recipient.get("recipient_alias"),
+                recipient.get("recipient_holder_name"), recipient.get("recipient_tax_id"), order_id,
+            ),
+        )
+        row = cur.fetchone()
+    return _order_dict(row) if row else None
+
+
 def reset_failed_to_ready(order_id: int, operator_id: int | None, operator_email: str | None) -> dict | None:
     """CAS: FAILED -> READY_TO_TRANSFER (retry)."""
     init()

@@ -75,7 +75,9 @@ def init() -> None:
                 ALTER TABLE subscription_refund_requests
                 ADD COLUMN IF NOT EXISTS paid_subscription_total_arg NUMERIC(12,2),
                 ADD COLUMN IF NOT EXISTS paid_subscription_count     INT,
-                ADD COLUMN IF NOT EXISTS abandonment_reason          TEXT NOT NULL DEFAULT 'no_especificada'
+                ADD COLUMN IF NOT EXISTS abandonment_reason          TEXT NOT NULL DEFAULT 'no_especificada',
+                ADD COLUMN IF NOT EXISTS correction_requested_at     TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS bank_corrected_at           TIMESTAMPTZ
             """)
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_refundreq_status "
@@ -232,6 +234,41 @@ def get_request(request_id: int) -> dict | None:
         cur.execute(
             "SELECT * FROM subscription_refund_requests WHERE id = %s",
             (request_id,),
+        )
+        row = cur.fetchone()
+    return _to_dict(row) if row else None
+
+
+def set_correction_requested(request_id: int) -> None:
+    """Marca que se le pidio al dropper que corrija sus datos bancarios."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE subscription_refund_requests SET correction_requested_at = NOW(), updated_at = NOW() WHERE id = %s",
+            (request_id,),
+        )
+
+
+def update_bank_data(
+    request_id: int, *, holder_name: str, holder_cuit: str, bank_name: str, cbu: str, alias: str | None
+) -> dict | None:
+    """Actualiza los datos bancarios (correccion self-service del dropper). Marca
+    bank_corrected_at, limpia correction_requested_at, y si estaba 'rejected' lo
+    vuelve a 'pending' para que reentre al flujo."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE subscription_refund_requests
+            SET bank_holder_name = %s, bank_holder_cuit = %s, bank_name = %s,
+                bank_cbu = %s, bank_alias = %s, bank_corrected_at = NOW(),
+                correction_requested_at = NULL,
+                status = CASE WHEN status = 'rejected' THEN 'pending' ELSE status END,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (holder_name, holder_cuit, bank_name, cbu, alias or None, request_id),
         )
         row = cur.fetchone()
     return _to_dict(row) if row else None
