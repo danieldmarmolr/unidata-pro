@@ -8,6 +8,7 @@ import {
   Search, Filter,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { CresiumTransferPanel } from "@/components/cresium-transfer-panel";
 import { TodayPanel } from "@/components/today-panel";
 import { api, getUser } from "@/lib/api";
 
@@ -138,6 +139,7 @@ function displayCode(r: Request): string {
 }
 
 export default function DevSuscripcionesPage() {
+  const [view, setView] = useState<"transferencias" | "solicitudes">("transferencias");
   const [filter, setFilter] = useState<"all" | Status>("pending");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -181,6 +183,14 @@ export default function DevSuscripcionesPage() {
         hidePeriod
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <div className="mb-4 inline-flex rounded-xl border border-border bg-soft p-1">
+          <button onClick={() => setView("transferencias")} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${view === "transferencias" ? "bg-violet-600 text-white" : "text-text-muted"}`}>Transferencias Cresium</button>
+          <button onClick={() => setView("solicitudes")} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${view === "solicitudes" ? "bg-violet-600 text-white" : "text-text-muted"}`}>Solicitudes</button>
+        </div>
+        {view === "transferencias" ? (
+          <CresiumTransferPanel source="subscription" />
+        ) : (
+          <>
         <TodayPanel unit="unidrop" context="devoluciones" title="HOY · Dev. Suscripciones" />
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
@@ -275,6 +285,8 @@ export default function DevSuscripcionesPage() {
               <RequestCard key={r.id} request={r} />
             ))}
           </div>
+        )}
+          </>
         )}
       </div>
     </>

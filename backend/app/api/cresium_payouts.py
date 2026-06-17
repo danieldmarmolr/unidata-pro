@@ -201,6 +201,131 @@ def confirm_batch(batch_id: int, user: Annotated[dict, Depends(current_user)]) -
     return {"batch": db.get_batch(batch_id), "results": results, "orders": db.list_orders(batch_id=batch_id, limit=1000)}
 
 
+# ─── Enviar a Cresium (seleccion + envio masivo, estilo Unidev) ─────────────
+
+class SendBody(BaseModel):
+    items: list[BatchItem] = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/send")
+def send(body: SendBody, user: Annotated[dict, Depends(current_user)]) -> dict:
+    """Envia masivamente las devoluciones seleccionadas a Cresium: por cada una
+    arma la order, verifica la cuenta (banco + anti-fraude) y la submitea
+    (preview + signature-request). Devuelve resumen agregado con la categoria de
+    error por item (cliente vs cresium). NO mueve plata por si solo: el firmante
+    de Cresium aprueba cada transferencia con token."""
+    require_area(user, _AREAS)
+    if not config.ready():
+        raise HTTPException(409, _DISABLED_MSG)
+    resultados: list[dict] = []
+    enviados = 0
+    for it in body.items:
+        try:
+            order = _build_ml_order(it, None, user) if it.source_type == "ml_return" else _build_subscription_order(it, None, user)
+            res = engine.verify_and_submit(order["id"])
+        except CresiumDisabledError:
+            raise HTTPException(409, _DISABLED_MSG)
+        except ValueError as e:
+            res = {"ok": False, "code": "BUILD_ERROR", "estado": "error_cliente", "error": str(e)}
+        if res.get("ok"):
+            enviados += 1
+        resultados.append({**res, "item": it.model_dump(exclude_none=True)})
+    return {"ok": True, "total": len(body.items), "enviados": enviados, "resultados": resultados}
+
+
+def _ml_pending_rows(search: str | None, exclude: set) -> list[dict]:
+    data = ml_returns_finance.list_ml_returns(tab="TRANSFERENCIA_PENDIENTE", search=search, limit=500)
+    out: list[dict] = []
+    for it in data.get("items", []):
+        oid = it.get("ml_order_id")
+        if oid is None or (int(oid), 1) in exclude:
+            continue
+        drop = it.get("dropshipper") or {}
+        bank = it.get("bank") or {}
+        out.append({
+            "key": f"ml:{oid}:1",
+            "source_type": "ml_return", "ml_order_id": int(oid), "return_idx": 1,
+            "titular": drop.get("name") or "", "dni": drop.get("dni") or "",
+            "banco": bank.get("bank_name"),
+            "cuenta": bank.get("cbu") or bank.get("cvu") or bank.get("alias"),
+            "needs_bank": bool(bank.get("needs_bank", True)),
+            "monto": float(it.get("amount_to_refund") or 0),
+            "estado": "pendiente", "tab": "pendiente", "created_at": it.get("created_at"),
+        })
+    return out
+
+
+def _sub_pending_rows(search: str | None, exclude: set) -> list[dict]:
+    items = refund_requests_db.list_requests(status="pending", search=search, limit=500)
+    out: list[dict] = []
+    for r in items:
+        rid = r.get("id")
+        if rid is None or int(rid) in exclude:
+            continue
+        cuenta = r.get("bank_cbu") or r.get("bank_alias")
+        out.append({
+            "key": f"sub:{rid}",
+            "source_type": "subscription", "subscription_refund_request_id": int(rid),
+            "titular": r.get("bank_holder_name") or r.get("dropshipper_name") or "", "dni": r.get("dropshipper_dni") or "",
+            "banco": r.get("bank_name"), "cuenta": cuenta,
+            "needs_bank": not bool(cuenta),
+            "monto": float(r.get("refund_amount_arg") or 0),
+            "estado": "pendiente", "tab": "pendiente", "created_at": r.get("created_at"),
+        })
+    return out
+
+
+def _order_rows(source_type: str, tab: str, search: str | None) -> list[dict]:
+    out: list[dict] = []
+    for o in db.list_orders_for_tab(source_type, tab, search=search, limit=500):
+        out.append({
+            "key": f"order:{o['id']}",
+            "source_type": source_type, "order_id": o["id"],
+            "ml_order_id": o.get("ml_order_id"), "return_idx": o.get("return_idx"),
+            "subscription_refund_request_id": o.get("subscription_refund_request_id"),
+            "titular": o.get("recipient_holder_name") or o.get("dropshipper_name") or "",
+            "dni": o.get("dropshipper_dni") or "",
+            "banco": None,
+            "cuenta": o.get("recipient_cbu") or o.get("recipient_cvu") or o.get("recipient_alias"),
+            "monto": float(o.get("amount") or 0),
+            "estado": o["status"], "error_category": o.get("error_category"),
+            "tab": tab, "created_at": o.get("created_at"),
+            "failure_reason": o.get("failure_reason"),
+            "cresium_transaction_id": o.get("cresium_transaction_id"),
+            "receipt_url": o.get("receipt_url"),
+        })
+    return out
+
+
+@router.get("/transferencias")
+def transferencias(
+    user: Annotated[dict, Depends(current_user)],
+    source: Annotated[Literal["ml", "subscription"], Query()],
+    tab: Annotated[str, Query()] = "pendiente",
+    search: Annotated[str | None, Query()] = None,
+) -> dict:
+    require_area(user, _AREAS)
+    source_type = "ml_return" if source == "ml" else "subscription"
+    exclude = db.active_order_keys(source_type)
+    pending = _ml_pending_rows(search, exclude) if source == "ml" else _sub_pending_rows(search, exclude)
+    counts = {"pendiente": len(pending), **db.count_orders_by_tab(source_type)}
+    rows = pending if tab == "pendiente" else _order_rows(source_type, tab, search)
+    return {"rows": rows, "counts": counts}
+
+
+@router.post("/orders/{order_id}/reintentar")
+def reintentar(order_id: int, user: Annotated[dict, Depends(current_user)]) -> dict:
+    require_area(user, _AREAS)
+    try:
+        return engine.reintentar(order_id)
+    except CresiumDisabledError as e:
+        raise HTTPException(409, str(e))
+    except RuntimeError:
+        raise HTTPException(409, _DISABLED_MSG)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
 # ─── Orders ──────────────────────────────────────────────────────────────────
 
 @router.get("")

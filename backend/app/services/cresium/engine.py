@@ -168,7 +168,7 @@ def verify_order(order_id: int) -> dict:
 
     value = _candidate_value(order)
     if not value:
-        db.mark_failed(order_id, "Sin datos bancarios para verificar (cbu/cvu/alias vacios)")
+        db.mark_failed(order_id, "Sin datos bancarios para verificar (cbu/cvu/alias vacios)", category="cliente")
         return db.get_order(order_id)
 
     va = verify_account(
@@ -204,6 +204,73 @@ def verify_batch(batch_id: int) -> dict:
     return {"verified": verified, "pending_before": len(pending)}
 
 
+# ─── Enviar a Cresium (verify + submit por item, estilo Unidev) ──────────────
+
+def verify_and_submit(order_id: int) -> dict:
+    """Envia UNA order a Cresium: verifica la cuenta (bank-address + anti-fraude)
+    y, si pasa, la submitea (preview + signature-request). Categoriza el
+    resultado estilo Unidev. Devuelve {ok, code, estado}.
+      estado: en_cresium | error_cliente | error_cresium | realizada
+    """
+    if not config.ready():
+        raise CresiumDisabledError(_NOT_READY_MSG)
+    order = db.get_order(order_id)
+    if not order:
+        raise ValueError(f"Payout order {order_id} no encontrada")
+
+    st = order["status"]
+    if st in ("SUBMITTING", "SIGNATURE_REQUEST_CREATED", "PROCESSING"):
+        return {"ok": True, "code": "YA_EN_CURSO", "estado": "en_cresium", "order_id": order_id}
+    if st == "SUCCESS":
+        return {"ok": True, "code": "YA_REALIZADA", "estado": "realizada", "order_id": order_id}
+
+    # Paso 1: verificar la cuenta si todavia no esta lista.
+    if st == "PENDING_VERIFICATION":
+        verified = verify_order(order_id)
+        if verified.get("status") != "READY_TO_TRANSFER":
+            reason = verified.get("failure_reason") or "La cuenta no verifico contra Cresium (titular/CBU)"
+            db.mark_failed(order_id, reason, category="cliente")
+            return {"ok": False, "code": "ERROR_DATOS_CLIENTE", "estado": "error_cliente", "order_id": order_id}
+        st = "READY_TO_TRANSFER"
+
+    # Paso 2: submit (make-a-transfer + signature-request).
+    if st == "READY_TO_TRANSFER":
+        try:
+            submit_to_cresium(order_id)
+            return {"ok": True, "code": "ENVIADA", "estado": "en_cresium", "order_id": order_id}
+        except CresiumDisabledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - submit_to_cresium ya marco FAILED con categoria
+            cur = db.get_order(order_id) or {}
+            cat = cur.get("error_category") or "cresium"
+            if cur.get("status") != "FAILED":
+                db.mark_failed(order_id, str(e), category=cat)
+            estado = "error_cliente" if cat == "cliente" else "error_cresium"
+            return {"ok": False, "code": cat.upper(), "estado": estado, "order_id": order_id}
+
+    # Estado no enviable (FAILED/CANCELED se reintentan con su accion dedicada).
+    return {"ok": False, "code": "ESTADO_NO_ENVIABLE",
+            "estado": db.tab_for_order(st, order.get("error_category")), "order_id": order_id}
+
+
+def reintentar(order_id: int) -> dict:
+    """Reintenta una order en error (Reintentar / Re-verificar de la UI):
+    reabre FAILED/CANCELED al punto correcto (READY si ya tiene cuenta
+    verificada, PENDING si hay que re-verificar) y corre verify_and_submit."""
+    if not config.ready():
+        raise CresiumDisabledError(_NOT_READY_MSG)
+    order = db.get_order(order_id)
+    if not order:
+        raise ValueError(f"Payout order {order_id} no encontrada")
+    if order["status"] not in ("FAILED", "CANCELED"):
+        # Ya salio del error (otra accion / evento) — no-op idempotente.
+        return {"ok": True, "code": "NO_ERROR",
+                "estado": db.tab_for_order(order["status"], order.get("error_category")), "order_id": order_id}
+    target = "READY_TO_TRANSFER" if order.get("cresium_to_id") else "PENDING_VERIFICATION"
+    db.reopen_order(order_id, target)
+    return verify_and_submit(order_id)
+
+
 # ─── Submit saliente (2 calls a Cresium) ─────────────────────────────────────
 
 def submit_to_cresium(order_id: int) -> dict:
@@ -236,7 +303,7 @@ def submit_to_cresium(order_id: int) -> dict:
 
     if not order.get("cresium_to_id"):
         reason = "La cuenta bancaria no tiene cresium_to_id (no fue verificada contra Cresium)"
-        db.mark_failed(order_id, reason)
+        db.mark_failed(order_id, reason, category="cliente")
         raise ValueError(reason)
 
     description = _description_for(order)
@@ -258,7 +325,7 @@ def submit_to_cresium(order_id: int) -> dict:
             db.set_transaction_ids(order_id, preview_id=tx_id, transaction_id=tx_id)
             log.info("[submit] make-a-transfer OK order %s txId=%s", order_id, tx_id)
         except Exception as err:  # noqa: BLE001 - cualquier error -> FAILED recuperable, nunca dejar SUBMITTING colgado
-            db.mark_failed(order_id, f"make-a-transfer: {err}")
+            db.mark_failed(order_id, f"make-a-transfer: {err}", category="cresium")
             raise
 
     # ── Step 2: signature-request ────────────────────────────────────────────
@@ -268,7 +335,7 @@ def submit_to_cresium(order_id: int) -> dict:
         log.info("[submit] signature-request OK order %s srId=%s", order_id, sr.signature_request_id)
         return updated or db.get_order(order_id)
     except Exception as err:  # noqa: BLE001 - cualquier error -> FAILED (con tx_id huerfano anotado), nunca SUBMITTING colgado
-        db.mark_failed(order_id, f"signature-request fallo post make-a-transfer (txId={tx_id}): {err}")
+        db.mark_failed(order_id, f"signature-request fallo post make-a-transfer (txId={tx_id}): {err}", category="cresium")
         raise
 
 

@@ -107,6 +107,7 @@ def init() -> None:
                     cresium_transaction_id      TEXT,
                     cresium_signature_request_id TEXT,
                     failure_reason              TEXT,
+                    error_category              TEXT CHECK (error_category IN ('cliente','cresium')),
                     receipt_url                 TEXT,
                     refunded_at                 TIMESTAMPTZ,
                     triggered_by_user_id        BIGINT,
@@ -129,6 +130,8 @@ def init() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_txid ON cresium_payout_orders (cresium_transaction_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_dropshipper ON cresium_payout_orders (dropshipper_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_batch ON cresium_payout_orders (batch_id)")
+            # error_category puede faltar si la tabla se creo antes de este cambio.
+            cur.execute("ALTER TABLE cresium_payout_orders ADD COLUMN IF NOT EXISTS error_category TEXT")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS cresium_payout_events (
@@ -241,6 +244,90 @@ def list_orders(
     with get_conn() as c, c.cursor() as cur:
         cur.execute(sql, params)
         return [_order_dict(r) for r in cur.fetchall()]
+
+
+# Mapeo estado de orden -> tab estilo Unidev (Pendiente / En Cresium / Errores
+# cliente / Errores Cresium / Realizadas).
+_EN_CRESIUM = ("SUBMITTING", "SIGNATURE_REQUEST_CREATED", "PROCESSING")
+# Estados que sacan a la devolucion del pool 'Pendiente' (ya se envio o fallo).
+_NOT_PENDING = ("SUBMITTING", "SIGNATURE_REQUEST_CREATED", "PROCESSING", "SUCCESS", "FAILED", "CANCELED")
+
+
+def tab_for_order(status: str, error_category: str | None) -> str:
+    if status in _EN_CRESIUM:
+        return "en_cresium"
+    if status == "SUCCESS":
+        return "realizada"
+    if status == "FAILED":
+        return "error_cliente" if error_category == "cliente" else "error_cresium"
+    if status == "CANCELED":
+        return "error_cresium"
+    return "pendiente"  # PENDING_VERIFICATION / READY_TO_TRANSFER
+
+
+def _tab_where(tab: str) -> tuple[str, list]:
+    if tab == "en_cresium":
+        return "status = ANY(%s)", [list(_EN_CRESIUM)]
+    if tab == "realizada":
+        return "status = 'SUCCESS'", []
+    if tab == "error_cliente":
+        return "status = 'FAILED' AND error_category = 'cliente'", []
+    if tab == "error_cresium":
+        return "(status = 'FAILED' AND (error_category IS NULL OR error_category = 'cresium')) OR status = 'CANCELED'", []
+    raise ValueError(f"tab invalido para orders: {tab}")
+
+
+def list_orders_for_tab(source_type: str, tab: str, *, search: str | None = None, limit: int = 500) -> list[dict]:
+    """Orders (con su snapshot) para los tabs post-envio (en_cresium / error_* /
+    realizada). El tab 'pendiente' se arma desde el pool de devoluciones, no de aca."""
+    init()
+    where, params = _tab_where(tab)
+    sql = f"SELECT * FROM cresium_payout_orders WHERE source_type = %s AND ({where})"
+    p: list = [source_type, *params]
+    if search:
+        sql += " AND (dropshipper_name ILIKE %s OR dropshipper_dni ILIKE %s OR recipient_cbu ILIKE %s OR recipient_alias ILIKE %s)"
+        like = f"%{search}%"
+        p.extend([like, like, like, like])
+    sql += " ORDER BY updated_at DESC LIMIT %s"
+    p.append(limit)
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(sql, p)
+        return [_order_dict(r) for r in cur.fetchall()]
+
+
+def active_order_keys(source_type: str) -> set:
+    """Keys de devoluciones que YA tienen una orden fuera del pool Pendiente
+    (enviada/fallada/exito) — para excluirlas del tab Pendiente.
+    Para ml_return: (ml_order_id, return_idx). Para subscription: request_id."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT ml_order_id, return_idx, subscription_refund_request_id "
+            "FROM cresium_payout_orders WHERE source_type = %s AND status = ANY(%s)",
+            (source_type, list(_NOT_PENDING)),
+        )
+        rows = cur.fetchall()
+    if source_type == "ml_return":
+        return {(int(r["ml_order_id"]), int(r["return_idx"] or 1)) for r in rows if r["ml_order_id"] is not None}
+    return {int(r["subscription_refund_request_id"]) for r in rows if r["subscription_refund_request_id"] is not None}
+
+
+def count_orders_by_tab(source_type: str) -> dict[str, int]:
+    """Counts de los tabs post-envio (los de orden). El count de 'pendiente' lo
+    completa la capa de servicio desde el pool de devoluciones."""
+    init()
+    out = {"en_cresium": 0, "error_cliente": 0, "error_cresium": 0, "realizada": 0}
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT status, error_category, COUNT(*) AS n FROM cresium_payout_orders "
+            "WHERE source_type = %s GROUP BY status, error_category",
+            (source_type,),
+        )
+        for r in cur.fetchall():
+            t = tab_for_order(r["status"], r["error_category"])
+            if t in out:
+                out[t] += int(r["n"])
+    return out
 
 
 def find_order_by_cresium_event(
@@ -371,10 +458,12 @@ def mark_signature_request_created(order_id: int, signature_request_id: str) -> 
     return _order_dict(row) if row else None
 
 
-def mark_failed(order_id: int, reason: str, *, transaction_id: str | None = None) -> dict | None:
+def mark_failed(order_id: int, reason: str, *, transaction_id: str | None = None,
+                category: str | None = None) -> dict | None:
     """Marca FAILED desde cualquier estado NO terminal. No pisa estados
     terminales (SUCCESS/CANCELED/FAILED) — un evento fuera de orden no debe
-    flipear CANCELED->FAILED ni revivir un terminal. Idempotente."""
+    flipear CANCELED->FAILED ni revivir un terminal. Idempotente.
+    category: 'cliente' (banco/anti-fraude) | 'cresium' (API/red) | None."""
     init()
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
@@ -382,12 +471,13 @@ def mark_failed(order_id: int, reason: str, *, transaction_id: str | None = None
             UPDATE cresium_payout_orders
             SET status = 'FAILED',
                 failure_reason = %s,
+                error_category = %s,
                 cresium_transaction_id = COALESCE(%s, cresium_transaction_id),
                 updated_at = NOW()
             WHERE id = %s AND status NOT IN ('FAILED','SUCCESS','CANCELED')
             RETURNING *
             """,
-            (reason, transaction_id, order_id),
+            (reason, category, transaction_id, order_id),
         )
         row = cur.fetchone()
     return _order_dict(row) if row else None
@@ -433,6 +523,21 @@ def mark_success(order_id: int, *, transaction_id: str, receipt_url: str | None)
             RETURNING *
             """,
             (transaction_id, receipt_url, order_id),
+        )
+        row = cur.fetchone()
+    return _order_dict(row) if row else None
+
+
+def reopen_order(order_id: int, target_status: str) -> dict | None:
+    """Reabre una order en error (FAILED/CANCELED) a READY_TO_TRANSFER (si ya
+    tiene cresium_to_id) o PENDING_VERIFICATION (si hay que re-verificar la
+    cuenta). Limpia failure_reason + error_category."""
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE cresium_payout_orders SET status = %s, failure_reason = NULL, error_category = NULL, "
+            "updated_at = NOW() WHERE id = %s AND status IN ('FAILED','CANCELED') RETURNING *",
+            (target_status, order_id),
         )
         row = cur.fetchone()
     return _order_dict(row) if row else None

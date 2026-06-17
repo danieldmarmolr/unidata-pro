@@ -10,6 +10,7 @@ import {
   PackageOpen, Banknote, ArchiveRestore,
 } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { CresiumTransferPanel } from "@/components/cresium-transfer-panel";
 import { api } from "@/lib/api";
 
 type MLStatus =
@@ -148,6 +149,7 @@ function fmtMoney(v: number | null | undefined): string {
 }
 
 export default function DevMercadoLibrePage() {
+  const [view, setView] = useState<"transferencias" | "reclamos">("transferencias");
   const [tab, setTab] = useState<Tab>("TRANSFERENCIA_PENDIENTE");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -195,6 +197,14 @@ export default function DevMercadoLibrePage() {
         hidePeriod
       />
       <div className="flex-1 px-4 sm:px-6 lg:px-8 py-6 overflow-y-auto">
+        <div className="mb-4 inline-flex rounded-xl border border-border bg-soft p-1">
+          <button onClick={() => setView("transferencias")} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${view === "transferencias" ? "bg-violet-600 text-white" : "text-text-muted"}`}>Transferencias Cresium</button>
+          <button onClick={() => setView("reclamos")} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${view === "reclamos" ? "bg-violet-600 text-white" : "text-text-muted"}`}>Reclamos</button>
+        </div>
+        {view === "transferencias" ? (
+          <CresiumTransferPanel source="ml" />
+        ) : (
+          <>
         <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
           <div className="inline-flex bg-soft rounded-xl p-1 border border-border flex-wrap">
             {/* Cola accionable Finanzas primero, despues flow cronologico ML */}
@@ -280,6 +290,8 @@ export default function DevMercadoLibrePage() {
           <div className="text-center text-xs text-text-muted mt-4">
             Mostrando {data.count} de {data.total}. Acotá la búsqueda para filtrar más.
           </div>
+        )}
+          </>
         )}
       </div>
     </>

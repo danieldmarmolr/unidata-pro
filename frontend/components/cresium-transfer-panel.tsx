@@ -1,0 +1,290 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Send, RefreshCw, AlertCircle, ShieldCheck, Loader2, X, Clock,
+} from "lucide-react";
+import { api } from "@/lib/api";
+
+// Panel "Enviar a Cresium" embebido (estilo Unidev): 5 tabs por estado del
+// payout, multi-select + envio masivo, SLA y acciones por fila.
+
+type Source = "ml" | "subscription";
+
+type Row = {
+  key: string;
+  source_type: "ml_return" | "subscription";
+  ml_order_id?: number | null;
+  return_idx?: number | null;
+  subscription_refund_request_id?: number | null;
+  order_id?: number | null;
+  titular: string;
+  dni: string;
+  banco: string | null;
+  cuenta: string | null;
+  needs_bank?: boolean;
+  monto: number;
+  estado: string;
+  error_category?: string | null;
+  tab: string;
+  created_at: string | null;
+  failure_reason?: string | null;
+  cresium_transaction_id?: string | null;
+  receipt_url?: string | null;
+};
+
+type Resp = { rows: Row[]; counts: Record<string, number> };
+type Health = { enabled: boolean };
+
+const TABS: { v: string; l: string }[] = [
+  { v: "pendiente", l: "Pendiente" },
+  { v: "en_cresium", l: "En Cresium" },
+  { v: "error_cliente", l: "Errores cliente" },
+  { v: "error_cresium", l: "Errores Cresium" },
+  { v: "realizada", l: "Realizadas" },
+];
+
+const ESTADO_META: Record<string, { label: string; bg: string; text: string }> = {
+  PENDING_VERIFICATION:      { label: "Pendiente de envío", bg: "bg-amber-100",   text: "text-amber-700" },
+  READY_TO_TRANSFER:         { label: "Lista p/ enviar",    bg: "bg-amber-100",   text: "text-amber-700" },
+  SUBMITTING:                { label: "Enviando…",          bg: "bg-cyan-100",    text: "text-cyan-700" },
+  SIGNATURE_REQUEST_CREATED: { label: "Esperando firma",    bg: "bg-indigo-100",  text: "text-indigo-700" },
+  PROCESSING:                { label: "Procesando",         bg: "bg-cyan-100",    text: "text-cyan-700" },
+  SUCCESS:                   { label: "Realizada",          bg: "bg-emerald-100", text: "text-emerald-700" },
+  CANCELED:                  { label: "Cancelada",          bg: "bg-zinc-100",    text: "text-zinc-600" },
+  pendiente:                 { label: "Pendiente",          bg: "bg-amber-100",   text: "text-amber-700" },
+};
+
+function estadoBadge(r: Row) {
+  if (r.estado === "FAILED") {
+    return r.error_category === "cliente"
+      ? { label: "Datos a corregir", bg: "bg-red-100", text: "text-red-700" }
+      : { label: "Error Cresium", bg: "bg-red-100", text: "text-red-700" };
+  }
+  return ESTADO_META[r.estado] ?? { label: r.estado, bg: "bg-zinc-100", text: "text-zinc-600" };
+}
+
+const SLA_HOURS = 48;
+function sla(createdAt: string | null): { label: string; cls: string } | null {
+  if (!createdAt) return null;
+  const created = new Date(createdAt).getTime();
+  if (Number.isNaN(created)) return null;
+  const elapsedH = (Date.now() - created) / 36e5;
+  const leftH = SLA_HOURS - elapsedH;
+  if (leftH <= 0) return { label: "Vencido", cls: "bg-zinc-200 text-zinc-600" };
+  if (leftH < 6) return { label: `${Math.ceil(leftH)}h`, cls: "bg-red-100 text-red-700" };
+  if (leftH < 24) return { label: `${Math.ceil(leftH)}h`, cls: "bg-amber-100 text-amber-700" };
+  return { label: `${Math.ceil(leftH / 24)}d`, cls: "bg-emerald-100 text-emerald-700" };
+}
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null) return "—";
+  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(v);
+}
+
+function itemFromRow(r: Row): object {
+  return r.source_type === "ml_return"
+    ? { source_type: "ml_return", ml_order_id: r.ml_order_id, return_idx: r.return_idx ?? 1 }
+    : { source_type: "subscription", subscription_refund_request_id: r.subscription_refund_request_id };
+}
+
+export function CresiumTransferPanel({ source }: { source: Source }) {
+  const qc = useQueryClient();
+  const [tab, setTab] = useState("pendiente");
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const { data: health } = useQuery<Health>({
+    queryKey: ["cresium-health"],
+    queryFn: () => api("/api/cresium-payouts/health"),
+    staleTime: 60_000,
+  });
+  const enabled = !!health?.enabled;
+
+  const { data, isLoading } = useQuery<Resp>({
+    queryKey: ["cresium-transferencias", source, tab, search],
+    queryFn: () => {
+      const p = new URLSearchParams({ source, tab });
+      if (search.trim()) p.set("search", search.trim());
+      return api(`/api/cresium-payouts/transferencias?${p.toString()}`);
+    },
+    staleTime: 10_000,
+  });
+  const rows = data?.rows ?? [];
+  const counts = data?.counts ?? {};
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["cresium-transferencias", source] });
+
+  const sendMut = useMutation({
+    mutationFn: (items: object[]) => api("/api/cresium-payouts/send", { method: "POST", body: JSON.stringify({ items }) }),
+    onSuccess: () => { setSelected(new Set()); setConfirmOpen(false); invalidate(); },
+  });
+  const retryMut = useMutation({
+    mutationFn: (orderId: number) => api(`/api/cresium-payouts/orders/${orderId}/reintentar`, { method: "POST" }),
+    onSuccess: invalidate,
+  });
+
+  const selectableKeys = useMemo(() => rows.filter((r) => !r.needs_bank).map((r) => r.key), [rows]);
+  const allSelected = selectableKeys.length > 0 && selectableKeys.every((k) => selected.has(k));
+  const selectedRows = rows.filter((r) => selected.has(r.key));
+  const selectedTotal = selectedRows.reduce((s, r) => s + (r.monto || 0), 0);
+
+  function toggle(k: string) {
+    setSelected((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  }
+  function toggleAll() {
+    setSelected(allSelected ? new Set<string>() : new Set(selectableKeys));
+  }
+  function doSend() {
+    const items = selectedRows.map(itemFromRow);
+    if (items.length) sendMut.mutate(items);
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card">
+      {!enabled && (
+        <div className="m-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>Cresium <b>deshabilitado</b> — podés ver el estado pero el botón “Enviar a Cresium” está bloqueado hasta cargar los secrets <code>CRESIUM_*</code> y prender el flag.</span>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 pt-4">
+        {TABS.map((t) => (
+          <button
+            key={t.v}
+            onClick={() => { setTab(t.v); setSelected(new Set()); }}
+            className={`rounded-t-lg px-3 py-2 text-sm font-medium ${tab === t.v ? "bg-violet-600 text-white" : "bg-bg text-text-muted hover:text-text"}`}
+          >
+            {t.l} <span className="opacity-70">({counts[t.v] ?? 0})</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
+        <div className="flex items-center gap-2">
+          {tab === "pendiente" && (
+            <button onClick={toggleAll} disabled={!selectableKeys.length} className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm font-medium text-text disabled:opacity-40">
+              {allSelected ? "Deseleccionar" : `Seleccionar todas (${selectableKeys.length})`}
+            </button>
+          )}
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="DNI, titular, CBU…"
+            className="rounded-lg border border-border bg-bg px-3 py-1.5 text-sm text-text"
+          />
+        </div>
+        {tab === "pendiente" && (
+          <button
+            onClick={() => setConfirmOpen(true)}
+            disabled={!enabled || selected.size === 0}
+            className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+            title={!enabled ? "Cresium deshabilitado" : "Enviar las seleccionadas a Cresium"}
+          >
+            <Send className="h-4 w-4" /> Enviar a Cresium ({selected.size})
+          </button>
+        )}
+      </div>
+
+      {/* Tabla */}
+      <div className="overflow-x-auto px-4 pb-4">
+        <table className="w-full text-sm">
+          <thead className="bg-bg text-left text-xs uppercase text-text-muted">
+            <tr>
+              {tab === "pendiente" && <th className="w-10 px-3 py-2"><input type="checkbox" checked={allSelected} onChange={toggleAll} /></th>}
+              <th className="px-3 py-2">Titular</th>
+              <th className="px-3 py-2">Banco</th>
+              <th className="px-3 py-2">CBU/Alias</th>
+              <th className="px-3 py-2">Monto</th>
+              <th className="px-3 py-2">Estado</th>
+              <th className="px-3 py-2">SLA</th>
+              <th className="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoading && <tr><td colSpan={8} className="py-8 text-center text-text-muted">Cargando…</td></tr>}
+            {!isLoading && rows.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-text-muted">Sin devoluciones en este estado.</td></tr>}
+            {rows.map((r) => {
+              const badge = estadoBadge(r);
+              const s = sla(r.created_at);
+              return (
+                <tr key={r.key} className="border-t border-border">
+                  {tab === "pendiente" && (
+                    <td className="px-3 py-2">
+                      <input type="checkbox" checked={selected.has(r.key)} disabled={r.needs_bank} onChange={() => toggle(r.key)} title={r.needs_bank ? "Sin datos bancarios" : ""} />
+                    </td>
+                  )}
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-text">{r.titular || "—"}</div>
+                    <div className="text-xs text-text-muted">DNI {r.dni || "—"}</div>
+                  </td>
+                  <td className="px-3 py-2 text-text-muted">{r.banco || "—"}</td>
+                  <td className="px-3 py-2 font-mono text-xs text-text-muted">
+                    {r.needs_bank ? <span className="rounded bg-red-100 px-2 py-0.5 text-red-700">Sin datos</span> : (r.cuenta || "—")}
+                  </td>
+                  <td className="px-3 py-2 font-semibold text-text">{fmtMoney(r.monto)}</td>
+                  <td className="px-3 py-2">
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${badge.bg} ${badge.text}`}>{badge.label}</span>
+                    {r.failure_reason && <div className="mt-0.5 max-w-[220px] truncate text-xs text-red-600" title={r.failure_reason}>{r.failure_reason}</div>}
+                  </td>
+                  <td className="px-3 py-2">
+                    {s ? <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs ${s.cls}`}><Clock className="h-3 w-3" />{s.label}</span> : "—"}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {(tab === "error_cliente" || tab === "error_cresium") && r.order_id && enabled && (
+                      <button
+                        onClick={() => retryMut.mutate(r.order_id!)}
+                        disabled={retryMut.isPending}
+                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text disabled:opacity-40"
+                      >
+                        {retryMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                        {tab === "error_cliente" ? "Re-verificar" : "Reintentar"}
+                      </button>
+                    )}
+                    {tab === "en_cresium" && <span className="text-xs text-text-muted">esperando firma</span>}
+                    {tab === "realizada" && r.cresium_transaction_id && <span className="text-xs text-text-muted">tx {r.cresium_transaction_id}</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {(sendMut.isError || retryMut.isError) && (
+        <p className="px-4 pb-3 text-sm text-red-600">{((sendMut.error || retryMut.error) as Error)?.message}</p>
+      )}
+
+      {/* ConfirmModal: mueve plata real */}
+      {confirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-xl">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-lg font-semibold text-text"><ShieldCheck className="h-5 w-5 text-violet-600" /> Enviar a Cresium</h3>
+              <button onClick={() => setConfirmOpen(false)} className="text-text-muted hover:text-text"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-3 text-sm text-text-muted">
+              Vas a enviar <b className="text-text">{selected.size}</b> transferencia(s) por <b className="text-text">{fmtMoney(selectedTotal)}</b> a Cresium.
+              Cada cuenta se verifica; las que no validen quedan en <b>Errores cliente</b>. <b className="text-red-600">Esta acción mueve dinero real</b> (un firmante de Cresium aprueba cada una con token).
+            </p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setConfirmOpen(false)} className="rounded-lg border border-border px-4 py-2 text-sm text-text">Cancelar</button>
+              <button onClick={doSend} disabled={sendMut.isPending} className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+                {sendMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Confirmar y enviar
+              </button>
+            </div>
+            {sendMut.data ? (
+              <p className="mt-3 text-sm text-emerald-700">{(sendMut.data as { enviados: number; total: number }).enviados}/{(sendMut.data as { total: number }).total} enviadas.</p>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
