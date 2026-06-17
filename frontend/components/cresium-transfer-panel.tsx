@@ -34,7 +34,8 @@ type Row = {
   receipt_url?: string | null;
 };
 
-type Resp = { rows: Row[]; counts: Record<string, number> };
+type TabTotal = { count: number; monto: number };
+type Resp = { rows: Row[]; counts: Record<string, number>; totals: Record<string, TabTotal> };
 type Health = { enabled: boolean };
 
 const TABS: { v: string; l: string }[] = [
@@ -82,6 +83,25 @@ function fmtMoney(v: number | null | undefined): string {
   if (v == null) return "—";
   return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 }).format(v);
 }
+function fmtMoneyFull(v: number | null | undefined): string {
+  if (v == null) return "$0";
+  return new Intl.NumberFormat("es-AR", { style: "currency", currency: "ARS", minimumFractionDigits: 2 }).format(v);
+}
+
+function KpiCard({ title, monto, sub, tone }: { title: string; monto: number | undefined; sub: string; tone: "violet" | "amber" | "emerald" }) {
+  const map = {
+    violet: "border-violet-200 bg-violet-50 text-violet-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  } as const;
+  return (
+    <div className={`rounded-xl border p-4 ${map[tone]}`}>
+      <div className="text-xs font-semibold uppercase tracking-wide opacity-80">{title}</div>
+      <div className="mt-1 text-2xl font-bold">{fmtMoneyFull(monto)}</div>
+      <div className="mt-0.5 text-xs opacity-70">{sub}</div>
+    </div>
+  );
+}
 
 function itemFromRow(r: Row): object {
   return r.source_type === "ml_return"
@@ -114,6 +134,7 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
   });
   const rows = data?.rows ?? [];
   const counts = data?.counts ?? {};
+  const totals = data?.totals ?? {};
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["cresium-transferencias", source] });
 
@@ -151,6 +172,13 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
         </div>
       )}
 
+      {/* KPIs financieros */}
+      <div className="grid grid-cols-1 gap-3 px-4 pt-4 sm:grid-cols-3">
+        <KpiCard title="Pendiente de transferir" monto={totals.pendiente?.monto} sub={`${totals.pendiente?.count ?? 0} reintegros por enviar`} tone="violet" />
+        <KpiCard title="En curso (Cresium)" monto={totals.en_cresium?.monto} sub={`${totals.en_cresium?.count ?? 0} esperando acreditación`} tone="amber" />
+        <KpiCard title="Transferido" monto={totals.realizada?.monto} sub={`${totals.realizada?.count ?? 0} realizadas`} tone="emerald" />
+      </div>
+
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 pt-4">
         {TABS.map((t) => (
@@ -180,14 +208,22 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
           />
         </div>
         {tab === "pendiente" && (
-          <button
-            onClick={() => setConfirmOpen(true)}
-            disabled={!enabled || selected.size === 0}
-            className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
-            title={!enabled ? "Cresium deshabilitado" : "Enviar las seleccionadas a Cresium"}
-          >
-            <Send className="h-4 w-4" /> Enviar a Cresium ({selected.size})
-          </button>
+          <div className="flex items-center gap-3">
+            {selected.size > 0 && (
+              <span className="text-sm text-text-muted">
+                Seleccionadas <b className="text-text">{selected.size}</b> · acumulado{" "}
+                <b className="text-violet-700">{fmtMoneyFull(selectedTotal)}</b>
+              </span>
+            )}
+            <button
+              onClick={() => setConfirmOpen(true)}
+              disabled={!enabled || selected.size === 0}
+              className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+              title={!enabled ? "Cresium deshabilitado" : "Enviar las seleccionadas a Cresium"}
+            >
+              <Send className="h-4 w-4" /> Enviar a Cresium ({selected.size})
+            </button>
+          </div>
         )}
       </div>
 

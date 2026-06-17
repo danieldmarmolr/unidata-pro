@@ -308,9 +308,13 @@ def transferencias(
     source_type = "ml_return" if source == "ml" else "subscription"
     exclude = db.active_order_keys(source_type)
     pending = _ml_pending_rows(search, exclude) if source == "ml" else _sub_pending_rows(search, exclude)
-    counts = {"pendiente": len(pending), **db.count_orders_by_tab(source_type)}
+    totals = {
+        "pendiente": {"count": len(pending), "monto": round(sum(r["monto"] for r in pending), 2)},
+        **db.totals_by_tab(source_type),
+    }
+    counts = {k: v["count"] for k, v in totals.items()}
     rows = pending if tab == "pendiente" else _order_rows(source_type, tab, search)
-    return {"rows": rows, "counts": counts}
+    return {"rows": rows, "counts": counts, "totals": totals}
 
 
 @router.post("/orders/{order_id}/reintentar")

@@ -312,21 +312,22 @@ def active_order_keys(source_type: str) -> set:
     return {int(r["subscription_refund_request_id"]) for r in rows if r["subscription_refund_request_id"] is not None}
 
 
-def count_orders_by_tab(source_type: str) -> dict[str, int]:
-    """Counts de los tabs post-envio (los de orden). El count de 'pendiente' lo
+def totals_by_tab(source_type: str) -> dict[str, dict]:
+    """Totales (count + monto) de los tabs post-envio. El total de 'pendiente' lo
     completa la capa de servicio desde el pool de devoluciones."""
     init()
-    out = {"en_cresium": 0, "error_cliente": 0, "error_cresium": 0, "realizada": 0}
+    out = {t: {"count": 0, "monto": 0.0} for t in ("en_cresium", "error_cliente", "error_cresium", "realizada")}
     with get_conn() as c, c.cursor() as cur:
         cur.execute(
-            "SELECT status, error_category, COUNT(*) AS n FROM cresium_payout_orders "
-            "WHERE source_type = %s GROUP BY status, error_category",
+            "SELECT status, error_category, COUNT(*) AS n, COALESCE(SUM(amount),0) AS monto "
+            "FROM cresium_payout_orders WHERE source_type = %s GROUP BY status, error_category",
             (source_type,),
         )
         for r in cur.fetchall():
             t = tab_for_order(r["status"], r["error_category"])
             if t in out:
-                out[t] += int(r["n"])
+                out[t]["count"] += int(r["n"])
+                out[t]["monto"] += float(r["monto"] or 0)
     return out
 
 
