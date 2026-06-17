@@ -320,6 +320,7 @@ def submit_to_cresium(order_id: int) -> dict:
                 amount=amount_str,
                 currency_code=order["currency"],
                 description=description,
+                external_id=order.get("idempotency_key"),
             )
             tx_id = transfer_res.transaction_id
             db.set_transaction_ids(order_id, preview_id=tx_id, transaction_id=tx_id)
