@@ -106,4 +106,11 @@ def tax_id_matches(user_tax_id: str, holder_tax_id: str) -> bool:
         holder_padded = holder.rjust(8, "0").lstrip("0")
         return dni_inside_cuit == holder_padded
 
+    # Ambos CUIT de 11 digitos: si comparten el nucleo DNI (digitos 2-10) es la
+    # MISMA persona; un digito verificador distinto es un typo en la carga (el
+    # verificador es derivado del prefijo+DNI). El DNI identifica univocamente.
+    if len(user) == 11 and len(holder) == 11:
+        if user[2:10] == holder[2:10]:
+            return True
+
     return False
