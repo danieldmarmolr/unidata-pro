@@ -344,7 +344,8 @@ def correction_get(request: Request, token: str) -> dict:
         "dropshipper_name": req.get("dropshipper_name"),
         "dni": req.get("dropshipper_dni"),
         "plan": req.get("subscription_plan_name"),
-        "monto": float(req["refund_amount_arg"]) if req.get("refund_amount_arg") else None,
+        # Monto a reembolsar = lo que tenemos registrado que pago (techo anti-sobrepago).
+        "monto": float(req.get("paid_subscription_total_arg") or req.get("refund_amount_arg") or 0) or None,
         "bank": {
             "holder_name": req.get("bank_holder_name"),
             "holder_cuit": req.get("bank_holder_cuit"),

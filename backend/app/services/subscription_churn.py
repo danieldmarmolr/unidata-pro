@@ -211,7 +211,7 @@ def get_churn_overview(period: str = "30d", granularity: str = "month") -> dict:
 
         cur.execute(
             """
-            SELECT COALESCE(SUM(refund_amount_arg), 0)::float AS pending_refund,
+            SELECT COALESCE(SUM(COALESCE(paid_subscription_total_arg, refund_amount_arg)), 0)::float AS pending_refund,
                    COALESCE(SUM(paid_subscription_total_arg), 0)::float AS revenue_churned
             FROM subscription_refund_requests
             WHERE created_at >= %s
@@ -400,7 +400,9 @@ def get_drill_down(period_start: str, period_end: str) -> dict:
             by_status[r["status"]] = by_status.get(r["status"], 0) + 1
             by_reason[r["abandonment_reason"]] = by_reason.get(r["abandonment_reason"], 0) + 1
             total_paid += r["paid_subscription_total_arg"] or 0
-            total_refund += r["refund_amount_arg"] or 0
+            # Exposicion real de reembolso = lo pagado registrado (techo que se transfiere),
+            # con fallback al monto del form para solicitudes viejas sin snapshot.
+            total_refund += r["paid_subscription_total_arg"] or r["refund_amount_arg"] or 0
 
     return {
         "period_start": period_start,

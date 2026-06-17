@@ -87,6 +87,13 @@ def find_dropshipper(*, dni: str, email: str) -> dict | None:
     }
 
 
+def paid_subscription_total(user_id: int) -> dict:
+    """Total pagado en suscripcion (Talo PROCESSED + MercadoPago approved, bruto)
+    recomputado EN VIVO contra unidrop_api. Devuelve {total_arg, count}. Es el
+    techo del reembolso: nunca se transfiere mas de lo que la persona pago."""
+    return _paid_subscription_snapshot(get_engine("unidrop"), int(user_id))
+
+
 def _latest_bank_account(eng, user_id: int) -> dict | None:
     """Cuenta bancaria REAL del dropshipper desde cresium."UserBankAccount" —
     el CBU/CVU/alias PERSONAL que cargo para cobrar (modulo de payouts Unidrop).

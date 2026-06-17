@@ -115,15 +115,47 @@ def _build_ml_order(it: BatchItem, batch_id: int, user: dict) -> dict:
     )
 
 
+def _registered_paid_total(req: dict) -> float | None:
+    """Techo del reembolso = lo que TENEMOS REGISTRADO que la persona pago
+    (Talo + MercadoPago, bruto). Prioriza el snapshot guardado al crear la
+    solicitud; si falta (solicitudes viejas), lo recomputa en vivo. None si no
+    hay registro de pago (no se puede validar -> no se transfiere)."""
+    snap = req.get("paid_subscription_total_arg")
+    if snap is not None and float(snap) > 0:
+        return round(float(snap), 2)
+    uid = req.get("dropshipper_user_id")
+    if uid:
+        try:
+            from app.services.refund_requests import dropshipper_lookup
+            live = dropshipper_lookup.paid_subscription_total(int(uid))
+            if live and float(live.get("total_arg") or 0) > 0:
+                return round(float(live["total_arg"]), 2)
+        except Exception as e:  # noqa: BLE001 - sin total registrado se rechaza abajo
+            log.warning("[cresium] no se pudo recomputar el pagado de req#%s: %s", req.get("id"), e)
+    return None
+
+
 def _build_subscription_order(it: BatchItem, batch_id: int, user: dict) -> dict:
     req = refund_requests_db.get_request(it.subscription_refund_request_id)
     if not req:
         raise ValueError(f"Solicitud de suscripcion {it.subscription_refund_request_id} no encontrada")
-    amount = float(req.get("refund_amount_arg") or 0)
-    if amount <= 0:
-        raise ValueError("Monto solicitado invalido (0)")
     if not req.get("dropshipper_user_id"):
         raise ValueError("Solicitud sin dropshipper asociado")
+    # Politica de monto: se devuelve SIEMPRE lo que tenemos registrado que pago la
+    # persona (techo anti-sobrepago). El monto auto-reportado en el form
+    # (refund_amount_arg) es informativo y NO determina lo que se transfiere.
+    paid = _registered_paid_total(req)
+    if paid is None or paid <= 0:
+        raise ValueError(
+            "Sin registro de pago de suscripcion para esta solicitud — no se puede validar el monto a devolver"
+        )
+    requested = float(req.get("refund_amount_arg") or 0)
+    if requested and abs(requested - paid) > 0.01:
+        log.info(
+            "[cresium] req#%s: monto pedido %.2f != pagado registrado %.2f -> se transfiere el pagado",
+            req.get("id"), requested, paid,
+        )
+    amount = paid
     recipient = {
         "recipient_cbu": req.get("bank_cbu"),
         "recipient_cvu": None,
@@ -269,7 +301,10 @@ def _sub_pending_rows(search: str | None, exclude: set) -> list[dict]:
             "titular": r.get("bank_holder_name") or r.get("dropshipper_name") or "", "dni": r.get("dropshipper_dni") or "",
             "banco": r.get("bank_name"), "cuenta": cuenta,
             "needs_bank": not bool(cuenta),
-            "monto": float(r.get("refund_amount_arg") or 0),
+            # Monto que REALMENTE se va a transferir = lo pagado registrado (techo).
+            # Usa el mismo calculo que el envio (_registered_paid_total) para que el
+            # preview del operador coincida con lo que el motor va a transferir.
+            "monto": _registered_paid_total(r) or float(r.get("refund_amount_arg") or 0),
             "estado": "pendiente", "tab": "pendiente", "created_at": r.get("created_at"),
         })
     return out
