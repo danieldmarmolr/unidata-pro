@@ -108,6 +108,7 @@ def init() -> None:
                     cresium_signature_request_id TEXT,
                     failure_reason              TEXT,
                     error_category              TEXT CHECK (error_category IN ('cliente','cresium')),
+                    cresium_status              TEXT,
                     receipt_url                 TEXT,
                     refunded_at                 TIMESTAMPTZ,
                     triggered_by_user_id        BIGINT,
@@ -130,8 +131,9 @@ def init() -> None:
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_txid ON cresium_payout_orders (cresium_transaction_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_dropshipper ON cresium_payout_orders (dropshipper_user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_cpo_batch ON cresium_payout_orders (batch_id)")
-            # error_category puede faltar si la tabla se creo antes de este cambio.
+            # columnas que pueden faltar si la tabla se creo antes de estos cambios.
             cur.execute("ALTER TABLE cresium_payout_orders ADD COLUMN IF NOT EXISTS error_category TEXT")
+            cur.execute("ALTER TABLE cresium_payout_orders ADD COLUMN IF NOT EXISTS cresium_status TEXT")
 
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS cresium_payout_events (
@@ -542,6 +544,19 @@ def reopen_order(order_id: int, target_status: str) -> dict | None:
         )
         row = cur.fetchone()
     return _order_dict(row) if row else None
+
+
+def set_cresium_status(order_id: int, status: str | None) -> None:
+    """Guarda el ultimo status crudo que reporto Cresium (PREVIEW/PROCESSING/
+    SUCCESS/FAILED) para mostrar en la UI 'esperando firma' vs 'procesando'."""
+    if not status:
+        return
+    init()
+    with get_conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE cresium_payout_orders SET cresium_status = %s WHERE id = %s",
+            (status, order_id),
+        )
 
 
 def reset_failed_to_ready(order_id: int, operator_id: int | None, operator_email: str | None) -> dict | None:

@@ -27,6 +27,7 @@ type Row = {
   monto: number;
   estado: string;
   error_category?: string | null;
+  cresium_status?: string | null;
   tab: string;
   created_at: string | null;
   failure_reason?: string | null;
@@ -46,24 +47,44 @@ const TABS: { v: string; l: string }[] = [
   { v: "realizada", l: "Realizadas" },
 ];
 
-const ESTADO_META: Record<string, { label: string; bg: string; text: string }> = {
-  PENDING_VERIFICATION:      { label: "Pendiente de envío", bg: "bg-amber-100",   text: "text-amber-700" },
-  READY_TO_TRANSFER:         { label: "Lista p/ enviar",    bg: "bg-amber-100",   text: "text-amber-700" },
-  SUBMITTING:                { label: "Enviando…",          bg: "bg-cyan-100",    text: "text-cyan-700" },
-  SIGNATURE_REQUEST_CREATED: { label: "Esperando firma",    bg: "bg-indigo-100",  text: "text-indigo-700" },
-  PROCESSING:                { label: "Procesando",         bg: "bg-cyan-100",    text: "text-cyan-700" },
-  SUCCESS:                   { label: "Realizada",          bg: "bg-emerald-100", text: "text-emerald-700" },
-  CANCELED:                  { label: "Cancelada",          bg: "bg-zinc-100",    text: "text-zinc-600" },
-  pendiente:                 { label: "Pendiente",          bg: "bg-amber-100",   text: "text-amber-700" },
+const TONE: Record<string, { bg: string; text: string }> = {
+  amber: { bg: "bg-amber-100", text: "text-amber-700" },
+  cyan: { bg: "bg-cyan-100", text: "text-cyan-700" },
+  indigo: { bg: "bg-indigo-100", text: "text-indigo-700" },
+  emerald: { bg: "bg-emerald-100", text: "text-emerald-700" },
+  red: { bg: "bg-red-100", text: "text-red-700" },
+  zinc: { bg: "bg-zinc-100", text: "text-zinc-600" },
 };
 
-function estadoBadge(r: Row) {
-  if (r.estado === "FAILED") {
-    return r.error_category === "cliente"
-      ? { label: "Datos a corregir", bg: "bg-red-100", text: "text-red-700" }
-      : { label: "Error Cresium", bg: "bg-red-100", text: "text-red-700" };
+// Estado informativo por fila: label + "qué está pasando / qué hacer".
+function stateInfo(r: Row): { label: string; hint: string; tone: keyof typeof TONE } {
+  const cs = (r.cresium_status || "").toUpperCase();
+  switch (r.estado) {
+    case "pendiente":
+      return { label: "Pendiente", hint: r.needs_bank ? "Falta cargar datos bancarios" : "Lista para enviar a Cresium", tone: "amber" };
+    case "PENDING_VERIFICATION":
+      return { label: "Pendiente de verificar", hint: "Falta validar la cuenta contra Cresium", tone: "amber" };
+    case "READY_TO_TRANSFER":
+      return { label: "Lista para enviar", hint: "Cuenta verificada · falta enviar a Cresium", tone: "amber" };
+    case "SUBMITTING":
+      return { label: "Enviando…", hint: "Creando la transferencia en Cresium", tone: "cyan" };
+    case "SIGNATURE_REQUEST_CREATED":
+      if (cs === "PROCESSING" || cs === "PENDING")
+        return { label: "Procesando acreditación", hint: "El firmante aprobó · Cresium está acreditando", tone: "cyan" };
+      return { label: "Esperando firma", hint: "Falta que el firmante la apruebe con token en el panel de Cresium", tone: "indigo" };
+    case "PROCESSING":
+      return { label: "Procesando acreditación", hint: "El firmante aprobó · Cresium está acreditando", tone: "cyan" };
+    case "SUCCESS":
+      return { label: "Transferida", hint: "Acreditada al dropshipper", tone: "emerald" };
+    case "FAILED":
+      return r.error_category === "cliente"
+        ? { label: "Datos a corregir", hint: r.failure_reason || "La cuenta no verificó (titular/CBU/alias)", tone: "red" }
+        : { label: "Rechazada por Cresium", hint: r.failure_reason || "Cresium/banco rechazó la transferencia", tone: "red" };
+    case "CANCELED":
+      return { label: "Cancelada por el firmante", hint: "El firmante rechazó la transferencia en Cresium", tone: "zinc" };
+    default:
+      return { label: r.estado, hint: "", tone: "zinc" };
   }
-  return ESTADO_META[r.estado] ?? { label: r.estado, bg: "bg-zinc-100", text: "text-zinc-600" };
 }
 
 const SLA_HOURS = 48;
@@ -264,7 +285,8 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
             {isLoading && <tr><td colSpan={8} className="py-8 text-center text-text-muted">Cargando…</td></tr>}
             {!isLoading && rows.length === 0 && <tr><td colSpan={8} className="py-8 text-center text-text-muted">Sin devoluciones en este estado.</td></tr>}
             {rows.map((r) => {
-              const badge = estadoBadge(r);
+              const si = stateInfo(r);
+              const tone = TONE[si.tone];
               const s = sla(r.created_at);
               return (
                 <tr key={r.key} className="border-t border-border">
@@ -283,8 +305,8 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
                   </td>
                   <td className="px-3 py-2 font-semibold text-text">{fmtMoney(r.monto)}</td>
                   <td className="px-3 py-2">
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${badge.bg} ${badge.text}`}>{badge.label}</span>
-                    {r.failure_reason && <div className="mt-0.5 max-w-[220px] truncate text-xs text-red-600" title={r.failure_reason}>{r.failure_reason}</div>}
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${tone.bg} ${tone.text}`}>{si.label}</span>
+                    {si.hint && <div className="mt-0.5 max-w-[260px] text-[11px] leading-tight text-text-muted" title={si.hint}>{si.hint}</div>}
                   </td>
                   <td className="px-3 py-2">
                     {s ? <span className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs ${s.cls}`}><Clock className="h-3 w-3" />{s.label}</span> : "—"}
@@ -300,7 +322,6 @@ export function CresiumTransferPanel({ source }: { source: Source }) {
                         {tab === "error_cliente" ? "Re-verificar" : "Reintentar"}
                       </button>
                     )}
-                    {tab === "en_cresium" && <span className="text-xs text-text-muted">esperando firma</span>}
                     {tab === "realizada" && r.cresium_transaction_id && <span className="text-xs text-text-muted">tx {r.cresium_transaction_id}</span>}
                   </td>
                 </tr>

@@ -384,6 +384,9 @@ def apply_event(
     })
     is_duplicate = inserted is None
 
+    # Guardar el status crudo de Cresium para la UI (esperando firma vs procesando).
+    db.set_cresium_status(payout_order_id, status)
+
     if status in SUCCESS_STATUSES:
         _mark_success(payout_order_id, cresium_tx_id)
         return {"kind": "processed", "transition": "SUCCESS", "duplicate_event": is_duplicate}

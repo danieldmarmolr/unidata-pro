@@ -289,6 +289,7 @@ def _order_rows(source_type: str, tab: str, search: str | None) -> list[dict]:
             "cuenta": o.get("recipient_cbu") or o.get("recipient_cvu") or o.get("recipient_alias"),
             "monto": float(o.get("amount") or 0),
             "estado": o["status"], "error_category": o.get("error_category"),
+            "cresium_status": o.get("cresium_status"),
             "tab": tab, "created_at": o.get("created_at"),
             "failure_reason": o.get("failure_reason"),
             "cresium_transaction_id": o.get("cresium_transaction_id"),
